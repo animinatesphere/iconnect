@@ -28,10 +28,7 @@ button, a { -webkit-tap-highlight-color: transparent; }
 }
 .brand { display: inline-flex; align-items: center; gap: 9px; font: 800 25px/1 'Manrope', sans-serif; letter-spacing: -1.7px; }
 .brand-period { color: #ff735e; margin-left: -9px; }
-.brand-mark { width: 23px; height: 23px; border: 2px solid #20211f; border-radius: 50%; display: grid; place-items: center; position: relative; }
-.brand-mark::before, .brand-mark::after { content: ''; position: absolute; width: 28px; height: 11px; border: 1.5px solid #20211f; border-radius: 50%; transform: rotate(45deg); }
-.brand-mark::after { transform: rotate(-45deg); }
-.brand-mark span { width: 6px; height: 6px; border-radius: 50%; background: #ff735e; z-index: 1; }
+.brand-symbol { width: 28px; height: 28px; object-fit: contain; mix-blend-mode: multiply; }
 .nav-links { display: flex; gap: 38px; align-items: center; font-size: 13px; font-weight: 600; }
 .nav-links > a { transition: color .2s ease; }
 .nav-links > a:hover, .footer-links a:hover { color: #f26c57; }
@@ -146,9 +143,7 @@ button, a { -webkit-tap-highlight-color: transparent; }
 .social-window { max-width: 550px; width: 100%; margin: 10px auto 0; padding: 19px 22px 15px; border: 1px solid #e8e5dc; border-radius: 17px; background: #fffefa; box-shadow: 0 25px 65px #29291f12; position: relative; }
 .social-window-top { display: flex; justify-content: space-between; align-items: center; padding-bottom: 15px; border-bottom: 1px solid #eeece6; }
 .window-brand { display: flex; align-items: center; gap: 8px; font-size: 10px; font-weight: 700; }
-.window-brand .brand-mark { width: 18px; height: 18px; border-width: 1.5px; }
-.window-brand .brand-mark::before, .window-brand .brand-mark::after { width: 22px; height: 8px; }
-.window-brand .brand-mark span { width: 5px; height: 5px; }
+.window-brand .brand-symbol { width: 22px; height: 22px; }
 .online-count { display: flex; align-items: center; gap: 8px; color: #77766f; font-size: 8px; }
 .online-count .live-dot { width: 6px; height: 6px; animation-duration: 1.4s; }
 .stories-row { display: flex; gap: 21px; padding: 17px 3px 14px; }
@@ -256,7 +251,7 @@ button, a { -webkit-tap-highlight-color: transparent; }
 
 .footer { max-width: 1320px; margin: auto; min-height: 83px; padding: 20px 56px; display: flex; align-items: center; justify-content: space-between; }
 .footer .brand { font-size: 21px; }
-.footer .brand-mark { transform: scale(.85); }
+.footer .brand-symbol { width: 25px; height: 25px; }
 .footer-note { color: #77766f; font: italic 12px Georgia, serif; }
 .footer-note span { color: #f07862; font: 16px sans-serif; }
 .footer-links { display: flex; gap: 21px; align-items: center; color: #77766f; font-size: 9px; }

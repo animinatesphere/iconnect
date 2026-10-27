@@ -10,6 +10,7 @@ import {
   Send,
   X,
 } from 'lucide-react'
+import iconnectLogo from './iconnect-symbol.png'
 
 const people = [
   { name: 'Sofia', image: 'photo-1534528741775-53994a69daeb', tone: 'avatar-peach', delay: '0s' },
@@ -69,7 +70,7 @@ function App() {
     <main>
       <nav className="nav-wrap" aria-label="Main navigation">
         <a className="brand" href="#home" aria-label="iConnect home">
-          <span className="brand-mark"><span /></span>
+          <img className="brand-symbol" src={iconnectLogo} alt="" />
           iconnect<span className="brand-period">.</span>
         </a>
         <div className={`nav-links ${menuOpen ? 'nav-links-open' : ''}`}>
@@ -196,7 +197,7 @@ function App() {
         </div>
         <div className="social-window" aria-label="Preview of stories, a post, and a conversation">
           <div className="social-window-top">
-            <div className="window-brand"><span className="brand-mark"><span /></span> your little corner</div>
+            <div className="window-brand"><img className="brand-symbol" src={iconnectLogo} alt="" /> your little corner</div>
             <div className="online-count"><span className="live-dot" /> 4 friends around</div>
           </div>
           <div className="stories-row">
@@ -289,7 +290,7 @@ function App() {
       </section>
 
       <footer className="footer">
-        <a className="brand" href="#home" aria-label="iConnect home"><span className="brand-mark"><span /></span>iconnect<span className="brand-period">.</span></a>
+        <a className="brand" href="#home" aria-label="iConnect home"><img className="brand-symbol" src={iconnectLogo} alt="" />iconnect<span className="brand-period">.</span></a>
         <span className="footer-note">Made for humans, by humans <span>♡</span></span>
         <div className="footer-links"><a href="#why">Our little idea</a><a href="#community">Say hello</a><span>© 2025 iConnect social</span></div>
       </footer>
