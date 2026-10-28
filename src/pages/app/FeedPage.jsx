@@ -35,7 +35,9 @@ function FeedPost({ post, state, updateState, announce, sharePost, hidePost }) {
           <div className="feed-author"><strong>{post.name}</strong><span>{post.handle} · {post.time === 'just now' ? post.time : `${post.time} ago`} · <span className="feed-location">{post.location}</span></span></div>
         </div>
         <p className="feed-card-copy">{post.text}</p>
-        {post.image && <img className="feed-card-image" src={post.image.startsWith('data:') ? post.image : `https://images.unsplash.com/${post.image}?auto=format&fit=crop&w=1100&q=85`} alt={`A moment shared by ${post.name}`} loading="lazy" />}
+        {post.image && (post.mediaType === 'video'
+          ? <video className="feed-card-image feed-card-video" src={post.image} controls playsInline preload="metadata" aria-label={`Video shared by ${post.name}`} />
+          : <img className="feed-card-image" src={post.image.startsWith('data:') ? post.image : `https://images.unsplash.com/${post.image}?auto=format&fit=crop&w=1100&q=85`} alt={`A moment shared by ${post.name}`} loading="lazy" />)}
         <div className="feed-card-tag">{post.tag}</div>
       </Link>
       <div className="feed-post-menu-wrap">
@@ -92,8 +94,8 @@ export default function FeedPage() {
   const [storyIndex, setStoryIndex] = useState(null)
   const navigate = useNavigate()
   const profile = getDemoProfile()
-  const viewer = { name: profile?.name ?? 'Taylor Reed', image: demoAvatar }
-  const filters = ['For you', 'Following', 'Communities']
+  const viewer = { name: profile?.name ?? 'Taylor Reed', image: profile?.avatar ?? demoAvatar }
+  const filters = ['For you', 'Following', 'Communities', 'Videos']
 
   useEffect(() => {
     try {
@@ -156,6 +158,7 @@ export default function FeedPage() {
     .filter((post) => !feedState.hiddenPostIds.includes(post.id))
     .filter((post) => {
       if (filter === 'Following') return feedState.followedHandles.includes(post.handle)
+      if (filter === 'Videos') return post.mediaType === 'video'
       if (filter === 'Communities') return ['Outside, eventually', 'Currently on repeat', 'Camera roll club', 'The reading nook'].includes(post.location)
       return true
     })

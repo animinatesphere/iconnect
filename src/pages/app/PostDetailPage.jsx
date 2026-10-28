@@ -29,7 +29,7 @@ export default function PostDetailPage() {
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
   const profile = getDemoProfile()
-  const viewer = { name: profile?.name ?? 'Taylor Reed', image: demoAvatar }
+  const viewer = { name: profile?.name ?? 'Taylor Reed', image: profile?.avatar ?? demoAvatar }
   const [reply, setReply] = useState('')
   const [menuOpen, setMenuOpen] = useState(false)
   const replyInput = useRef(null)
@@ -154,7 +154,9 @@ export default function PostDetailPage() {
             <div className="feed-author"><strong>{post.name}</strong><span>{post.handle}</span></div>
           </div>
           <p className="post-detail-copy">{post.text}</p>
-          {post.image && <img className="post-detail-image" src={post.image.startsWith('data:') ? post.image : `https://images.unsplash.com/${post.image}?auto=format&fit=crop&w=1200&q=85`} alt={`A moment shared by ${post.name}`} />}
+          {post.image && (post.mediaType === 'video'
+            ? <video className="post-detail-image post-detail-video" src={post.image} controls playsInline preload="metadata" aria-label={`Video shared by ${post.name}`} />
+            : <img className="post-detail-image" src={post.image.startsWith('data:') ? post.image : `https://images.unsplash.com/${post.image}?auto=format&fit=crop&w=1200&q=85`} alt={`A moment shared by ${post.name}`} />)}
           <div className="post-detail-tag">{post.tag} <span>·</span> {post.location}</div>
           <p className="post-detail-time">{post.time === 'just now' ? 'Just now' : `${post.time} ago`} · Shared with their circle</p>
           <div className="post-detail-stats"><span><strong>{post.likes + Number(liked)}</strong> likes</span><span><strong>{post.comments + localReplies.length}</strong> replies</span></div>

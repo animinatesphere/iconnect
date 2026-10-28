@@ -1,5 +1,5 @@
 import React, { useRef, useState } from 'react'
-import { ArrowLeft, ArrowRight, CalendarClock, Check, ImagePlus, MessageCircle, PenLine, Send, X } from 'lucide-react'
+import { ArrowLeft, ArrowRight, CalendarClock, Check, ImagePlus, MessageCircle, PenLine, Send, Video, X } from 'lucide-react'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 import AppPageHeader from '../../components/AppPageHeader.jsx'
 import Avatar from '../../components/Avatar.jsx'
@@ -11,21 +11,23 @@ export default function CreatePage() {
   const navigate = useNavigate()
   const imageInput = useRef(null)
   const profile = getDemoProfile()
-  const author = { name: profile?.name ?? 'Taylor Reed', image: demoAvatar }
+  const author = { name: profile?.name ?? 'Taylor Reed', image: profile?.avatar ?? demoAvatar }
   const [caption, setCaption] = useState(location.state?.prompt ?? '')
   const [image, setImage] = useState(null)
+  const [mediaType, setMediaType] = useState('image')
   const [notice, setNotice] = useState('')
   const [scheduleOpen, setScheduleOpen] = useState(false)
 
   function chooseImage(event) {
     const file = event.target.files?.[0]
     if (!file) return
-    if (!file.type.startsWith('image/')) {
-      setNotice('Choose an image file to add to your demo post.')
+    const fileMediaType = file.type.startsWith('video/') ? 'video' : file.type.startsWith('image/') ? 'image' : null
+    if (!fileMediaType || (fileMediaType === 'video' && !['video/mp4', 'video/webm'].includes(file.type))) {
+      setNotice('Choose a supported image, MP4, or WebM file for your demo post.')
       return
     }
     if (file.size > 800_000) {
-      setNotice('Choose an image under 800 KB so it can fit in this browser demo.')
+      setNotice('Choose a media file under 800 KB so it can fit in this browser demo.')
       return
     }
 
@@ -36,6 +38,7 @@ export default function CreatePage() {
         return
       }
       setImage(reader.result)
+      setMediaType(fileMediaType)
       setNotice('')
     }
     reader.onerror = () => setNotice('This image could not be read. Try another image.')
@@ -51,6 +54,7 @@ export default function CreatePage() {
   function discardDraft() {
     setCaption('')
     setImage(null)
+    setMediaType('image')
     if (imageInput.current) imageInput.current.value = ''
     setNotice('Your draft has been cleared.')
   }
@@ -69,6 +73,7 @@ export default function CreatePage() {
         email: profile?.email ?? 'demo@example.com',
         text: caption.trim(),
         image,
+        mediaType,
       })
       writeDemoFeedState(nextState)
       navigate(`/app/post/${nextState.posts[0].id}`)
@@ -86,10 +91,10 @@ export default function CreatePage() {
         <section className="create-editor-card">
           <div className="create-author"><Avatar person={author} /><span><strong>{author.name}</strong><small>Posting to your iConnect feed</small></span><span className="audience-select">Everyone <span>⌄</span></span></div>
           <textarea value={caption} onChange={(event) => { setCaption(event.target.value); setNotice('') }} placeholder="What would you like to share with your people?" rows={7} maxLength={500} aria-label="Post caption" />
-          <div className="create-editor-tools"><button type="button" onClick={() => imageInput.current?.click()}><ImagePlus size={19} /><span>Photo</span></button><button type="button" onClick={suggestCaption}><MessageCircle size={18} /><span>Caption ideas</span></button><span>{caption.length}/500</span></div>
-          <input ref={imageInput} className="create-image-input" type="file" accept="image/*" onChange={chooseImage} />
-          <div className={`create-upload-placeholder ${image ? 'has-image' : ''}`}>{image ? <img src={image} alt="Selected post preview" /> : <><ImagePlus size={24} /><strong>Add a photo</strong><span>Choose an image from this device (up to 800 KB)</span><button type="button" onClick={() => imageInput.current?.click()}>Choose from device</button></>}</div>
-          {image && <button type="button" className="create-remove-image" onClick={() => { setImage(null); if (imageInput.current) imageInput.current.value = '' }}>Remove image</button>}
+          <div className="create-editor-tools"><button type="button" onClick={() => imageInput.current?.click()}><ImagePlus size={19} /><span>Photo or video</span></button><button type="button" onClick={suggestCaption}><MessageCircle size={18} /><span>Caption ideas</span></button><span>{caption.length}/500</span></div>
+          <input ref={imageInput} className="create-image-input" type="file" accept="image/*,video/mp4,video/webm" onChange={chooseImage} />
+          <div className={`create-upload-placeholder ${image ? 'has-image' : ''}`}>{image ? mediaType === 'video' ? <video src={image} controls playsInline aria-label="Selected video preview" /> : <img src={image} alt="Selected post preview" /> : <><Video size={24} /><strong>Add a photo or video</strong><span>Images, MP4, or WebM · up to 800 KB</span><button type="button" onClick={() => imageInput.current?.click()}>Choose from device</button></>}</div>
+          {image && <button type="button" className="create-remove-image" onClick={() => { setImage(null); setMediaType('image'); if (imageInput.current) imageInput.current.value = '' }}>Remove media</button>}
           {notice && <p className="create-notice" role="status">{notice}</p>}
           <div className="create-footer"><button className="draft-button" type="button" onClick={discardDraft}><X size={15} /> Discard</button><button className="app-primary-button" type="submit">Add to my feed <ArrowRight size={16} /></button></div>
         </section>

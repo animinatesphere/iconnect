@@ -1,4 +1,4 @@
-import React, { useState } from 'react'
+import React, { useRef, useState } from 'react'
 import { ArrowLeft, ArrowRight, Check, ChevronRight, Upload } from 'lucide-react'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 import Avatar from '../../components/Avatar.jsx'
@@ -11,6 +11,8 @@ export default function ProfileSetupPage() {
   const savedProfile = getDemoProfile()
   const [name, setName] = useState(location.state?.displayName ?? savedProfile?.name ?? '')
   const [email] = useState(location.state?.email ?? savedProfile?.email ?? '')
+  const [avatar, setAvatar] = useState(savedProfile?.avatar ?? demoAvatar)
+  const photoInput = useRef(null)
   const [bio, setBio] = useState(savedProfile?.bio ?? '')
   const [selected, setSelected] = useState(savedProfile?.interests.length ? savedProfile.interests : ['Design', 'Music'])
   const [error, setError] = useState('')
@@ -22,6 +24,27 @@ export default function ProfileSetupPage() {
       : [...current, interest])
   }
 
+  function choosePhoto(event) {
+    const file = event.target.files?.[0]
+    if (!file) return
+    if (!file.type.startsWith('image/') || file.size > 500_000) {
+      setError('Choose an image under 500 KB for your demo profile photo.')
+      return
+    }
+
+    const reader = new FileReader()
+    reader.onload = () => {
+      if (typeof reader.result !== 'string') {
+        setError('This image could not be previewed. Try another image.')
+        return
+      }
+      setAvatar(reader.result)
+      setError('')
+    }
+    reader.onerror = () => setError('This image could not be read. Try another image.')
+    reader.readAsDataURL(file)
+  }
+
   function finishSetup(event) {
     event.preventDefault()
     setError('')
@@ -31,7 +54,7 @@ export default function ProfileSetupPage() {
     }
 
     try {
-      saveDemoProfile({ name: name.trim() || 'Your iConnect profile', email, bio, interests: selected })
+      saveDemoProfile({ name: name.trim() || 'Your iConnect profile', email, username: savedProfile?.username ?? email.split('@')[0], bio, interests: selected, avatar })
       startDemoSession()
       navigate('/app/home')
     } catch (storageError) {
@@ -52,9 +75,10 @@ export default function ProfileSetupPage() {
             <p className="setup-intro">The PRD starts with a simple profile and a few interests. Try the setup—your choices stay in this preview only.</p>
             <form onSubmit={finishSetup}>
               <div className="profile-photo-field">
-                <Avatar person={{ name: name || 'Your profile', image: demoAvatar }} className="setup-avatar" />
-                <div><strong>Your profile photo</strong><span>Photo upload will be available in the product.</span></div>
-                <button type="button" aria-label="Profile photo upload is not available in preview"><Upload size={15} /></button>
+                <Avatar person={{ name: name || 'Your profile', image: avatar }} className="setup-avatar" />
+                <div><strong>Your profile photo</strong><span>Choose an image under 500 KB for this browser demo.</span></div>
+                <input ref={photoInput} className="create-image-input" type="file" accept="image/*" onChange={choosePhoto} />
+                <button type="button" aria-label="Choose profile photo" onClick={() => photoInput.current?.click()}><Upload size={15} /></button>
               </div>
               <label className="setup-field"><span>DISPLAY NAME</span><input value={name} onChange={(event) => setName(event.target.value)} placeholder="How should we call you?" maxLength={40} /></label>
               <label className="setup-field"><span>A LITTLE ABOUT YOU <small>OPTIONAL</small></span><textarea value={bio} onChange={(event) => setBio(event.target.value)} placeholder="A line, a thought, a tiny introduction..." maxLength={120} rows={3} /><small>{bio.length}/120</small></label>
@@ -74,7 +98,7 @@ export default function ProfileSetupPage() {
             <div className="setup-preview-top"><span className="app-page-eyebrow">YOUR SPACE IS TAKING SHAPE</span><span className="preview-status"><i /> PREVIEW</span></div>
             <div className="profile-preview-card">
               <div className="profile-preview-cover" />
-              <Avatar person={{ name: name || 'Your profile', image: demoAvatar }} className="profile-preview-avatar" />
+              <Avatar person={{ name: name || 'Your profile', image: avatar }} className="profile-preview-avatar" />
               <h2>{name.trim() || 'Your name'}</h2>
               <span className="profile-preview-handle">{email || 'your email stays private'}</span>
               <p>{bio || 'Your little introduction will live here.'}</p>

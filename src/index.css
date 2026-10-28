@@ -1596,3 +1596,30 @@ button, a { -webkit-tap-highlight-color: transparent; }
   .story-viewer-backdrop { padding: 0; }
   .story-viewer { width: 100%; height: 100dvh; border-radius: 0; }
 }
+
+.chat-panel { position: relative; }
+.chat-options-menu { position: absolute; top: 52px; right: 12px; z-index: 4; padding: 5px; border: 1px solid #e8e7df; border-radius: 9px; background: #fffefa; box-shadow: 0 12px 30px #22231c1a; }
+.chat-options-menu button { padding: 9px 11px; border: 0; border-radius: 6px; background: transparent; color: #585a51; font: inherit; font-size: 11px; text-align: left; white-space: nowrap; cursor: pointer; }
+.chat-options-menu button:hover { background: #f4f4ed; }
+.chat-send:disabled { opacity: .45; cursor: not-allowed; }
+.inbox-empty-state, .connect-empty-state { padding: 16px; color: #888980; font-size: 12px; line-height: 1.5; text-align: center; }
+.inbox-tabs button { cursor: pointer; }
+.account-settings-list-item { display: flex; align-items: center; gap: 10px; padding: 13px 2px; border-top: 1px solid #efeee8; }
+.account-settings-list-item > span:nth-child(2) { flex: 1; display: grid; gap: 4px; }
+.account-settings-list-item strong { font-size: 11px; }
+.account-settings-list-item small { color: #99998f; font-size: 10px; }
+.preference-toggle { width: 37px; height: 21px; position: relative; flex: 0 0 auto; border-radius: 20px; background: #d7d7cf; transition: background .2s ease; }
+.preference-toggle::after { position: absolute; top: 3px; left: 3px; width: 15px; height: 15px; border-radius: 50%; background: white; box-shadow: 0 1px 3px #0002; content: ''; transition: transform .2s ease; }
+.preference-toggle.is-on { background: #819653; }
+.preference-toggle.is-on::after { transform: translateX(16px); }
+.joined-community-button { border-color: #d6e2b9 !important; background: #f2f5e8 !important; color: #5c6e3d !important; }
+.create-upload-placeholder.has-image > video { display: block; width: 100%; max-height: 360px; background: #20211f; }
+.feed-card-video { display: block; background: #20211f; object-fit: contain; }
+.post-detail-video { width: 100%; max-height: 570px; background: #20211f; object-fit: contain; }
+
+@media (max-width: 560px) {
+  .inbox-layout:not(.inbox-chat-open) .chat-panel { display: none; }
+  .inbox-layout.inbox-chat-open .conversation-list-panel { display: none; }
+  .inbox-layout.inbox-chat-open .chat-panel { min-height: min(68dvh, 620px); display: flex; }
+  .inbox-empty-state { grid-column: 1 / -1; }
+}

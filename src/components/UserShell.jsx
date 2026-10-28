@@ -45,7 +45,7 @@ export default function UserShell() {
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [moreOpen, setMoreOpen] = useState(false)
   const profile = getDemoProfile()
-  const demoUser = { name: profile?.name ?? 'Taylor Reed', image: demoAvatar }
+  const demoUser = { name: profile?.name ?? 'Taylor Reed', image: profile?.avatar ?? demoAvatar }
   const location = useLocation()
   const currentLabel = [...primaryLinks, ...exploreLinks].find((item) => item.to === location.pathname)?.label ?? 'Home'
 
