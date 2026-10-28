@@ -1,9 +1,12 @@
-import React, { useEffect, useState } from 'react'
-import { Bell, Bot, BriefcaseBusiness, ChevronDown, CircleEllipsis, Home, Menu, MessageCircle, PenLine, Plus, Search, UserRound, Users, WalletCards, X } from 'lucide-react'
-import { Link, NavLink, Outlet, useLocation } from 'react-router-dom'
+import React, { useEffect, useMemo, useRef, useState } from 'react'
+import { Bell, Bot, BriefcaseBusiness, ChevronDown, CircleEllipsis, Home, Menu, MessageCircle, PenLine, Plus, Search, UserRound, Users, Video, WalletCards, X } from 'lucide-react'
+import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import Avatar from './Avatar.jsx'
 import Brand from './Brand.jsx'
-import { demoAvatar, getDemoProfile } from '../utils/demoAccount.js'
+import { demoAvatar, getDemoPreferences, getDemoProfile } from '../utils/demoAccount.js'
+import { demoPeople, demoPosts } from '../data/demoContent.js'
+import { communities } from '../data/siteContent.js'
+import { readDemoFeedState, writeDemoFeedState } from '../utils/demoFeed.js'
 
 const primaryLinks = [
   { to: '/app/home', label: 'Home', icon: Home },
@@ -20,6 +23,7 @@ const mobileLinks = [
 ]
 
 const exploreLinks = [
+  { to: '/app/videos', label: 'Videos & Studio', icon: Video },
   { to: '/app/jobs', label: 'Job hub', icon: BriefcaseBusiness },
   { to: '/app/connect', label: 'Connect', icon: Users },
   { to: '/app/invest', label: 'Invest', icon: WalletCards },
@@ -44,10 +48,55 @@ function NavigationGroup({ title, links, onNavigate }) {
 export default function UserShell() {
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [moreOpen, setMoreOpen] = useState(false)
+  const [searchOpen, setSearchOpen] = useState(false)
+  const [searchTerm, setSearchTerm] = useState('')
+  const [notificationsOpen, setNotificationsOpen] = useState(false)
+  const [notificationsEnabled, setNotificationsEnabled] = useState(true)
+  const [readNotificationIds, setReadNotificationIds] = useState([])
+  const [notificationError, setNotificationError] = useState('')
+  const [localPosts, setLocalPosts] = useState([])
+  const searchInputRef = useRef(null)
   const profile = getDemoProfile()
   const demoUser = { name: profile?.name ?? 'Taylor Reed', image: profile?.avatar ?? demoAvatar }
   const location = useLocation()
+  const navigate = useNavigate()
   const currentLabel = [...primaryLinks, ...exploreLinks].find((item) => item.to === location.pathname)?.label ?? 'Home'
+  const notificationItems = [
+    { id: 'welcome', title: 'Welcome to your iConnect demo', detail: 'Explore your feed and make a post.', to: '/app/home' },
+    { id: 'connect', title: 'Find your people', detail: 'Browse people and communities in Connect.', to: '/app/connect' },
+    { id: 'message', title: 'Try the demo inbox', detail: 'Send a message in your local preview.', to: '/app/chat' },
+  ]
+  const normalizedSearch = searchTerm.trim().toLowerCase()
+  const searchResults = useMemo(() => {
+    if (!normalizedSearch) return []
+    return [
+      ...demoPosts
+        .filter((post) => `${post.name} ${post.text}`.toLowerCase().includes(normalizedSearch))
+        .map((post) => ({ id: `post-${post.id}`, title: post.name, detail: post.text, to: `/app/post/${post.id}`, type: 'Post' })),
+      ...localPosts
+        .filter((post) => `${post.name} ${post.text}`.toLowerCase().includes(normalizedSearch))
+        .map((post) => ({ id: `post-${post.id}`, title: post.name, detail: post.text, to: `/app/post/${post.id}`, type: 'Post' })),
+      ...demoPeople
+        .filter((person) => `${person.name} ${person.handle} ${person.interests} ${person.note}`.toLowerCase().includes(normalizedSearch))
+        .map((person) => ({ id: `person-${person.id}`, title: person.name, detail: person.handle, to: '/app/connect', type: 'Person', tab: 'People', query: person.name })),
+      ...communities
+        .filter((community) => `${community.name} ${community.description}`.toLowerCase().includes(normalizedSearch))
+        .map((community) => ({ id: `community-${community.name}`, title: community.name, detail: community.description, to: '/app/connect', type: 'Community', tab: 'Communities', query: community.name })),
+    ].slice(0, 6)
+  }, [localPosts, normalizedSearch])
+
+  useEffect(() => {
+    try {
+      const preferences = getDemoPreferences()
+      const feedState = readDemoFeedState()
+      setNotificationsEnabled(preferences.notifications)
+      setReadNotificationIds(feedState.readNotificationIds ?? [])
+      setLocalPosts(feedState.posts)
+      setNotificationError('')
+    } catch (error) {
+      setNotificationError(error instanceof Error ? error.message : 'Could not load demo notifications.')
+    }
+  }, [location.pathname])
 
   function closeSidebar() {
     setSidebarOpen(false)
@@ -67,6 +116,51 @@ export default function UserShell() {
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
   }, [moreOpen])
+
+  useEffect(() => {
+    function handleKeyDown(event) {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
+        event.preventDefault()
+        setSearchOpen(true)
+        window.requestAnimationFrame(() => searchInputRef.current?.focus())
+      }
+      if (event.key === 'Escape') {
+        setSearchOpen(false)
+        setNotificationsOpen(false)
+      }
+    }
+
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [])
+
+  useEffect(() => {
+    setSearchOpen(false)
+    setSearchTerm('')
+    setNotificationsOpen(false)
+  }, [location.pathname])
+
+  function openSearchResult(result) {
+    setSearchOpen(false)
+    setSearchTerm('')
+    navigate(result.to, result.query ? { state: { search: result.query, activeTab: result.tab } } : undefined)
+  }
+
+  function openNotification(notification) {
+    try {
+      const nextReadIds = [...new Set([...readNotificationIds, notification.id])]
+      const feedState = readDemoFeedState()
+      writeDemoFeedState({ ...feedState, readNotificationIds: nextReadIds })
+      setReadNotificationIds(nextReadIds)
+      setNotificationError('')
+      setNotificationsOpen(false)
+      navigate(notification.to)
+    } catch (error) {
+      setNotificationError(error instanceof Error ? error.message : 'Could not update demo notifications.')
+    }
+  }
+
+  const hasUnreadNotifications = notificationsEnabled && notificationItems.some((item) => !readNotificationIds.includes(item.id))
 
   const isMoreActive = !['/app/home', '/app/connect', '/app/create', '/app/chat'].includes(location.pathname)
 
@@ -90,6 +184,7 @@ export default function UserShell() {
             <span><strong>{demoUser.name}</strong><small>{profile ? 'Your demo profile' : 'Demo profile'}</small></span>
             <ChevronDown size={15} />
           </NavLink>
+          <Link className="admin-portal-entry" to="/admin/login">Open separate admin preview ↗</Link>
           <Link className="back-to-site" to="/">← Back to iConnect</Link>
         </div>
       </aside>
@@ -101,8 +196,38 @@ export default function UserShell() {
           </button>
           <div className="app-mobile-brand"><Brand to="/app/home" /></div>
           <div className="app-breadcrumb">Your space <span>/</span> <strong>{currentLabel}</strong></div>
-          <label className="app-search"><Search size={16} /><input placeholder="Search iConnect" aria-label="Search iConnect" /><kbd>⌘ K</kbd></label>
-          <button className="app-notification" aria-label="Notifications"><Bell size={18} /><i /></button>
+          <div className="app-search-wrap">
+            <label className={`app-search ${searchOpen ? 'app-search-active' : ''}`}><Search size={16} /><input ref={searchInputRef} value={searchTerm} onFocus={() => setSearchOpen(true)} onChange={(event) => { setSearchTerm(event.target.value); setSearchOpen(true) }} placeholder="Search iConnect" aria-label="Search iConnect" /><kbd>⌘ K</kbd></label>
+            {searchOpen && normalizedSearch && <div className="app-search-results" role="listbox" aria-label="Search results">
+              {!searchResults.length ? <p>No matches in this demo.</p> : searchResults.map((result) => (
+                <button type="button" key={result.id} role="option" onMouseDown={(event) => event.preventDefault()} onClick={() => openSearchResult(result)}>
+                  <span className="app-search-result-type">{result.type}</span><strong>{result.title}</strong><small>{result.detail}</small>
+                </button>
+              ))}
+            </div>}
+          </div>
+          <div className="app-notification-wrap">
+            <button className="app-notification" aria-label="Notifications" aria-expanded={notificationsOpen} onClick={() => {
+              try {
+                setNotificationsEnabled(getDemoPreferences().notifications)
+                setNotificationError('')
+                setNotificationsOpen((open) => !open)
+              } catch (error) {
+                setNotificationError(error instanceof Error ? error.message : 'Could not load demo notifications.')
+                setNotificationsOpen(true)
+              }
+            }}><Bell size={18} />{hasUnreadNotifications && <i />}</button>
+            {notificationsOpen && <section className="app-notifications-panel" aria-label="Notifications">
+              <div className="app-notifications-heading"><strong>Notifications</strong><span>DEMO</span></div>
+              {notificationError && <p className="app-notifications-error" role="alert">{notificationError}</p>}
+              {!notificationError && !notificationsEnabled
+                ? <p className="app-notifications-empty">Notifications are turned off in your profile settings.</p>
+                : !notificationError && notificationItems.map((item) => <button type="button" key={item.id} className={readNotificationIds.includes(item.id) ? 'app-notification-item is-read' : 'app-notification-item'} onClick={() => openNotification(item)}>
+                    <span className="app-notification-unread" /><span><strong>{item.title}</strong><small>{item.detail}</small></span>
+                  </button>)}
+              <p className="app-notifications-footnote">These sample notices stay in this browser demo.</p>
+            </section>}
+          </div>
           <Avatar person={demoUser} className="app-topbar-avatar" />
         </header>
         <main className="app-page-content"><Outlet /></main>
@@ -117,7 +242,7 @@ export default function UserShell() {
             </NavLink>
           ))}
         </div>
-        <div className="app-more-sheet-footer"><span>PREVIEW MODE · Sample content only</span><Link to="/" onClick={closeMore}>Back to iConnect website <X size={14} /></Link></div>
+        <div className="app-more-sheet-footer"><span>PREVIEW MODE · Sample content only</span><Link to="/admin/login" onClick={closeMore}>Open separate admin preview <X size={14} /></Link><Link to="/" onClick={closeMore}>Back to iConnect website <X size={14} /></Link></div>
       </section>}
       <nav className="app-bottom-nav" aria-label="Main app navigation">
         {mobileLinks.map(({ to, label, icon: Icon, end, action }) => action === 'more'

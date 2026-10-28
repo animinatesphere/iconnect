@@ -36,15 +36,24 @@ The website also includes a navigable concept preview of the user experience und
 | `/app/setup` | Profile and interests setup |
 | `/app/home` | Sample home feed and stories |
 | `/app/post/:postId` | Full post details and reply thread |
-| `/app/chat` | Illustrative conversations |
-| `/app/create` | Post composition preview |
+| `/app/chat` | Browser-local demo conversations |
+| `/app/create` | Post composition and local feed publishing |
+| `/app/videos` | Local video library, upload preview, watch history, and campaign draft |
+| `/admin/login` | Separate local admin-preview sign-in |
+| `/admin/dashboard` | Local admin dashboard for sample users, feed content, reports, campaign drafts, preview settings, and illustrative analytics |
 | `/app/jobs` | Sample opportunity listings |
 | `/app/connect` | People and community discovery |
 | `/app/invest` | Future wallet and savings concept |
 | `/app/assistant` | AI assistance concept |
 | `/app/profile` | Profile and settings preview |
 
-These are frontend previews, not a connected product. Sign-up saves a demo profile (name, email, bio, and interests) in the current browser and opens the sample feed after profile setup. Login recognizes that browser's saved demo email; passwords are never saved, sent, or verified, and there is no backend or secure authentication. Sample content is illustrative, and interactions such as likes and replies are temporary browser state. Messages are not delivered, posts are not published, external accounts are not connected, AI is not powered by a service, and no financial activity takes place. On mobile, the feed is prioritized and the dashboard top bar is hidden; the bottom navigation provides the core destinations and a **More** sheet links to every other product area and profile settings. Desktop uses the sidebar and top bar. Wallet, investment, and savings features remain exploratory and require appropriate product, security, legal, and regulatory work before implementation.
+These are frontend previews, not a connected product. Sign-up saves a demo profile (name, email, bio, and interests) in the current browser and opens the sample feed after profile setup. Login recognizes that browser's saved demo email; passwords are never saved, sent, or verified, and there is no backend or secure authentication. The feed demo can create local posts, attach small image or video files, and save likes, bookmarks, hidden posts, replies, follows, community memberships, and sent demo messages in browser storage. Profile details and preferences are also local.
+
+The video studio is a browser-only prototype with MP4/WebM uploads (up to 800 KB), short/standard video layouts, local playback, likes, saves, share links, comments through post details, and a local watch-history list. Uploaded videos are not published to YouTube, TikTok, or a public iConnect service. Promotion is only a locally saved campaign draft using demo credits; it neither charges money nor purchases or guarantees viewers.
+
+The separate admin portal has a mock sign-in and a browser-local dashboard. Its sample directory can toggle fictional account statuses; content controls hide or restore posts in the local demo feed; sample reports can be marked reviewed; campaign drafts can be labeled reviewed or rejected; local settings can enable or disable video uploads and campaign drafts; and analytics show local/sample counts with actual connected revenue shown as $0. The sign-in does not verify credentials or provide security, and these controls cannot manage real accounts or the public website. Admin UI is not an integration with or endorsement by YouTube or TikTok.
+
+Profile photos are limited to 500 KB and browser storage limits still apply. Desktop search covers sample posts, people, communities, and local posts; the notification panel contains sample notices only. These interactions never reach another user or service. External accounts are not connected, calls are not placed, AI is not powered by a service, and no financial activity takes place. On mobile, the feed is prioritized and the dashboard top bar is hidden; the bottom navigation provides the core destinations and a **More** sheet links to every other product area and profile settings. Desktop uses the sidebar and top bar. Wallet, investment, and savings features remain exploratory and require appropriate product, security, legal, and regulatory work before implementation.
 
 ## Product vision
 

@@ -21,7 +21,11 @@ import ConnectPage from './pages/app/ConnectPage.jsx'
 import InvestPage from './pages/app/InvestPage.jsx'
 import AssistantPage from './pages/app/AssistantPage.jsx'
 import AccountPage from './pages/app/AccountPage.jsx'
+import VideoHubPage from './pages/app/VideoHubPage.jsx'
+import AdminLoginPage from './pages/admin/AdminLoginPage.jsx'
+import AdminDashboardPage from './pages/admin/AdminDashboardPage.jsx'
 import { isDemoSessionActive } from './utils/demoAccount.js'
+import { isDemoAdminSessionActive } from './utils/demoAdmin.js'
 
 function RouteEffects() {
   const { pathname } = useLocation()
@@ -35,6 +39,10 @@ function RouteEffects() {
 
 function RequireDemoSession() {
   return isDemoSessionActive() ? <Outlet /> : <Navigate to="/app/onboarding" replace />
+}
+
+function RequireDemoAdminSession() {
+  return isDemoAdminSessionActive() ? <Outlet /> : <Navigate to="/admin/login" replace />
 }
 
 function AppRoutes() {
@@ -62,6 +70,7 @@ function AppRoutes() {
               <Route path="post/:postId" element={<PostDetailPage />} />
               <Route path="chat" element={<InboxPage />} />
               <Route path="create" element={<CreatePage />} />
+              <Route path="videos" element={<VideoHubPage />} />
               <Route path="jobs" element={<JobsPage />} />
               <Route path="connect" element={<ConnectPage />} />
               <Route path="invest" element={<InvestPage />} />
@@ -69,6 +78,11 @@ function AppRoutes() {
               <Route path="profile" element={<AccountPage />} />
             </Route>
           </Route>
+        </Route>
+        <Route path="/admin/login" element={<AdminLoginPage />} />
+        <Route element={<RequireDemoAdminSession />}>
+          <Route path="/admin" element={<Navigate to="/admin/dashboard" replace />} />
+          <Route path="/admin/dashboard" element={<AdminDashboardPage />} />
         </Route>
         <Route path="join" element={<Navigate to="/early-access" replace />} />
       </Routes>

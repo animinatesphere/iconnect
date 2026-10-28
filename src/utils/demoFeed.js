@@ -12,6 +12,9 @@ export function emptyDemoFeedState() {
     messages: {},
     joinedCommunities: [],
     readConversationIds: [],
+    readNotificationIds: [],
+    promotionCampaigns: [],
+    watchedVideoIds: [],
   }
 }
 
@@ -30,6 +33,9 @@ export function readDemoFeedState() {
     (state.likedReplyIds !== undefined && !Array.isArray(state.likedReplyIds)) ||
     (state.joinedCommunities !== undefined && !Array.isArray(state.joinedCommunities)) ||
     (state.readConversationIds !== undefined && !Array.isArray(state.readConversationIds)) ||
+    (state.readNotificationIds !== undefined && !Array.isArray(state.readNotificationIds)) ||
+    (state.promotionCampaigns !== undefined && !Array.isArray(state.promotionCampaigns)) ||
+    (state.watchedVideoIds !== undefined && !Array.isArray(state.watchedVideoIds)) ||
     !state.replies ||
     typeof state.replies !== 'object' ||
     Array.isArray(state.replies) ||

@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react'
 import { ArrowUpRight, Compass, Heart, MessageCircle, Search, Users } from 'lucide-react'
+import { useLocation } from 'react-router-dom'
 import AppPageHeader from '../../components/AppPageHeader.jsx'
 import Avatar from '../../components/Avatar.jsx'
 import { demoPeople } from '../../data/demoContent.js'
@@ -8,10 +9,11 @@ import { readDemoFeedState, writeDemoFeedState } from '../../utils/demoFeed.js'
 import { getDemoPreferences, getDemoProfile } from '../../utils/demoAccount.js'
 
 export default function ConnectPage() {
-  const [activeTab, setActiveTab] = useState('For you')
+  const location = useLocation()
+  const [activeTab, setActiveTab] = useState(location.state?.activeTab ?? 'For you')
   const [following, setFollowing] = useState([])
   const [joined, setJoined] = useState([])
-  const [search, setSearch] = useState('')
+  const [search, setSearch] = useState(location.state?.search ?? '')
   const [followError, setFollowError] = useState('')
   const [notice, setNotice] = useState('')
   const [profile, setProfile] = useState(null)
@@ -29,6 +31,11 @@ export default function ConnectPage() {
       setFollowError(error instanceof Error ? error.message : 'Could not load your followed people.')
     }
   }, [])
+
+  useEffect(() => {
+    if (location.state?.activeTab) setActiveTab(location.state.activeTab)
+    if (location.state?.search !== undefined) setSearch(location.state.search)
+  }, [location.key, location.state])
 
   function toggleFollow(handle) {
     try {

@@ -19,7 +19,9 @@ export default function InboxPage() {
   const active = demoConversations.find((conversation) => conversation.id === activeId) ?? demoConversations[0]
   const messages = [...(demoMessages[active.id] ?? []), ...(feedState.messages[active.id] ?? [])]
   const filteredConversations = demoConversations.filter((conversation) => {
-    const matchesSearch = `${conversation.name} ${conversation.message}`.toLowerCase().includes(search.trim().toLowerCase())
+    const thread = [...(demoMessages[conversation.id] ?? []), ...(feedState.messages[conversation.id] ?? [])]
+    const searchableText = `${conversation.name} ${conversation.message} ${thread.map((item) => item.text).join(' ')}`
+    const matchesSearch = searchableText.toLowerCase().includes(search.trim().toLowerCase())
     const unread = conversation.unread > 0 && !feedState.readConversationIds.includes(conversation.id)
     return matchesSearch && (activeTab !== 'Unread' || unread)
   })
