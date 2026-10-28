@@ -3,6 +3,7 @@ import { ArrowLeft, ArrowRight, Eye, EyeOff, Heart, ShieldCheck } from 'lucide-r
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 import Brand from '../../components/Brand.jsx'
 import PageMeta from '../../components/PageMeta.jsx'
+import { getDemoProfile, saveDemoProfile, startDemoSession } from '../../utils/demoAccount.js'
 
 export default function AuthPage() {
   const isSignup = useLocation().pathname.endsWith('/signup')
@@ -22,12 +23,38 @@ export default function AuthPage() {
       return
     }
 
-    if (isSignup) {
-      navigate('/app/setup', { state: { displayName: name.trim() } })
+    if (isSignup && !name.trim()) {
+      setError('Enter your name to create a demo profile.')
       return
     }
 
-    navigate('/app/home')
+    const normalizedEmail = email.trim().toLowerCase()
+
+    try {
+      if (isSignup) {
+        const existingProfile = getDemoProfile()
+        if (existingProfile && existingProfile.email !== normalizedEmail) {
+          setError(`This browser already has a demo profile for ${existingProfile.email}. Log in with that email or clear this browser's saved demo data.`)
+          return
+        }
+
+        saveDemoProfile({ name: name.trim(), email: normalizedEmail })
+        navigate('/app/setup', { state: { displayName: name.trim(), email: normalizedEmail } })
+        return
+      }
+
+      const profile = getDemoProfile()
+      if (!profile || profile.email !== normalizedEmail) {
+        setError('No demo profile was found for that email in this browser. Create an account first.')
+        return
+      }
+
+      startDemoSession()
+      navigate('/app/home')
+    } catch (storageError) {
+      if (!(storageError instanceof DOMException)) throw storageError
+      setError('This browser could not save or access your demo profile. Check your browser storage settings and try again.')
+    }
   }
 
   return (
@@ -65,7 +92,7 @@ export default function AuthPage() {
               <button type="submit" className="app-primary-button auth-submit">{isSignup ? 'Create account' : 'Log in'} <ArrowRight size={17} /></button>
             </form>
             <p className="auth-switch">{isSignup ? 'Already part of iConnect?' : 'New to iConnect?'} <Link to={isSignup ? '/app/login' : '/app/signup'}>{isSignup ? 'Log in' : 'Create an account'}</Link></p>
-            <div className="auth-safety-note"><ShieldCheck size={16} /><span>This is a visual product preview. Credentials are not stored, transmitted, or used to authenticate an account.</span></div>
+            <div className="auth-safety-note"><ShieldCheck size={16} /><span>Your demo profile is saved only in this browser. Passwords are never saved or sent; demo login checks the email on this device, not your password.</span></div>
           </section>
         </div>
         <footer className="auth-footer">iConnect · Social, made a little more human</footer>

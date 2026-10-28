@@ -38,7 +38,7 @@ export default function OnboardingPage() {
             <p className="onboarding-card-copy">A home for your updates, conversations, and the communities that make you feel at home.</p>
             <Link to="/app/signup" className="app-primary-button onboarding-continue">Create your account <ArrowRight size={17} /></Link>
             <div className="onboarding-login-prompt">Already have an account? <Link to="/app/login">Log in</Link></div>
-            <div className="onboarding-privacy"><ShieldCheck size={18} /><span><strong>Preview mode.</strong> Sign-in is simulated; your credentials are never saved or sent.</span></div>
+            <div className="onboarding-privacy"><ShieldCheck size={18} /><span><strong>Demo mode.</strong> Your profile stays in this browser. Passwords are never saved or sent.</span></div>
             <div className="onboarding-methods"><span /><small>MADE FOR YOUR SOCIAL LIFE</small><span /></div>
             <div className="planned-providers"><span><Heart size={15} /> Share</span><span><Users size={15} /> Discover</span><span><MessageCircle size={15} /> Connect</span></div>
             <p className="onboarding-provider-note">Website-first experience · Mobile app comes later</p>

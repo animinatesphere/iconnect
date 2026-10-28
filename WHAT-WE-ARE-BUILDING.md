@@ -31,10 +31,11 @@ The website also includes a navigable concept preview of the user experience und
 | Route | Screen |
 |---|---|
 | `/app/onboarding` | Social product introduction and preview entry |
-| `/app/signup` | Simulated sign-up form |
-| `/app/login` | Simulated login form |
+| `/app/signup` | Local demo sign-up form |
+| `/app/login` | Local demo login form |
 | `/app/setup` | Profile and interests setup |
 | `/app/home` | Sample home feed and stories |
+| `/app/post/:postId` | Full post details and reply thread |
 | `/app/chat` | Illustrative conversations |
 | `/app/create` | Post composition preview |
 | `/app/jobs` | Sample opportunity listings |
@@ -43,7 +44,7 @@ The website also includes a navigable concept preview of the user experience und
 | `/app/assistant` | AI assistance concept |
 | `/app/profile` | Profile and settings preview |
 
-These are frontend previews, not a connected product. Login and sign-up forms demonstrate the PRD flow but do not authenticate users; credentials are not stored or sent, and there is no backend. Sample content is illustrative, and interactions such as likes and replies are temporary browser state. Messages are not delivered, posts are not published, external accounts are not connected, AI is not powered by a service, and no financial activity takes place. On mobile, the dashboard top bar is hidden; the bottom navigation provides the core destinations and a **More** sheet links to every other product area and profile settings. Desktop uses the sidebar and top bar. Wallet, investment, and savings features remain exploratory and require appropriate product, security, legal, and regulatory work before implementation.
+These are frontend previews, not a connected product. Sign-up saves a demo profile (name, email, bio, and interests) in the current browser and opens the sample feed after profile setup. Login recognizes that browser's saved demo email; passwords are never saved, sent, or verified, and there is no backend or secure authentication. Sample content is illustrative, and interactions such as likes and replies are temporary browser state. Messages are not delivered, posts are not published, external accounts are not connected, AI is not powered by a service, and no financial activity takes place. On mobile, the feed is prioritized and the dashboard top bar is hidden; the bottom navigation provides the core destinations and a **More** sheet links to every other product area and profile settings. Desktop uses the sidebar and top bar. Wallet, investment, and savings features remain exploratory and require appropriate product, security, legal, and regulatory work before implementation.
 
 ## Product vision
 

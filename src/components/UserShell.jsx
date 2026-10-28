@@ -3,6 +3,7 @@ import { Bell, Bot, BriefcaseBusiness, ChevronDown, CircleEllipsis, Home, Menu, 
 import { Link, NavLink, Outlet, useLocation } from 'react-router-dom'
 import Avatar from './Avatar.jsx'
 import Brand from './Brand.jsx'
+import { demoAvatar, getDemoProfile } from '../utils/demoAccount.js'
 
 const primaryLinks = [
   { to: '/app/home', label: 'Home', icon: Home },
@@ -25,8 +26,6 @@ const exploreLinks = [
   { to: '/app/assistant', label: 'AI assistant', icon: Bot },
 ]
 
-const demoUser = { name: 'Taylor Reed', image: 'photo-1544005313-94ddf0286df2' }
-
 function NavigationGroup({ title, links, onNavigate }) {
   return (
     <div className="app-nav-group">
@@ -45,6 +44,8 @@ function NavigationGroup({ title, links, onNavigate }) {
 export default function UserShell() {
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [moreOpen, setMoreOpen] = useState(false)
+  const profile = getDemoProfile()
+  const demoUser = { name: profile?.name ?? 'Taylor Reed', image: demoAvatar }
   const location = useLocation()
   const currentLabel = [...primaryLinks, ...exploreLinks].find((item) => item.to === location.pathname)?.label ?? 'Home'
 
@@ -72,7 +73,7 @@ export default function UserShell() {
   return (
     <div className="user-app min-h-screen">
       <aside className={`app-sidebar ${sidebarOpen ? 'app-sidebar-open' : ''}`}>
-        <div className="app-sidebar-brand"><Brand /></div>
+        <div className="app-sidebar-brand"><Brand to="/app/home" /></div>
         <div className="demo-workspace"><span className="workspace-avatar">i</span><span><strong>My iConnect</strong><small>Personal space</small></span><ChevronDown size={15} /></div>
         <NavigationGroup title="YOUR SPACE" links={primaryLinks} onNavigate={closeSidebar} />
         <NavigationGroup title="DISCOVER" links={exploreLinks} onNavigate={closeSidebar} />
@@ -86,7 +87,7 @@ export default function UserShell() {
           <div className="preview-notice"><span>PREVIEW MODE</span><p>Sample content only. Your account is not connected.</p></div>
           <NavLink to="/app/profile" onClick={closeSidebar} className={({ isActive }) => `app-profile-link ${isActive ? 'app-nav-link-active' : ''}`}>
             <Avatar person={demoUser} />
-            <span><strong>Taylor Reed</strong><small>Demo profile</small></span>
+            <span><strong>{demoUser.name}</strong><small>{profile ? 'Your demo profile' : 'Demo profile'}</small></span>
             <ChevronDown size={15} />
           </NavLink>
           <Link className="back-to-site" to="/">← Back to iConnect</Link>
@@ -98,7 +99,7 @@ export default function UserShell() {
           <button className="app-mobile-menu" onClick={() => setSidebarOpen((open) => !open)} aria-label={sidebarOpen ? 'Close menu' : 'Open menu'}>
             {sidebarOpen ? <X size={19} /> : <Menu size={19} />}
           </button>
-          <div className="app-mobile-brand"><Brand /></div>
+          <div className="app-mobile-brand"><Brand to="/app/home" /></div>
           <div className="app-breadcrumb">Your space <span>/</span> <strong>{currentLabel}</strong></div>
           <label className="app-search"><Search size={16} /><input placeholder="Search iConnect" aria-label="Search iConnect" /><kbd>⌘ K</kbd></label>
           <button className="app-notification" aria-label="Notifications"><Bell size={18} /><i /></button>

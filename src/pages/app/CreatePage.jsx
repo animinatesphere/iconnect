@@ -3,10 +3,13 @@ import { ArrowLeft, ArrowRight, CalendarClock, Check, ImagePlus, Instagram, Link
 import { Link } from 'react-router-dom'
 import AppPageHeader from '../../components/AppPageHeader.jsx'
 import Avatar from '../../components/Avatar.jsx'
+import { demoAvatar, getDemoProfile } from '../../utils/demoAccount.js'
 
 const destinations = ['iConnect', 'Instagram', 'LinkedIn', 'X']
 
 export default function CreatePage() {
+  const profile = getDemoProfile()
+  const author = { name: profile?.name ?? 'Taylor Reed', image: demoAvatar }
   const [caption, setCaption] = useState('')
   const [selected, setSelected] = useState(['iConnect'])
   const [notice, setNotice] = useState('')
@@ -32,7 +35,7 @@ export default function CreatePage() {
       <div className="create-demo-banner"><PenLine size={16} /> Composer concept · Publishing integrations aren’t connected in this preview.</div>
       <form className="create-layout" onSubmit={preparePost}>
         <section className="create-editor-card">
-          <div className="create-author"><Avatar person={{ name: 'Taylor Reed', image: 'photo-1544005313-94ddf0286df2' }} /><span><strong>Taylor Reed</strong><small>Posting to your iConnect feed</small></span><span className="audience-select">Everyone <span>⌄</span></span></div>
+          <div className="create-author"><Avatar person={author} /><span><strong>{author.name}</strong><small>Posting to your iConnect feed</small></span><span className="audience-select">Everyone <span>⌄</span></span></div>
           <textarea value={caption} onChange={(event) => { setCaption(event.target.value); setNotice('') }} placeholder="What would you like to share with your people?" rows={7} maxLength={500} aria-label="Post caption" />
           <div className="create-editor-tools"><button type="button" aria-label="Add image, unavailable in preview"><ImagePlus size={19} /><span>Photo</span></button><button type="button" aria-label="Suggest a caption, unavailable in preview"><MessageCircle size={18} /><span>Caption ideas</span></button><span>{caption.length}/500</span></div>
           <div className="create-upload-placeholder"><ImagePlus size={24} /><strong>Add a photo or video</strong><span>Media upload is shown as a design preview only</span><button type="button">Choose from device</button></div>

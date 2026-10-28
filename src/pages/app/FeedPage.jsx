@@ -1,10 +1,11 @@
 import React, { useState } from 'react'
-import { Bookmark, Heart, Image, MessageCircle, MoreHorizontal, PenLine, Send, Smile, TrendingUp } from 'lucide-react'
+import { Bookmark, Heart, Image, MessageCircle, MoreHorizontal, PenLine, Send, TrendingUp } from 'lucide-react'
 import { Link } from 'react-router-dom'
 import AppPageHeader from '../../components/AppPageHeader.jsx'
 import Avatar from '../../components/Avatar.jsx'
 import { demoPosts } from '../../data/demoContent.js'
 import { people } from '../../data/siteContent.js'
+import { demoAvatar, getDemoProfile } from '../../utils/demoAccount.js'
 
 const storyPeople = [
   { ...people[0], note: 'Slow morning' },
@@ -16,45 +17,34 @@ const storyPeople = [
 function FeedPost({ post }) {
   const [liked, setLiked] = useState(false)
   const [saved, setSaved] = useState(false)
-  const [commentOpen, setCommentOpen] = useState(false)
-  const [reply, setReply] = useState('')
-  const [replies, setReplies] = useState([])
-
-  function addReply(event) {
-    event.preventDefault()
-    const text = reply.trim()
-    if (!text) return
-    setReplies((current) => [...current, text])
-    setReply('')
-  }
 
   return (
     <article className="feed-card">
+      <Link to={`/app/post/${post.id}`} className="feed-post-open" aria-label={`View ${post.name}'s post`}>
       <div className="feed-card-header">
         <Avatar person={{ name: post.name, image: post.avatar }} />
         <div className="feed-author"><strong>{post.name}</strong><span>{post.handle} · {post.time} ago · <span className="feed-location">{post.location}</span></span></div>
-        <button className="quiet-icon-button" aria-label={`More options for ${post.name}'s post`}><MoreHorizontal size={19} /></button>
       </div>
       <p className="feed-card-copy">{post.text}</p>
       {post.image && <img className="feed-card-image" src={`https://images.unsplash.com/${post.image}?auto=format&fit=crop&w=1100&q=85`} alt={`A moment shared by ${post.name}`} loading="lazy" />}
       <div className="feed-card-tag">{post.tag}</div>
+      </Link>
+      <button className="quiet-icon-button feed-card-more" aria-label={`More options for ${post.name}'s post`}><MoreHorizontal size={19} /></button>
       <div className="feed-card-actions">
         <button className={liked ? 'feed-action liked' : 'feed-action'} onClick={() => setLiked((value) => !value)} aria-pressed={liked}><Heart size={17} fill={liked ? 'currentColor' : 'none'} /> <span>{post.likes + Number(liked)}</span></button>
-        <button className="feed-action" onClick={() => setCommentOpen((value) => !value)} aria-expanded={commentOpen}><MessageCircle size={17} /> <span>{post.comments} replies</span></button>
+        <Link to={`/app/post/${post.id}`} className="feed-action"><MessageCircle size={17} /> <span>{post.comments} replies</span></Link>
         <button className={saved ? 'feed-action saved' : 'feed-action'} onClick={() => setSaved((value) => !value)} aria-pressed={saved} aria-label={saved ? 'Remove saved post' : 'Save post'}><Bookmark size={16} fill={saved ? 'currentColor' : 'none'} /></button>
-        <button className="feed-action feed-share" aria-label="Share post"><Send size={16} /></button>
+        <Link to={`/app/post/${post.id}`} className="feed-action feed-share" aria-label="View post details"><Send size={16} /></Link>
       </div>
-      {commentOpen && <div className="feed-replies">
-        {replies.map((text, index) => <p className="feed-local-reply" key={`${post.id}-${index}`}><strong>You</strong> {text}</p>)}
-        <form className="feed-comment-preview" onSubmit={addReply}><Avatar person={people[0]} /><input aria-label={`Reply to ${post.name}'s post`} placeholder="Write a reply…" value={reply} onChange={(event) => setReply(event.target.value)} /><button type="submit" aria-label="Send reply"><Send size={15} /></button></form>
-        <p className="feed-reply-note">Preview only · Your reply is not published</p>
-      </div>}
+      <Link to={`/app/post/${post.id}`} className="feed-view-details">View conversation</Link>
     </article>
   )
 }
 
 export default function FeedPage() {
   const [filter, setFilter] = useState('For you')
+  const profile = getDemoProfile()
+  const viewer = { name: profile?.name ?? 'Taylor Reed', image: demoAvatar }
   const filters = ['For you', 'Following', 'Communities']
   const visiblePosts = demoPosts.filter((post) => {
     if (filter === 'Following') return post.name !== 'Marcus Lee'
@@ -65,18 +55,18 @@ export default function FeedPage() {
   return (
     <div className="app-content-width">
       <AppPageHeader eyebrow="WEDNESDAY, OCTOBER 28" title="Your home" description="A little of what your people are sharing." />
-      <div className="feed-welcome-callout"><span className="welcome-icon"><Heart size={17} /></span><span><strong>Welcome to your iConnect preview.</strong> Everything you see here is sample content.</span><Link to="/app/profile">Your profile →</Link></div>
+      <div className="feed-welcome-callout"><span className="welcome-icon"><Heart size={17} /></span><span><strong>Welcome, {profile?.name.split(' ')[0] ?? 'friend'}.</strong> Here’s what your people are sharing.</span><Link to="/app/profile">Your profile →</Link></div>
       <section className="stories-panel">
         <div className="panel-title-row"><div><h2>Your circles</h2><p>Little updates from your people</p></div><Link to="/app/connect">Find people <span>→</span></Link></div>
         <div className="story-list">
-          <Link to="/app/create" className="story-bubble story-create"><span className="story-avatar"><Avatar person={{ name: 'Taylor', image: 'photo-1544005313-94ddf0286df2' }} /><i>+</i></span><span>Your story</span></Link>
+          <Link to="/app/create" className="story-bubble story-create"><span className="story-avatar"><Avatar person={viewer} /><i>+</i></span><span>Your story</span></Link>
           {storyPeople.map((person, index) => <button className="story-bubble" key={person.name} onClick={() => setFilter('Following')}><span className={`story-avatar story-ring ring-${index + 1}`}><Avatar person={person} /></span><span>{person.name}</span><small>{person.note}</small></button>)}
         </div>
       </section>
       <div className="feed-layout-grid">
         <section className="feed-main-column">
           <Link to="/app/create" className="quick-compose">
-            <Avatar person={{ name: 'Taylor', image: 'photo-1544005313-94ddf0286df2' }} />
+            <Avatar person={viewer} />
             <span>What would you like to share?</span>
             <span className="compose-add"><PenLine size={16} /> Write a post</span>
           </Link>

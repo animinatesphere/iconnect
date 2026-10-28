@@ -4,13 +4,16 @@ import { Link, useLocation, useNavigate } from 'react-router-dom'
 import Avatar from '../../components/Avatar.jsx'
 import PageMeta from '../../components/PageMeta.jsx'
 import { demoInterests } from '../../data/demoContent.js'
-import { people } from '../../data/siteContent.js'
+import { demoAvatar, getDemoProfile, saveDemoProfile, startDemoSession } from '../../utils/demoAccount.js'
 
 export default function ProfileSetupPage() {
   const location = useLocation()
-  const [name, setName] = useState(location.state?.displayName ?? '')
-  const [bio, setBio] = useState('')
-  const [selected, setSelected] = useState(['Design', 'Music'])
+  const savedProfile = getDemoProfile()
+  const [name, setName] = useState(location.state?.displayName ?? savedProfile?.name ?? '')
+  const [email] = useState(location.state?.email ?? savedProfile?.email ?? '')
+  const [bio, setBio] = useState(savedProfile?.bio ?? '')
+  const [selected, setSelected] = useState(savedProfile?.interests.length ? savedProfile.interests : ['Design', 'Music'])
+  const [error, setError] = useState('')
   const navigate = useNavigate()
 
   function toggleInterest(interest) {
@@ -21,7 +24,20 @@ export default function ProfileSetupPage() {
 
   function finishSetup(event) {
     event.preventDefault()
-    navigate('/app/home', { state: { displayName: name.trim() || 'Taylor' } })
+    setError('')
+    if (!email) {
+      setError('Start from sign up so your demo profile can be linked to an email address.')
+      return
+    }
+
+    try {
+      saveDemoProfile({ name: name.trim() || 'Your iConnect profile', email, bio, interests: selected })
+      startDemoSession()
+      navigate('/app/home')
+    } catch (storageError) {
+      if (!(storageError instanceof DOMException)) throw storageError
+      setError('This browser could not save your demo profile. Check your browser storage settings and try again.')
+    }
   }
 
   return (
@@ -36,7 +52,7 @@ export default function ProfileSetupPage() {
             <p className="setup-intro">The PRD starts with a simple profile and a few interests. Try the setup—your choices stay in this preview only.</p>
             <form onSubmit={finishSetup}>
               <div className="profile-photo-field">
-                <Avatar person={people[0]} className="setup-avatar" />
+                <Avatar person={{ name: name || 'Your profile', image: demoAvatar }} className="setup-avatar" />
                 <div><strong>Your profile photo</strong><span>Photo upload will be available in the product.</span></div>
                 <button type="button" aria-label="Profile photo upload is not available in preview"><Upload size={15} /></button>
               </div>
@@ -49,6 +65,7 @@ export default function ProfileSetupPage() {
                   return <button type="button" key={interest} onClick={() => toggleInterest(interest)} className={isSelected ? 'interest-chip selected' : 'interest-chip'} aria-pressed={isSelected}>{isSelected && <Check size={12} />}{interest}</button>
                 })}</div>
               </div>
+              {error && <p className="auth-error" role="alert">{error}</p>}
               <button type="submit" className="app-primary-button setup-submit">Go to my home <ArrowRight size={17} /></button>
             </form>
             <p className="setup-demo-note">Preview only · Nothing is sent to a server</p>
@@ -57,9 +74,9 @@ export default function ProfileSetupPage() {
             <div className="setup-preview-top"><span className="app-page-eyebrow">YOUR SPACE IS TAKING SHAPE</span><span className="preview-status"><i /> PREVIEW</span></div>
             <div className="profile-preview-card">
               <div className="profile-preview-cover" />
-              <Avatar person={people[0]} className="profile-preview-avatar" />
+              <Avatar person={{ name: name || 'Your profile', image: demoAvatar }} className="profile-preview-avatar" />
               <h2>{name.trim() || 'Your name'}</h2>
-              <span className="profile-preview-handle">@yourcorner</span>
+              <span className="profile-preview-handle">{email || 'your email stays private'}</span>
               <p>{bio || 'Your little introduction will live here.'}</p>
               <div className="profile-preview-interests">{selected.slice(0, 4).map((interest) => <span key={interest}>{interest}</span>)}</div>
               <div className="profile-preview-stat"><strong>YOUR iCONNECT PROFILE</strong><span>Visible to you in this demo</span></div>
