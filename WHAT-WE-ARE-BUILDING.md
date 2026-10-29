@@ -39,8 +39,16 @@ The website also includes a navigable concept preview of the user experience und
 | `/app/chat` | Browser-local demo conversations |
 | `/app/create` | Post composition and local feed publishing |
 | `/app/videos` | Local video library, upload preview, watch history, and campaign draft |
+| `/app/social` | Text-first local social feed and interactions |
+| `/app/wallet` | Simulated multi-currency and multichain wallet concepts |
+| `/app/payments` | Simulated transfer, remittance, bill, card, and conversion flows |
+| `/app/itrade` | Simulated currency/crypto market charts and paper trades |
+| `/app/ibuy` | Sample-product marketplace, local cart, and demo orders |
+| `/app/ibuy/:productId` | Dedicated sample product details page |
+| `/app/ibook` | Sample flight, taxi, rental, and car-sale booking previews |
 | `/admin/login` | Separate local admin-preview sign-in |
-| `/admin/dashboard` | Local admin dashboard for sample users, feed content, reports, campaign drafts, preview settings, and illustrative analytics |
+| `/admin/dashboard` | Local admin dashboard for sample users, iBuy products and orders, feed content, reports, campaign drafts, feature settings, and analytics charts |
+| `/admin/dashboard/products/:productId` | Dedicated admin preview page for product information |
 | `/app/jobs` | Sample opportunity listings |
 | `/app/connect` | People and community discovery |
 | `/app/invest` | Future wallet and savings concept |
@@ -49,9 +57,11 @@ The website also includes a navigable concept preview of the user experience und
 
 These are frontend previews, not a connected product. Sign-up saves a demo profile (name, email, bio, and interests) in the current browser and opens the sample feed after profile setup. Login recognizes that browser's saved demo email; passwords are never saved, sent, or verified, and there is no backend or secure authentication. The feed demo can create local posts, attach small image or video files, and save likes, bookmarks, hidden posts, replies, follows, community memberships, and sent demo messages in browser storage. Profile details and preferences are also local.
 
-The video studio is a browser-only prototype with MP4/WebM uploads (up to 800 KB), short/standard video layouts, local playback, likes, saves, share links, comments through post details, and a local watch-history list. Uploaded videos are not published to YouTube, TikTok, or a public iConnect service. Promotion is only a locally saved campaign draft using demo credits; it neither charges money nor purchases or guarantees viewers.
+The video studio is a browser-only prototype with MP4/WebM uploads (up to 800 KB), short/standard video layouts, local playback, likes, saves, share links, comments through post details, and a local watch-history list. Camera preview requests local device permission but does not record or broadcast. Uploaded videos are not published to YouTube, TikTok, or a public iConnect service. Promotion is only a locally saved campaign draft using demo credits; it neither charges money nor purchases or guarantees viewers. Social updates mimic familiar text-feed interactions, but posts, likes, reposts, and shares stay local.
 
-The separate admin portal has a mock sign-in and a browser-local dashboard. Its sample directory can toggle fictional account statuses; content controls hide or restore posts in the local demo feed; sample reports can be marked reviewed; campaign drafts can be labeled reviewed or rejected; local settings can enable or disable video uploads and campaign drafts; and analytics show local/sample counts with actual connected revenue shown as $0. The sign-in does not verify credentials or provide security, and these controls cannot manage real accounts or the public website. Admin UI is not an integration with or endorsement by YouTube or TikTok.
+The separate admin portal has a mock sign-in and a browser-local dashboard. Its sample directory can inspect fictional profile details and toggle sample account statuses; the Products and Orders sections manage demo listings, publication, inventory, order snapshots, and local order statuses; product cards open dedicated detail pages in both the store and admin preview; content controls hide or restore posts in the local demo feed; sample reports can be marked reviewed; campaign drafts can be labeled reviewed or rejected; local settings can enable or disable each concept area in this browser; and analytics charts reflect local demo activity counts. Demo checkout decrements local catalog inventory, and cancelling a demo order restores it; neither action charges money or arranges delivery. Actual connected revenue is shown as $0. The sign-in does not verify credentials or provide security, and these controls cannot manage real accounts or the public website. Admin UI is not an integration with or endorsement by YouTube or TikTok.
+
+The wallet, payment, and trading screens are interface simulations only. They use fictional, browser-local balances and transaction records; no bank details or wallet secrets are collected, no accounts or cards are issued, and no payment, remittance, currency conversion, blockchain transaction, or market order takes place. iTrade uses a candlestick and volume charting component with locally generated illustrative data; prices are not live, and this is not financial advice. iBuy and iBook use sample listings and save local demo orders or booking requests without payment or provider confirmation. These screens do not offer goods, transport, financial, or investment services.
 
 Profile photos are limited to 500 KB and browser storage limits still apply. Desktop search covers sample posts, people, communities, and local posts; the notification panel contains sample notices only. These interactions never reach another user or service. External accounts are not connected, calls are not placed, AI is not powered by a service, and no financial activity takes place. On mobile, the feed is prioritized and the dashboard top bar is hidden; the bottom navigation provides the core destinations and a **More** sheet links to every other product area and profile settings. Desktop uses the sidebar and top bar. Wallet, investment, and savings features remain exploratory and require appropriate product, security, legal, and regulatory work before implementation.
 
@@ -104,3 +114,10 @@ The phases are a direction, not a delivery schedule. Product scope and sequencin
 - [iConnect Major UX Flows board](https://www.figma.com/board/fSBexyart39kkc3nfd09Tu/iConnect-%E2%80%94-Major-UX-Flows?node-id=0-1)
 
 The PRD is the product-scope reference. The Figma board was supplied as a UX-flow reference, but it required access that was unavailable during this review; confirm its flows against an accessible export before using them as implementation requirements.
+
+## Public product references reviewed
+
+- [OPay Nigeria — Our Services](https://opayweb.com/ng/) currently presents account funding, bank transfers, airtime/data and bill payments, debit cards, and OWealth. This is a product-design reference only; it does not establish that iConnect supports these services or that OPay's full service set is available in every market.
+- [Walt (formerly Wallet in Telegram)](https://walt.io/) describes crypto purchase/trading, custodial and self-custodial account options, and wallet security considerations. Product availability, supported assets, regions, and fees can vary; the prototype is not a Telegram/Walt integration.
+
+These public product references informed the prototype's concepts and disclosures. They are not endorsements, copied interface specifications, or a substitute for provider approval, country-specific legal/compliance review, security architecture, and live integration documentation.

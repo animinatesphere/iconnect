@@ -1,4 +1,4 @@
-import React, { useMemo, useRef, useState } from 'react'
+import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { ArrowLeft, Bookmark, Check, CircleDollarSign, Clapperboard, Film, Heart, Play, Plus, Search, Share2, ShieldCheck, Upload, Video } from 'lucide-react'
 import { Link } from 'react-router-dom'
 import AppPageHeader from '../../components/AppPageHeader.jsx'
@@ -14,6 +14,7 @@ const videoFormats = [
 
 export default function VideoHubPage() {
   const fileInput = useRef(null)
+  const liveVideoRef = useRef(null)
   const profile = getDemoProfile()
   const [feedState, setFeedState] = useState(emptyDemoFeedState)
   const [loaded, setLoaded] = useState(false)
@@ -29,7 +30,8 @@ export default function VideoHubPage() {
   const [dailyBudget, setDailyBudget] = useState('10')
   const [campaignDays, setCampaignDays] = useState('3')
   const [saving, setSaving] = useState(false)
-  const [settings, setSettings] = useState({ videoUploadsEnabled: true, campaignDraftsEnabled: true })
+  const [settings, setSettings] = useState({ videoUploadsEnabled: true, campaignDraftsEnabled: true, liveVideoEnabled: true })
+  const [liveStream, setLiveStream] = useState(null)
   const author = { name: profile?.name ?? 'Taylor Reed', image: profile?.avatar ?? demoAvatar }
 
   React.useEffect(() => {
@@ -42,6 +44,11 @@ export default function VideoHubPage() {
       setLoaded(true)
     }
   }, [])
+
+  useEffect(() => {
+    if (liveVideoRef.current && liveStream) liveVideoRef.current.srcObject = liveStream
+    return () => liveStream?.getTracks().forEach((track) => track.stop())
+  }, [liveStream])
 
   const videos = useMemo(() => {
     return feedState.posts.filter((post) => post.mediaType === 'video')
@@ -185,6 +192,31 @@ export default function VideoHubPage() {
     }
   }
 
+  async function toggleLivePreview() {
+    if (!settings.liveVideoEnabled) {
+      setError('Live video preview is disabled by the local admin demo setting.')
+      return
+    }
+    if (liveStream) {
+      liveStream.getTracks().forEach((track) => track.stop())
+      setLiveStream(null)
+      setNotice('On-device camera preview stopped. Nothing was broadcast.')
+      return
+    }
+    try {
+      if (!navigator.mediaDevices?.getUserMedia) {
+        setError('This browser does not support an on-device camera preview.')
+        return
+      }
+      const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false })
+      setLiveStream(stream)
+      setNotice('Camera preview is on this device only. No live audience can see or hear it.')
+      setError('')
+    } catch (cameraError) {
+      setError(cameraError instanceof Error ? `Camera preview could not start: ${cameraError.message}` : 'Camera preview could not start. Check camera permission and try again.')
+    }
+  }
+
   function saveCampaign(event) {
     event.preventDefault()
     if (!settings.campaignDraftsEnabled) {
@@ -229,6 +261,7 @@ export default function VideoHubPage() {
       <div className="video-demo-banner"><ShieldCheck size={17} /><span><strong>Browser demo only.</strong> Inspired by common video-app patterns; not affiliated with YouTube or TikTok. Uploads stay in this browser and are capped at 800 KB.</span></div>
       {error && <p className="feed-interaction-notice feed-error" role="alert">{error}</p>}
       {notice && <p className="feed-interaction-notice" role="status">{notice}</p>}
+      <section className="local-live-preview"><div className="local-live-copy"><span className="app-page-eyebrow">LIVE VIDEO · DEVICE PREVIEW</span><h2>{liveStream ? 'Your camera preview is on' : 'Set up a live video'}</h2><p>Preview your camera on this device before a future live feature is connected. This does not broadcast or record.</p><button type="button" className="app-secondary-button" onClick={toggleLivePreview} disabled={!settings.liveVideoEnabled}>{liveStream ? 'Stop camera preview' : 'Start camera preview'}</button>{!settings.liveVideoEnabled && <small>Disabled in this browser by the admin demo setting.</small>}</div>{liveStream ? <video ref={liveVideoRef} className="local-live-camera" autoPlay muted playsInline aria-label="Local camera preview only" /> : <div className="local-live-placeholder"><Video size={27} /><span>Camera preview off</span></div>}</section>
       <div className="video-hub-grid">
         <section className="video-library">
           <div className="video-library-toolbar">

@@ -22,6 +22,9 @@ import InvestPage from './pages/app/InvestPage.jsx'
 import AssistantPage from './pages/app/AssistantPage.jsx'
 import AccountPage from './pages/app/AccountPage.jsx'
 import VideoHubPage from './pages/app/VideoHubPage.jsx'
+import MoneyHubPage from './pages/app/MoneyHubPage.jsx'
+import CommercePage from './pages/app/CommercePage.jsx'
+import SocialPage from './pages/app/SocialPage.jsx'
 import AdminLoginPage from './pages/admin/AdminLoginPage.jsx'
 import AdminDashboardPage from './pages/admin/AdminDashboardPage.jsx'
 import { isDemoSessionActive } from './utils/demoAccount.js'
@@ -71,6 +74,13 @@ function AppRoutes() {
               <Route path="chat" element={<InboxPage />} />
               <Route path="create" element={<CreatePage />} />
               <Route path="videos" element={<VideoHubPage />} />
+              <Route path="wallet" element={<MoneyHubPage />} />
+              <Route path="payments" element={<MoneyHubPage />} />
+              <Route path="itrade" element={<MoneyHubPage />} />
+              <Route path="ibuy" element={<CommercePage />} />
+              <Route path="ibuy/:productId" element={<CommercePage />} />
+              <Route path="ibook" element={<CommercePage />} />
+              <Route path="social" element={<SocialPage />} />
               <Route path="jobs" element={<JobsPage />} />
               <Route path="connect" element={<ConnectPage />} />
               <Route path="invest" element={<InvestPage />} />
@@ -83,6 +93,7 @@ function AppRoutes() {
         <Route element={<RequireDemoAdminSession />}>
           <Route path="/admin" element={<Navigate to="/admin/dashboard" replace />} />
           <Route path="/admin/dashboard" element={<AdminDashboardPage />} />
+          <Route path="/admin/dashboard/products/:productId" element={<AdminDashboardPage />} />
         </Route>
         <Route path="join" element={<Navigate to="/early-access" replace />} />
       </Routes>

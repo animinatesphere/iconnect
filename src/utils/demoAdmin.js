@@ -4,6 +4,13 @@ const adminStateKey = 'iconnect.admin.demo.state'
 export const defaultAdminSettings = {
   videoUploadsEnabled: true,
   campaignDraftsEnabled: true,
+  walletsEnabled: true,
+  paymentsEnabled: true,
+  tradingEnabled: true,
+  marketplaceEnabled: true,
+  bookingsEnabled: true,
+  socialEnabled: true,
+  liveVideoEnabled: true,
 }
 
 export function getDemoAdminSettings() {
@@ -31,6 +38,9 @@ export function readDemoAdminState() {
       settings: defaultAdminSettings,
       campaignStatuses: {},
       auditLog: [],
+      productCatalog: [],
+      productOverrides: {},
+      orderStatuses: {},
     }
   }
 
@@ -46,7 +56,10 @@ export function readDemoAdminState() {
     !state.campaignStatuses ||
     typeof state.campaignStatuses !== 'object' ||
     Array.isArray(state.campaignStatuses) ||
-    (state.auditLog !== undefined && !Array.isArray(state.auditLog))
+    (state.auditLog !== undefined && !Array.isArray(state.auditLog)) ||
+    (state.productCatalog !== undefined && !Array.isArray(state.productCatalog)) ||
+    (state.productOverrides !== undefined && (!state.productOverrides || typeof state.productOverrides !== 'object' || Array.isArray(state.productOverrides))) ||
+    (state.orderStatuses !== undefined && (!state.orderStatuses || typeof state.orderStatuses !== 'object' || Array.isArray(state.orderStatuses)))
   ) {
     throw new Error('Saved demo admin data is invalid. Clear this browser’s iConnect admin demo data to continue.')
   }
@@ -57,6 +70,9 @@ export function readDemoAdminState() {
     settings: { ...defaultAdminSettings, ...state.settings },
     campaignStatuses: state.campaignStatuses,
     auditLog: state.auditLog ?? [],
+    productCatalog: state.productCatalog ?? [],
+    productOverrides: state.productOverrides ?? {},
+    orderStatuses: state.orderStatuses ?? {},
   }
 }
 

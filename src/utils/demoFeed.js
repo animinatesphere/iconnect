@@ -15,6 +15,7 @@ export function emptyDemoFeedState() {
     readNotificationIds: [],
     promotionCampaigns: [],
     watchedVideoIds: [],
+    repostedPostIds: [],
   }
 }
 
@@ -36,6 +37,7 @@ export function readDemoFeedState() {
     (state.readNotificationIds !== undefined && !Array.isArray(state.readNotificationIds)) ||
     (state.promotionCampaigns !== undefined && !Array.isArray(state.promotionCampaigns)) ||
     (state.watchedVideoIds !== undefined && !Array.isArray(state.watchedVideoIds)) ||
+    (state.repostedPostIds !== undefined && !Array.isArray(state.repostedPostIds)) ||
     !state.replies ||
     typeof state.replies !== 'object' ||
     Array.isArray(state.replies) ||

@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
-import { Bell, Bot, BriefcaseBusiness, ChevronDown, CircleEllipsis, Home, Menu, MessageCircle, PenLine, Plus, Search, UserRound, Users, Video, WalletCards, X } from 'lucide-react'
+import { Banknote, Bell, Bitcoin, Bot, BriefcaseBusiness, ChevronDown, CircleEllipsis, Home, Menu, MessageCircle, PenLine, Plane, Plus, Search, ShoppingBag, UserRound, Users, Video, WalletCards, X } from 'lucide-react'
 import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import Avatar from './Avatar.jsx'
 import Brand from './Brand.jsx'
@@ -24,6 +24,12 @@ const mobileLinks = [
 
 const exploreLinks = [
   { to: '/app/videos', label: 'Videos & Studio', icon: Video },
+  { to: '/app/social', label: 'Social updates', icon: MessageCircle },
+  { to: '/app/wallet', label: 'Wallet', icon: WalletCards },
+  { to: '/app/payments', label: 'Payments', icon: Banknote },
+  { to: '/app/itrade', label: 'iTrade', icon: Bitcoin },
+  { to: '/app/ibuy', label: 'iBuy market', icon: ShoppingBag },
+  { to: '/app/ibook', label: 'iBook journeys', icon: Plane },
   { to: '/app/jobs', label: 'Job hub', icon: BriefcaseBusiness },
   { to: '/app/connect', label: 'Connect', icon: Users },
   { to: '/app/invest', label: 'Invest', icon: WalletCards },
