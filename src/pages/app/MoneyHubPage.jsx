@@ -1,5 +1,5 @@
 import React, { Suspense, lazy, useEffect, useState } from 'react'
-import { ArrowDownLeft, ArrowLeftRight, ArrowUpRight, BadgeDollarSign, Banknote, Bitcoin, Check, Clock3, Coins, CreditCard, ExternalLink, Globe2, LockKeyhole, Plus, RefreshCw, ShieldCheck, Wallet } from 'lucide-react'
+import { Activity, ArrowDownLeft, ArrowLeftRight, ArrowUpRight, BadgeDollarSign, Banknote, Bitcoin, Bot, Check, Clock3, Coins, CreditCard, ExternalLink, Globe2, LockKeyhole, Pause, Play, Plus, RefreshCw, ShieldCheck, Wallet } from 'lucide-react'
 import { useLocation } from 'react-router-dom'
 import AppPageHeader from '../../components/AppPageHeader.jsx'
 import { getDemoAdminSettings } from '../../utils/demoAdmin.js'
@@ -22,6 +22,7 @@ const assets = [
   { symbol: 'SOL', name: 'Solana', quote: '148.20', change: '-0.8%', color: 'sol' },
 ]
 const pairs = ['EUR/USD', 'XAU/USD', 'BTC/USDT', 'ETH/USDT']
+const botStrategies = ['Moving average crossover', 'RSI mean reversion', 'Breakout watch']
 
 function formatAmount(amount, currency) {
   const maximumFractionDigits = currency === 'BTC' ? 6 : 2
@@ -63,6 +64,116 @@ export default function MoneyHubPage() {
   const tradingEnabled = settings.tradingEnabled
   const wallets = state.walletCurrencies
   const chains = state.walletChains
+
+  function isValidBotConfig(bot) {
+    return botStrategies.includes(bot.strategy) &&
+      Number.isFinite(bot.maxPosition) && bot.maxPosition > 0 && bot.maxPosition <= 10000 &&
+      Number.isFinite(bot.dailyLossLimit) && bot.dailyLossLimit > 0 && bot.dailyLossLimit <= 10000 &&
+      Number.isFinite(bot.riskPerTrade) && bot.riskPerTrade > 0 && bot.riskPerTrade <= 5
+  }
+
+  function updateBotConfig(key, value) {
+    setState((current) => ({
+      ...current,
+      paperBot: { ...current.paperBot, [key]: value },
+    }))
+  }
+
+  function saveBotConfig(event) {
+    event.preventDefault()
+    const bot = state.paperBot
+    if (!isValidBotConfig(bot)) {
+      setError('Choose a listed strategy and valid demo limits: order size and daily loss up to 10,000 credits, and risk between 0.1% and 5%.')
+      return
+    }
+    saveState(state, 'Paper bot settings saved locally. No broker or live market is connected.')
+  }
+
+  function togglePaperBot() {
+    const status = state.paperBot.status === 'Running' ? 'Paused' : 'Running'
+    if (status === 'Running' && !isValidBotConfig(state.paperBot)) {
+      setError('Save valid demo limits before starting the paper bot.')
+      return
+    }
+    saveState({
+      ...state,
+      paperBot: { ...state.paperBot, status },
+    }, status === 'Running'
+      ? 'Paper bot preview started. It will only scan when you request a demo scan.'
+      : 'Paper bot preview paused. No live orders were active.')
+  }
+
+  function runBotScan() {
+    const bot = state.paperBot
+    if (bot.status !== 'Running') {
+      setError('Start the paper bot preview before requesting a demo scan.')
+      return
+    }
+    if (bot.pendingSignal) {
+      setError('Review or dismiss the pending paper signal before running another scan.')
+      return
+    }
+    const side = bot.scanCount % 2 === 0 ? 'Buy' : 'Sell'
+    const signal = {
+      id: `paper-signal-${Date.now()}`,
+      pair,
+      side,
+      strategy: bot.strategy,
+      amount: bot.maxPosition,
+      createdAt: new Date().toISOString(),
+    }
+    const activity = [{
+      ...signal,
+      status: 'Awaiting your approval',
+    }, ...bot.activity].slice(0, 6)
+    saveState({
+      ...state,
+      paperBot: {
+        ...bot,
+        scanCount: bot.scanCount + 1,
+        pendingSignal: signal,
+        activity,
+      },
+    }, `Illustrative ${side.toLowerCase()} signal created for ${pair}. Approve it to record a paper trade.`)
+  }
+
+  function approveBotSignal() {
+    const { pendingSignal } = state.paperBot
+    if (!pendingSignal) return
+    const fillPrice = pendingSignal.pair === 'EUR/USD' ? 1.0842
+      : pendingSignal.pair === 'XAU/USD' ? 2335.6
+        : pendingSignal.pair === 'BTC/USDT' ? 67480 : 3510
+    const trade = {
+      id: `trade-${Date.now()}`,
+      pair: pendingSignal.pair,
+      side: pendingSignal.side,
+      amount: pendingSignal.amount,
+      fillPrice,
+      createdAt: new Date().toISOString(),
+      status: 'Paper fill · user approved',
+    }
+    const activity = state.paperBot.activity.map((item) => item.id === pendingSignal.id
+      ? { ...item, status: 'Paper trade recorded' }
+      : item)
+    saveState({
+      ...state,
+      trades: [trade, ...state.trades],
+      paperBot: { ...state.paperBot, pendingSignal: null, activity },
+    }, `Approved demo signal recorded as a paper trade. No market order was placed.`)
+  }
+
+  function dismissBotSignal() {
+    const { pendingSignal } = state.paperBot
+    if (!pendingSignal) return
+    const activity = state.paperBot.activity.map((item) => item.id === pendingSignal.id
+      ? { ...item, status: 'Dismissed by you' }
+      : item)
+    saveState({
+      ...state,
+      paperBot: { ...state.paperBot, pendingSignal: null, activity },
+    }, 'Demo signal dismissed. No paper trade was recorded.')
+  }
+
   function saveState(nextState, message) {
     try {
       writeDemoServicesState(nextState)
@@ -163,7 +274,7 @@ export default function MoneyHubPage() {
   return (
     <div className="app-content-width money-hub-page">
       <AppPageHeader eyebrow={screen.eyebrow} title={screen.name} description={`${screen.brand} · illustrative product screens. All amounts and activity below are simulated.`} />
-      <div className="money-safety-banner"><LockKeyhole size={17} /><span><strong>Simulation only — no financial service is connected.</strong> Never enter bank details, card numbers, seed phrases, private keys, or real credentials. Demo balances cannot be withdrawn or traded.</span></div>
+      <div className="money-safety-banner"><LockKeyhole size={17} /><span><strong>Simulation only — no financial service is connected.</strong> Never enter bank details, card numbers, seed phrases, private keys, or real credentials. Demo balances are not withdrawable; all trades are paper simulations.</span></div>
       {error && <p className="feed-interaction-notice feed-error" role="alert">{error}</p>}
       {notice && <p className="feed-interaction-notice" role="status">{notice}</p>}
 
@@ -189,6 +300,22 @@ export default function MoneyHubPage() {
       {pathname === '/app/itrade' && tradingEnabled && <div className="trade-layout-grid">
         <section className="money-panel trade-chart-panel"><Suspense fallback={<div className="trade-chart-loading">Loading interactive market chart…</div>}><TradeChart pair={pair} onPairChange={setPair} pairs={pairs} /></Suspense></section>
         <section className="money-panel trade-ticket"><div className="money-panel-heading"><span><Coins size={16} /></span><div><h2>Paper trade</h2><p>Record a simulated position only.</p></div></div><div className="trade-side-toggle"><button type="button" className={tradeSide === 'Buy' ? 'is-buy' : ''} onClick={() => setTradeSide('Buy')}>Buy / Long</button><button type="button" className={tradeSide === 'Sell' ? 'is-sell' : ''} onClick={() => setTradeSide('Sell')}>Sell / Short</button></div><form className="money-form" onSubmit={placeDemoTrade}><label>Order size (demo credits)<input type="number" min="0.01" max="10000" step="any" value={amount} onChange={(event) => setAmount(event.target.value)} placeholder="0.00" /></label><div className="trade-estimate"><span>Order type</span><strong>Market · simulated</strong></div><div className="trade-estimate"><span>Available demo balance</span><strong>{formatAmount(state.balances.USD, 'USD')} USD</strong></div><button type="submit" className={tradeSide === 'Buy' ? 'app-primary-button trade-buy-button' : 'app-primary-button trade-sell-button'}>{tradeSide === 'Buy' ? 'Open paper position' : 'Open short simulation'}</button><p>No order reaches a broker or blockchain. Demo positions do not generate profit or loss.</p></form></section>
+        <section className="money-panel trade-bot-panel">
+          <div className="trade-bot-heading">
+            <div className="trade-bot-heading-title"><span className="trade-bot-icon"><Bot size={18} /></span><div><span className="app-page-eyebrow">BOT STUDIO · PAPER MODE</span><h2>Automated strategy preview</h2><p>Configure a mock strategy and review each simulated signal yourself.</p></div></div>
+            <span className={`trade-bot-status ${state.paperBot.status === 'Running' ? 'is-running' : ''}`}><i /> {state.paperBot.status === 'Running' ? 'PAPER BOT ACTIVE' : 'BOT PAUSED'}</span>
+          </div>
+          <form className="trade-bot-config" onSubmit={saveBotConfig}>
+            <label>Strategy<select value={state.paperBot.strategy} onChange={(event) => updateBotConfig('strategy', event.target.value)}>{botStrategies.map((strategy) => <option key={strategy}>{strategy}</option>)}</select></label>
+            <label>Max paper order<input type="number" min="0.01" max="10000" step="any" value={state.paperBot.maxPosition} onChange={(event) => updateBotConfig('maxPosition', Number(event.target.value))} /><small>Demo USD credits</small></label>
+            <label>Daily loss guard<input type="number" min="0.01" max="10000" step="any" value={state.paperBot.dailyLossLimit} onChange={(event) => updateBotConfig('dailyLossLimit', Number(event.target.value))} /><small>Demo USD credits · UI limit only</small></label>
+            <label>Risk per trade<input type="number" min="0.1" max="5" step="0.1" value={state.paperBot.riskPerTrade} onChange={(event) => updateBotConfig('riskPerTrade', Number(event.target.value))} /><small>Percent · simulated setting</small></label>
+            <div className="trade-bot-config-actions"><button type="submit" className="trade-bot-save-button">Save settings</button><button type="button" className={`trade-bot-toggle ${state.paperBot.status === 'Running' ? 'is-paused' : ''}`} onClick={togglePaperBot}>{state.paperBot.status === 'Running' ? <><Pause size={14} /> Pause preview</> : <><Play size={14} /> Start paper bot</>}</button><button type="button" className="trade-bot-scan-button" disabled={state.paperBot.status !== 'Running' || Boolean(state.paperBot.pendingSignal)} onClick={runBotScan}><Activity size={14} /> Run demo scan</button></div>
+          </form>
+          <div className="trade-bot-safety-note"><ShieldCheck size={15} /><span>The bot does not scan in the background. Scans use illustrative demo signals only; every paper trade needs your approval. No AI, broker, exchange, or live market data is connected.</span></div>
+          {state.paperBot.pendingSignal && <div className="trade-bot-pending-signal"><div><span className="app-page-eyebrow">SAMPLE SIGNAL · APPROVAL REQUIRED</span><strong className={state.paperBot.pendingSignal.side === 'Buy' ? 'trade-positive' : 'trade-negative'}>{state.paperBot.pendingSignal.side === 'Buy' ? 'BUY / LONG' : 'SELL / SHORT'} · {state.paperBot.pendingSignal.pair}</strong><small>{state.paperBot.pendingSignal.strategy} · {formatAmount(state.paperBot.pendingSignal.amount, 'USD')} demo credits · {new Date(state.paperBot.pendingSignal.createdAt).toLocaleTimeString()}</small></div><div><button type="button" className="trade-bot-approve" onClick={approveBotSignal}>Record paper trade</button><button type="button" className="trade-bot-dismiss" onClick={dismissBotSignal}>Dismiss signal</button></div></div>}
+          <div className="trade-bot-activity"><div className="trade-bot-activity-heading"><strong>Recent bot activity</strong><span>{state.paperBot.scanCount} manual scans</span></div>{state.paperBot.activity.length ? state.paperBot.activity.slice(0, 4).map((activity) => <article key={activity.id}><span className={`trade-bot-activity-side ${activity.side === 'Buy' ? 'trade-positive' : 'trade-negative'}`}>{activity.side}</span><strong>{activity.pair}</strong><small>{activity.strategy} · {new Date(activity.createdAt).toLocaleTimeString()}</small><em>{activity.status}</em></article>) : <p>No scans yet. Start the preview and request a manual demo scan.</p>}</div>
+        </section>
         <section className="money-panel trade-market-list"><div className="money-panel-heading"><span><Globe2 size={16} /></span><div><h2>Markets watchlist</h2><p>Sample quotes · USD</p></div></div>{assets.map((asset) => <article key={asset.symbol}><span className={`asset-icon asset-${asset.color}`}>{asset.symbol.slice(0, 1)}</span><span><strong>{asset.name}</strong><small>{asset.symbol}</small></span><b>{asset.quote}</b><em className={asset.change.startsWith('-') ? 'trade-negative' : 'trade-positive'}>{asset.change}</em></article>)}</section>
         <section className="money-panel trade-history"><div className="money-panel-heading"><span><Clock3 size={16} /></span><div><h2>Paper trade history</h2><p>Local simulated orders only</p></div></div>{state.trades.length ? state.trades.map((trade) => <article key={trade.id}><span className={trade.side === 'Buy' ? 'trade-positive' : 'trade-negative'}>{trade.side}</span><strong>{trade.pair}</strong><span>{trade.amount} credits</span><small>{trade.status}</small></article>) : <div className="money-empty-state">Your paper trades will show here.</div>}</section>
       </div>}

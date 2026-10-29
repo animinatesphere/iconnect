@@ -2050,6 +2050,47 @@ button, a { -webkit-tap-highlight-color: transparent; }
 .trade-history > article { display: flex; align-items: center; justify-content: space-between; gap: 7px; padding: 9px 0; border-top: 1px solid #f1f0eb; color: #73756c; font-size: 8px; }
 .trade-history > article strong { color: #53554d; }
 .trade-history > article small { color: #999a90; font-size: 7px; }
+.trade-bot-panel { grid-column: 1 / -1; }
+.trade-bot-heading, .trade-bot-heading-title { display: flex; align-items: center; gap: 12px; }
+.trade-bot-heading { justify-content: space-between; margin-bottom: 16px; }
+.trade-bot-heading-title { min-width: 0; }
+.trade-bot-icon { width: 38px; height: 38px; display: grid; flex: 0 0 auto; place-items: center; border: 1px solid #e8ebdf; border-radius: 10px; background: #f1f4e9; color: #70834a; }
+.trade-bot-heading-title > div { min-width: 0; }
+.trade-bot-heading-title h2 { margin: 4px 0; color: #41433b; font: 600 14px 'Manrope', sans-serif; }
+.trade-bot-heading-title p { margin: 0; color: #929389; font-size: 8px; }
+.trade-bot-status { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 6px; padding: 6px 8px; border: 1px solid #e9e8e1; border-radius: 99px; background: #f8f8f4; color: #85867d; font-size: 7px; font-weight: 700; letter-spacing: .35px; }
+.trade-bot-status i { width: 6px; height: 6px; border-radius: 50%; background: #a7a89d; }
+.trade-bot-status.is-running { border-color: #e0e9d1; background: #f0f4e8; color: #627744; }
+.trade-bot-status.is-running i { background: #7c984e; box-shadow: 0 0 0 3px #8ca56a24; }
+.trade-bot-config { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
+.trade-bot-config > label { min-width: 0; display: grid; align-content: start; gap: 6px; color: #66685f; font-size: 8px; font-weight: 700; }
+.trade-bot-config input, .trade-bot-config select { width: 100%; min-width: 0; height: 34px; padding: 0 9px; border: 1px solid #e7e6df; border-radius: 6px; outline: 0; background: #fff; color: #505249; font: inherit; font-size: 9px; }
+.trade-bot-config input:focus, .trade-bot-config select:focus { border-color: #9bab73; box-shadow: 0 0 0 3px #dce8c340; }
+.trade-bot-config > label > small { color: #999a90; font-size: 7px; font-weight: 400; }
+.trade-bot-config-actions { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 7px; margin-top: 2px; }
+.trade-bot-config-actions button, .trade-bot-pending-signal button { min-height: 32px; display: inline-flex; align-items: center; justify-content: center; gap: 6px; padding: 0 10px; border: 1px solid #e7e6df; border-radius: 6px; background: white; color: #62645b; font: inherit; font-size: 8px; font-weight: 600; cursor: pointer; }
+.trade-bot-config-actions .trade-bot-toggle { border-color: #dce6cc; background: #edf2e4; color: #5e713f; }
+.trade-bot-config-actions .trade-bot-toggle.is-paused { border-color: #efdfda; background: #f8efec; color: #a15a4f; }
+.trade-bot-config-actions .trade-bot-scan-button { border-color: #dce6cc; color: #5e713f; }
+.trade-bot-config-actions button:disabled { opacity: .48; cursor: not-allowed; }
+.trade-bot-safety-note { display: flex; align-items: flex-start; gap: 8px; margin-top: 14px; padding: 10px; border: 1px solid #ececdf; border-radius: 7px; background: #f8f8f2; color: #77786d; font-size: 8px; line-height: 1.55; }
+.trade-bot-safety-note svg { flex: 0 0 auto; color: #78894f; }
+.trade-bot-pending-signal { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 12px; padding: 12px; border: 1px solid #e7e9dc; border-radius: 8px; background: #fcfcf7; }
+.trade-bot-pending-signal > div:first-child { min-width: 0; display: grid; gap: 5px; }
+.trade-bot-pending-signal > div:first-child > strong { font: 700 10px 'Manrope', sans-serif; }
+.trade-bot-pending-signal > div:first-child > small { color: #929389; font-size: 7px; }
+.trade-bot-pending-signal > div:last-child { display: flex; flex-wrap: wrap; gap: 6px; }
+.trade-bot-pending-signal .trade-bot-approve { border-color: #dce6cc; background: #edf2e4; color: #5e713f; }
+.trade-bot-pending-signal .trade-bot-dismiss { color: #85867d; }
+.trade-bot-activity { margin-top: 16px; }
+.trade-bot-activity-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 5px; }
+.trade-bot-activity-heading strong { color: #55574e; font: 600 9px 'Manrope', sans-serif; }
+.trade-bot-activity-heading span { color: #999a90; font-size: 7px; }
+.trade-bot-activity > article { display: grid; grid-template-columns: 55px 85px minmax(100px, 1fr) minmax(100px, auto); align-items: center; gap: 8px; padding: 8px 0; border-top: 1px solid #f1f0eb; font-size: 7px; }
+.trade-bot-activity-side { font-weight: 700; }
+.trade-bot-activity > article > strong { color: #55574e; }
+.trade-bot-activity > article > small, .trade-bot-activity > article > em { color: #929389; font-size: 7px; font-style: normal; }
+.trade-bot-activity > p { margin: 0; padding: 12px 0; color: #929389; font-size: 8px; }
 
 .commerce-layout { display: grid; grid-template-columns: minmax(0, 1fr) 280px; align-items: start; gap: 14px; }
 .shop-catalog-panel, .shop-cart-panel, .ibook-search-panel, .ibook-bookings-panel { min-width: 0; padding: 14px; border: 1px solid #e9e8e1; border-radius: 11px; background: #fffefa; }
@@ -2354,4 +2395,120 @@ button, a { -webkit-tap-highlight-color: transparent; }
   .product-detail-buy-row > button { flex: 1; }
   .admin-product-detail-panel { padding: 13px; }
   .admin-product-detail-title { align-items: flex-start; flex-direction: column; }
+}
+
+@media (max-width: 900px) {
+  .trade-bot-config { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .trade-bot-heading-title p { max-width: 430px; line-height: 1.5; }
+}
+
+@media (max-width: 560px) {
+  .trade-layout-grid { gap: 10px; }
+  .trade-chart-panel, .trade-ticket, .trade-bot-panel, .trade-market-list, .trade-history { min-width: 0; padding: 12px; }
+  .trade-chart-terminal { min-width: 0; }
+  .trade-panel-toolbar { align-items: flex-start; }
+  .trade-panel-toolbar h2 { flex-wrap: wrap; gap: 6px; }
+  .trade-panel-toolbar h2 select { max-width: min(145px, 52vw); font-size: 13px; }
+  .trade-panel-toolbar > div { min-width: 0; }
+  .trade-chart-summary { margin-top: 15px; }
+  .trade-chart-summary > strong { font-size: 23px; }
+  .trade-chart-toolbar { gap: 8px; }
+  .trade-ohlc-readout { width: 100%; justify-content: space-between; gap: 5px; font-size: 7px; }
+  .trade-timeframe-controls { width: 100%; justify-content: space-between; }
+  .trade-timeframe-controls button { flex: 1; min-height: 28px; }
+  .trade-chart-canvas { height: 245px; margin-top: 7px; }
+  .trade-chart-loading { min-height: 275px; }
+  .trade-chart-attribution { padding-top: 3px; }
+  .trade-disclaimer { align-items: flex-start; font-size: 8px; line-height: 1.5; }
+  .trade-bot-heading { align-items: flex-start; flex-direction: column; gap: 10px; }
+  .trade-bot-heading-title { align-items: flex-start; gap: 9px; }
+  .trade-bot-icon { width: 34px; height: 34px; }
+  .trade-bot-heading-title h2 { font-size: 13px; line-height: 1.35; }
+  .trade-bot-heading-title p { font-size: 8px; }
+  .trade-bot-status { margin-left: 43px; }
+  .trade-bot-config { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px; }
+  .trade-bot-config > label:first-child { grid-column: 1 / -1; }
+  .trade-bot-config input, .trade-bot-config select { height: 38px; font-size: 10px; }
+  .trade-bot-config-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .trade-bot-config-actions button { min-height: 38px; padding: 0 7px; font-size: 8px; }
+  .trade-bot-config-actions .trade-bot-scan-button { grid-column: 1 / -1; }
+  .trade-bot-pending-signal { align-items: stretch; flex-direction: column; gap: 10px; padding: 10px; }
+  .trade-bot-pending-signal > div:last-child { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .trade-bot-pending-signal button { min-height: 36px; padding: 0 6px; font-size: 7px; }
+  .trade-bot-activity > article { grid-template-columns: 42px minmax(0, auto) 1fr; gap: 5px 7px; }
+  .trade-bot-activity > article > small { grid-column: 3; text-align: right; }
+  .trade-bot-activity > article > em { grid-column: 1 / -1; }
+  .trade-history > article { flex-wrap: wrap; }
+  .trade-history > article small { margin-left: auto; }
+}
+
+@media (max-width: 360px) {
+  .trade-bot-config { grid-template-columns: minmax(0, 1fr); }
+  .trade-bot-config > label:first-child { grid-column: auto; }
+  .trade-bot-pending-signal > div:last-child { grid-template-columns: minmax(0, 1fr); }
+  .trade-bot-pending-signal button { width: 100%; }
+  .trade-bot-activity > article { grid-template-columns: 38px minmax(0, auto) 1fr; }
+  .trade-panel-toolbar .simulated-pill { font-size: 6px; }
+}
+
+@media (max-width: 760px) {
+  .video-hub-page { padding-bottom: 90px; }
+  .video-demo-banner { gap: 9px; margin-bottom: 14px; padding: 11px; }
+  .video-demo-banner span { font-size: 10px; }
+  .local-live-preview { grid-template-columns: minmax(0, 1fr); gap: 12px; margin-bottom: 14px; padding: 13px; }
+  .local-live-copy h2 { font-size: 16px; }
+  .local-live-copy p { font-size: 10px; }
+  .local-live-copy .app-secondary-button { min-height: 40px; padding: 0 12px; font-size: 9px; }
+  .local-live-camera, .local-live-placeholder { width: min(100%, 520px); justify-self: center; }
+  .video-hub-grid { gap: 12px; }
+  .video-library-toolbar { gap: 8px; padding: 9px; }
+  .video-tabs { width: 100%; max-width: 100%; flex: 0 0 auto; overflow-x: auto; overscroll-behavior-x: contain; scrollbar-width: none; }
+  .video-tabs::-webkit-scrollbar { display: none; }
+  .video-tabs button { min-height: 40px; flex: 0 0 auto; }
+  .video-search { min-height: 40px; }
+  .video-search input { font-size: 12px; }
+  .video-card-grid { gap: 10px; padding: 10px; }
+  .video-card { border-radius: 10px; }
+  .video-card-short .video-card-player video { aspect-ratio: 9 / 16; max-height: 68svh; }
+  .video-card-player video { aspect-ratio: 16 / 9; }
+  .video-card-info { gap: 9px; padding: 11px 11px 5px; }
+  .video-card-info .avatar { width: 34px; height: 34px; }
+  .video-card-info h2 { font-size: 13px; }
+  .video-card-info p { font-size: 10px; }
+  .video-card-info small { font-size: 9px; }
+  .video-card-actions { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 5px; padding: 8px 10px 10px; }
+  .video-card-actions button, .video-card-actions a { min-width: 0; min-height: 40px; justify-content: center; gap: 4px; padding: 0 4px; font-size: 9px; white-space: nowrap; }
+  .video-card-actions a { margin-left: 0; }
+  .video-promote-trigger { min-height: 40px; font-size: 9px; }
+  .video-promotion-form { gap: 10px; }
+  .video-promotion-form input { min-height: 40px; }
+  .video-promotion-form > button { min-height: 40px; }
+  .video-empty-state { padding: 30px 16px; }
+  .video-empty-state p { font-size: 10px; }
+  .video-empty-state .app-secondary-button { min-height: 40px; padding: 0 12px; }
+  .video-studio-card { gap: 13px; padding: 13px; }
+  .video-studio-heading h2 { font-size: 14px; }
+  .video-studio-heading p { font-size: 9px; }
+  .video-format-option { min-height: 82px; padding: 10px; }
+  .video-format-option > strong { font-size: 10px; }
+  .video-format-option > small { font-size: 8px; line-height: 1.4; }
+  .video-form-field { gap: 7px; font-size: 9px; }
+  .video-form-field input { min-height: 42px; font-size: 13px; }
+  .video-form-field textarea { min-height: 86px; font-size: 13px; }
+  .video-upload-dropzone { min-height: 96px; }
+  .video-upload-dropzone strong { font-size: 10px; }
+  .video-upload-dropzone small { font-size: 9px; }
+  .video-upload-preview video { max-height: 44svh; }
+  .video-upload-preview button { min-height: 38px; font-size: 9px; }
+  .video-publish-button { min-height: 44px; font-size: 10px; }
+  .video-upload-footnote, .video-campaign-summary small { font-size: 8px; }
+}
+
+@media (max-width: 420px) {
+  .video-demo-banner { font-size: 9px; }
+  .video-card-grid { padding: 8px; }
+  .video-card-actions { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 4px; padding-right: 7px; padding-left: 7px; }
+  .video-card-actions button, .video-card-actions a { gap: 3px; padding: 0 2px; font-size: 8px; }
+  .video-card-actions svg { width: 14px; height: 14px; }
+  .video-studio-card { padding: 11px; }
 }
