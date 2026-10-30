@@ -1,4 +1,4 @@
-import React, { useEffect } from 'react'
+import React, { useEffect, useState } from 'react'
 import { BrowserRouter, Navigate, Outlet, Route, Routes, useLocation } from 'react-router-dom'
 import SiteLayout from './components/SiteLayout.jsx'
 import HomePage from './pages/HomePage.jsx'
@@ -11,6 +11,7 @@ import UserAppLayout from './components/UserAppLayout.jsx'
 import UserShell from './components/UserShell.jsx'
 import OnboardingPage from './pages/app/OnboardingPage.jsx'
 import AuthPage from './pages/app/AuthPage.jsx'
+import VerifyEmailPage from './pages/app/VerifyEmailPage.jsx'
 import ProfileSetupPage from './pages/app/ProfileSetupPage.jsx'
 import FeedPage from './pages/app/FeedPage.jsx'
 import PostDetailPage from './pages/app/PostDetailPage.jsx'
@@ -24,10 +25,11 @@ import AccountPage from './pages/app/AccountPage.jsx'
 import VideoHubPage from './pages/app/VideoHubPage.jsx'
 import MoneyHubPage from './pages/app/MoneyHubPage.jsx'
 import CommercePage from './pages/app/CommercePage.jsx'
+import LocalMarketplacePage from './pages/app/LocalMarketplacePage.jsx'
 import SocialPage from './pages/app/SocialPage.jsx'
 import AdminLoginPage from './pages/admin/AdminLoginPage.jsx'
 import AdminDashboardPage from './pages/admin/AdminDashboardPage.jsx'
-import { isDemoSessionActive } from './utils/demoAccount.js'
+import { apiRequest } from './utils/api.js'
 import { isDemoAdminSessionActive } from './utils/demoAdmin.js'
 
 function RouteEffects() {
@@ -41,7 +43,37 @@ function RouteEffects() {
 }
 
 function RequireDemoSession() {
-  return isDemoSessionActive() ? <Outlet /> : <Navigate to="/app/onboarding" replace />
+  const [status, setStatus] = useState('checking')
+  const [retry, setRetry] = useState(0)
+
+  useEffect(() => {
+    const controller = new AbortController()
+    setStatus('checking')
+    apiRequest('/api/auth/me', { signal: controller.signal })
+      .then(() => setStatus('authenticated'))
+      .catch((error) => {
+        if (controller.signal.aborted) return
+        setStatus(error.code === 'not_authenticated' ? 'unauthenticated' : 'unavailable')
+      })
+    return () => controller.abort()
+  }, [retry])
+
+  if (status === 'checking') {
+    return <main className="auth-screen"><p className="backend-auth-status" role="status">Checking your account…</p></main>
+  }
+  if (status === 'unauthenticated') return <Navigate to="/app/onboarding" replace />
+  if (status === 'unavailable') {
+    return (
+      <main className="auth-screen">
+        <section className="backend-auth-error" role="alert">
+          <h1>We can’t reach iConnect right now.</h1>
+          <p>Your sign-in could not be verified. Check your connection and try again.</p>
+          <button type="button" className="app-primary-button" onClick={() => setRetry((value) => value + 1)}>Try again</button>
+        </section>
+      </main>
+    )
+  }
+  return <Outlet />
 }
 
 function RequireDemoAdminSession() {
@@ -66,6 +98,7 @@ function AppRoutes() {
           <Route path="onboarding" element={<OnboardingPage />} />
           <Route path="login" element={<AuthPage />} />
           <Route path="signup" element={<AuthPage />} />
+          <Route path="verify-email" element={<VerifyEmailPage />} />
           <Route path="setup" element={<ProfileSetupPage />} />
           <Route element={<RequireDemoSession />}>
             <Route element={<UserShell />}>
@@ -80,6 +113,8 @@ function AppRoutes() {
               <Route path="ibuy" element={<CommercePage />} />
               <Route path="ibuy/:productId" element={<CommercePage />} />
               <Route path="ibook" element={<CommercePage />} />
+              <Route path="marketplace" element={<LocalMarketplacePage />} />
+              <Route path="marketplace/:listingId" element={<LocalMarketplacePage />} />
               <Route path="social" element={<SocialPage />} />
               <Route path="jobs" element={<JobsPage />} />
               <Route path="connect" element={<ConnectPage />} />

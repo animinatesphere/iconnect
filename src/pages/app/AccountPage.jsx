@@ -5,6 +5,8 @@ import AppPageHeader from '../../components/AppPageHeader.jsx'
 import Avatar from '../../components/Avatar.jsx'
 import { demoInterests } from '../../data/demoContent.js'
 import { demoAvatar, endDemoSession, getDemoPreferences, getDemoProfile, saveDemoPreferences, saveDemoProfile } from '../../utils/demoAccount.js'
+import { apiRequest } from '../../utils/api.js'
+import { useNavigate } from 'react-router-dom'
 
 const defaultPreferences = { notifications: true, profileVisible: true, discoverable: true }
 
@@ -18,7 +20,9 @@ export default function AccountPage() {
   const [avatar, setAvatar] = useState(profile?.avatar ?? demoAvatar)
   const [selected, setSelected] = useState(profile?.interests.length ? profile.interests : ['Design', 'Music', 'Reading'])
   const [preferences, setPreferences] = useState(defaultPreferences)
+  const [savingProfile, setSavingProfile] = useState(false)
   const photoInput = useRef(null)
+  const navigate = useNavigate()
 
   React.useEffect(() => {
     try {
@@ -32,7 +36,7 @@ export default function AccountPage() {
     setSelected((current) => current.includes(interest) ? current.filter((item) => item !== interest) : [...current, interest])
   }
 
-  function saveProfile() {
+  async function saveProfile() {
     setNotice('')
     if (!name.trim() || !username.trim()) {
       setNotice('Add a display name and username before saving your profile.')
@@ -43,11 +47,30 @@ export default function AccountPage() {
       return
     }
 
+    setSavingProfile(true)
     try {
-      saveDemoProfile({ name, username, email: profile.email, bio, interests: selected, avatar })
-      setNotice('Your profile was saved in this browser.')
+      const result = await apiRequest('/api/auth/profile', {
+        method: 'PUT',
+        body: JSON.stringify({ name, username, bio, interests: selected }),
+      })
+      saveDemoProfile({ name: result.user.name, username: result.user.username, email: result.user.email, bio: result.user.bio, interests: result.user.interests, avatar })
+      setNotice('Your profile was saved to your account.')
     } catch (error) {
-      setNotice(error instanceof Error ? error.message : 'This browser could not save your profile.')
+      setNotice(error instanceof Error ? error.message : 'Could not save your profile.')
+    } finally {
+      setSavingProfile(false)
+    }
+  }
+
+  async function signOut(event) {
+    event.preventDefault()
+    setNotice('')
+    try {
+      await apiRequest('/api/auth/logout', { method: 'POST' })
+      endDemoSession()
+      navigate('/app/onboarding')
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : 'Could not sign out. Try again.')
     }
   }
 
@@ -84,12 +107,12 @@ export default function AccountPage() {
 
   return (
     <div className="app-content-width">
-      <AppPageHeader eyebrow="YOUR SPACE, YOUR SETTINGS" title="Profile & settings" description="Manage your local demo profile and preferences." />
-      <div className="account-demo-banner"><Shield size={16} /> Profile and preferences are saved only in this browser. No password is stored.</div>
+      <AppPageHeader eyebrow="YOUR SPACE, YOUR SETTINGS" title="Profile & settings" description="Manage your iConnect profile and local preferences." />
+      <div className="account-demo-banner"><Shield size={16} /> Your profile details are saved to your account. Preferences and photo preview remain on this device.</div>
       <div className="account-layout">
         <nav className="account-tabs" aria-label="Profile settings">
           {['Profile', 'Preferences', 'Privacy'].map((tab) => <button type="button" key={tab} onClick={() => { setActiveTab(tab); setNotice('') }} className={activeTab === tab ? 'account-tab-active' : ''}>{tab}<ChevronRight size={15} /></button>)}
-          <Link to="/app/onboarding" onClick={endDemoSession}><LogOut size={15} /> Exit demo</Link>
+          <Link to="/app/onboarding" onClick={signOut}><LogOut size={15} /> Sign out</Link>
         </nav>
         <section className="account-content">
           <div className="account-section-heading">
@@ -99,7 +122,7 @@ export default function AccountPage() {
           {activeTab === 'Profile' && <>
             <div className="account-avatar-row">
               <Avatar person={{ name, image: avatar }} />
-              <div><strong>{name}</strong><span>{profile?.email ?? '@taylor.reed'} · Demo profile</span></div>
+              <div><strong>{name}</strong><span>{profile?.email ?? '@taylor.reed'} · iConnect account</span></div>
               <input ref={photoInput} className="create-image-input" type="file" accept="image/*" onChange={choosePhoto} />
               <button type="button" onClick={() => photoInput.current?.click()}>Change photo</button>
             </div>
@@ -108,7 +131,7 @@ export default function AccountPage() {
             <label className="account-field"><span>BIO</span><textarea value={bio} onChange={(event) => setBio(event.target.value)} rows={3} maxLength={120} /></label>
             <div className="account-interest-heading"><strong>INTERESTS</strong><span>Choose topics for your feed</span></div>
             <div className="interest-chips">{demoInterests.map((interest) => <button type="button" className={selected.includes(interest) ? 'interest-chip selected' : 'interest-chip'} key={interest} onClick={() => toggleInterest(interest)} aria-pressed={selected.includes(interest)}>{interest}</button>)}</div>
-            <button type="button" className="app-primary-button account-save" onClick={saveProfile}><Save size={15} /> Save changes</button>
+            <button type="button" className="app-primary-button account-save" onClick={saveProfile} disabled={savingProfile}><Save size={15} /> {savingProfile ? 'Saving…' : 'Save changes'}</button>
           </>}
           {activeTab === 'Preferences' && <div className="account-settings-list">
             <button type="button" onClick={() => updatePreferences('notifications')}><span className="account-setting-icon"><Bell size={17} /></span><span><strong>In-app notifications</strong><small>{preferences.notifications ? 'Enabled for this demo' : 'Muted in this demo'}</small></span><span className={preferences.notifications ? 'preference-toggle is-on' : 'preference-toggle'} aria-label={preferences.notifications ? 'On' : 'Off'} /></button>
