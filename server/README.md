@@ -1,10 +1,10 @@
 # iConnect authentication API
 
-This service provides email/password registration, email verification codes through Resend, PostgreSQL-backed sessions, login, profile updates, and logout. It binds to `127.0.0.1:10000` by default and is intended to sit behind an HTTPS reverse proxy.
+This service uses Python, FastAPI, and PostgreSQL for email/password registration, Resend email verification codes, sessions, profile updates, and logout.
 
 ## Requirements
 
-- Node.js 20 or newer
+- Python 3.9 or newer
 - PostgreSQL 14 or newer
 - A Resend API key and a sender address verified with Resend for production email delivery
 
@@ -12,28 +12,24 @@ This service provides email/password registration, email verification codes thro
 
 1. Copy `.env.example` to `.env` and set `DATABASE_URL`, `SESSION_SECRET`, and `OTP_HASH_SECRET`. Generate the two secrets independently with `openssl rand -base64 48`.
 2. Create the local PostgreSQL database and user, then set `DATABASE_URL`.
-3. Install packages with `npm install`.
-4. Run `npm run db:migrate`.
-5. In one terminal run `npm run dev:api`; in another run `npm run dev`.
-6. In development without `RESEND_API_KEY`, the API prints verification codes to its local terminal. This transport is disabled in production.
+3. Create and activate a virtual environment: `python3 -m venv server/.venv` and `source server/.venv/bin/activate`.
+4. Install dependencies with `pip install -r server/requirements-dev.txt`.
+5. Run `npm run db:migrate`.
+6. In one terminal run `npm run dev:api`; in another run `npm run dev`.
+7. Without `RESEND_API_KEY`, development codes are logged only to the API terminal.
 
-The Vite development server proxies `/api` to `127.0.0.1:10000`. Production should serve the frontend and reverse-proxy `/api` to the same loopback address, over HTTPS. Public web traffic uses HTTPS port 443; do not expose backend port 10000 directly to the internet. Set `APP_ORIGIN` to the exact public frontend origin. `TRUST_PROXY=1` assumes exactly one trusted reverse proxy.
+The API listens on `127.0.0.1:10000` by default. Production traffic should use HTTPS through Nginx on port 443, with Nginx forwarding privately to `127.0.0.1:10000`. Do not expose port 10000 to the internet. Set `APP_ORIGIN` to the exact public frontend origin. `TRUST_PROXY=1` assumes one trusted reverse proxy.
 
-## Vercel frontend with a VPS API
+## Production domains
 
-The Vercel deployment URL can be `APP_ORIGIN` (for example, `https://your-project.vercel.app`). The API still needs a public HTTPS hostname on the VPS, such as `api.example.com`, with DNS pointing to the VPS and a valid TLS certificate. The Vercel rewrite connects to this hostname on standard HTTPS port 443; Nginx forwards internally to `127.0.0.1:10000`. Add an API rewrite before the existing SPA catch-all in `vercel.json`:
+- Frontend: `https://www.iconnectdworld.com` on Vercel.
+- API: `https://api.iconnectdworld.com` on the VPS, with an `A` record pointing to `203.161.49.3`.
+- Vercel rewrites `/api/*` to the API hostname. Nginx terminates HTTPS and proxies to `127.0.0.1:10000`.
 
-```json
-{
-  "source": "/api/:path*",
-  "destination": "https://api.example.com/api/:path*"
-}
-```
-
-Replace `api.example.com` with the actual HTTPS API hostname. This keeps browser requests same-origin at Vercel while forwarding them to the API. Do not expose port 10000 directly to the internet; Nginx or another trusted HTTPS reverse proxy should forward to `127.0.0.1:10000`.
+The Vercel rewrite must only be deployed after the API hostname has DNS, a working TLS certificate, and a running backend. DNS records do not specify ports.
 
 ## Production environment
 
-Set `NODE_ENV=production`, `API_HOST=127.0.0.1`, `API_PORT`, `APP_ORIGIN=https://iconnect-mu.vercel.app`, `DATABASE_URL`, `SESSION_SECRET`, `OTP_HASH_SECRET`, `RESEND_API_KEY`, `EMAIL_FROM`, `SESSION_MAX_AGE_DAYS`, and `TRUST_PROXY` in the server's environment file or secret manager. Keep `.env` out of source control and never put Resend or session secrets in `VITE_*` variables.
+Set `NODE_ENV=production`, `API_HOST=127.0.0.1`, `API_PORT=10000`, `APP_ORIGIN=https://www.iconnectdworld.com`, `DATABASE_URL`, `SESSION_SECRET`, `OTP_HASH_SECRET`, `RESEND_API_KEY`, `EMAIL_FROM`, `SESSION_MAX_AGE_DAYS=7`, and `TRUST_PROXY=1` in the VPS environment. Keep secrets out of source control and never put them in `VITE_*` variables.
 
-The migration is idempotent and can be run with `npm run db:migrate`. The API also applies the base schema on startup. It does not configure PostgreSQL, DNS, Nginx, TLS, backups, or a process supervisor.
+On the VPS, create the environment with `python3 -m venv server/.venv`, install runtime packages with `server/.venv/bin/pip install -r server/requirements.txt`, and run `npm run db:migrate`. Run the API with `server/.venv/bin/uvicorn server.app.main:app --host 127.0.0.1 --port 10000`. The migration creates the account, verification-code, and session tables idempotently. The API does not configure PostgreSQL, DNS, Nginx, TLS, backups, or a process supervisor.

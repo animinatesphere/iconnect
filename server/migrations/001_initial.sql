@@ -21,3 +21,12 @@ CREATE TABLE IF NOT EXISTS email_verification_codes (
 
 CREATE INDEX IF NOT EXISTS users_email_verified_at_idx
   ON users(email_verified_at);
+
+CREATE TABLE IF NOT EXISTS auth_sessions (
+  token_hash varchar(64) NOT NULL PRIMARY KEY,
+  user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  expires_at timestamptz NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS auth_sessions_expires_at_idx
+  ON auth_sessions(expires_at);
