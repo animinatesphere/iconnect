@@ -3,7 +3,7 @@ import { Bookmark, Heart, Image, MessageCircle, MoreHorizontal, PenLine, Send, T
 import { Link, useNavigate } from 'react-router-dom'
 import AppPageHeader from '../../components/AppPageHeader.jsx'
 import Avatar from '../../components/Avatar.jsx'
-import { getDemoProfile } from '../../utils/demoAccount.js'
+import { apiRequest } from '../../utils/api.js'
 import { getPeople } from '../../utils/peopleApi.js'
 import { getSocialPosts, resolveFeedImageUrl, setSocialPostBookmark, setSocialPostLike } from '../../utils/socialApi.js'
 
@@ -60,9 +60,17 @@ export default function FeedPage() {
   const [feedError, setFeedError] = useState('')
   const [notice, setNotice] = useState('')
   const navigate = useNavigate()
-  const profile = getDemoProfile()
-  const viewer = { name: profile?.name ?? 'You', image: profile?.avatar ?? '' }
+  const [currentUser, setCurrentUser] = useState(null)
+  const viewer = { name: currentUser?.name ?? 'You' }
   const filters = ['For you', 'Following', 'Saved']
+
+  useEffect(() => {
+    let active = true
+    apiRequest('/api/auth/me')
+      .then(({ user }) => { if (active) setCurrentUser(user) })
+      .catch(() => { if (active) setCurrentUser(null) })
+    return () => { active = false }
+  }, [])
 
   useEffect(() => {
     let active = true
@@ -165,7 +173,7 @@ export default function FeedPage() {
   return (
     <div className="app-content-width">
       <AppPageHeader eyebrow="YOUR iCONNECT HOME" title="Your home" description="A little of what your people are sharing." />
-      <div className="feed-welcome-callout"><span className="welcome-icon"><Heart size={17} /></span><span><strong>Welcome, {profile?.name.split(' ')[0] ?? 'friend'}.</strong> Here’s what your people are sharing.</span><Link to="/app/profile">Your profile →</Link></div>
+      <div className="feed-welcome-callout"><span className="welcome-icon"><Heart size={17} /></span><span><strong>Welcome, {currentUser?.name.split(' ')[0] ?? 'friend'}.</strong> Here’s what your people are sharing.</span><Link to="/app/profile">Your profile →</Link></div>
       <div className="feed-layout-grid">
         <section className="feed-main-column">
           <Link to="/app/social" className="quick-compose">

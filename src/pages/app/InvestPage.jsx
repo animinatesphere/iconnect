@@ -9,7 +9,7 @@ export default function InvestPage() {
       <div className="invest-preview-banner"><LockKeyhole size={17} /><span><strong>Concept only — no financial services are available.</strong> No wallet is connected, no funds are held, and no transaction can be made here.</span></div>
       <section className="wallet-overview-card">
         <div className="wallet-overview-top"><span><Wallet size={17} /> iCONNECT WALLET CONCEPT</span><span className="wallet-unavailable-pill"><i /> NOT CONNECTED</span></div>
-        <div className="wallet-balance-label">Demo balance</div><div className="wallet-balance">— <small>USD</small></div>
+        <div className="wallet-balance-label">Available balance</div><div className="wallet-balance">— <small>USD</small></div>
         <p>Connect a wallet only in a future, reviewed product experience.</p>
         <div className="wallet-actions"><button disabled><ArrowDownLeft size={16} /> Receive</button><button disabled><ArrowUpRight size={16} /> Send</button></div>
         <div className="wallet-card-watermark"><Wallet size={115} strokeWidth={.7} /></div>

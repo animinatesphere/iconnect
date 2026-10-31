@@ -167,7 +167,7 @@ export default function ConnectPage() {
   return (
     <div className="app-content-width">
       <AppPageHeader eyebrow="FIND YOUR PEOPLE" title="Connect" description="Discover verified iConnect members, follow their updates, or start a private conversation." />
-      <div className="connect-demo-banner"><Users size={16} /><span>People, follows, private messages, communities, and membership use your iConnect account.</span></div>
+      <div className="connect-account-banner"><Users size={16} /><span>People, follows, private messages, communities, and membership use your iConnect account.</span></div>
       {error && <p className="feed-interaction-notice feed-error" role="alert">{error}</p>}
       <label className="connect-search"><Search size={17} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search verified people by name or interest" aria-label="Search verified people" /></label>
       <div className="connect-tabs" role="tablist">{tabs.map((tab) => <button key={tab} type="button" role="tab" aria-selected={activeTab === tab} className={activeTab === tab ? 'connect-tab-active' : ''} onClick={() => setActiveTab(tab)}>{tab}</button>)}</div>

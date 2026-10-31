@@ -47,20 +47,39 @@ class FakeConnection:
     def execute(self, query, parameters=()):
         sql = re.sub(r"\s+", " ", query).strip().lower()
         if sql.startswith("insert into admin_audit_log"):
+            action = next(
+                (name for name in (
+                    "view_user_details",
+                    "grant_subadmin",
+                    "revoke_subadmin",
+                    "delete_content",
+                    "update_product",
+                    "update_user_status",
+                ) if name in sql),
+                "unknown",
+            )
             event = {
                 "id": str(uuid4()),
                 "admin_user_id": str(parameters[0]),
-                "subject_user_id": str(parameters[1]),
-                "action": "view_user_details",
+                "subject_user_id": str(parameters[1]) if len(parameters) > 1 else None,
+                "action": action,
+                "details": {},
                 "created_at": datetime.now(timezone.utc),
             }
             self.state["admin_audit"].append(event)
             return FakeResult({"id": event["id"]})
+        if sql.startswith("select user_id from admin_roles"):
+            self.state["admin_role_lookups"] += 1
+            user_id = str(parameters[0])
+            return FakeResult({"user_id": user_id} if user_id in self.state["admin_roles"] else None)
+        if "from admin_roles roles" in sql and "creator.display_name" in sql:
+            return FakeResult(rows=[])
         if "from admin_audit_log log" in sql:
             return FakeResult(rows=[
                 {
                     "id": event["id"],
                     "action": event["action"],
+                    "details": event.get("details", {}),
                     "created_at": event["created_at"],
                     "admin_id": self.state["user"]["id"],
                     "admin_name": self.state["user"]["display_name"],
@@ -86,9 +105,17 @@ class FakeConnection:
                 "applications": 0,
                 "communities": 0,
                 "memberships": 0,
+                "new_users_7d": 1,
+                "new_posts_7d": 0,
+                "new_products_7d": 0,
+                "new_jobs_7d": 0,
             })
         if sql.startswith("select count(*) as total from users u"):
             return FakeResult({"total": 1})
+        if sql.startswith("select count(*) as total from social_posts p join users u"):
+            return FakeResult({"total": 0})
+        if sql.startswith("select p.id, p.body as title, u.display_name as owner"):
+            return FakeResult(rows=[])
         if sql.startswith("select u.id") and "from users u" in sql and "order by u.created_at" in sql:
             return FakeResult(rows=[self._admin_user_row()])
         if (
@@ -370,6 +397,7 @@ class FakeConnection:
                 "profile_visible": True,
                 "discoverable": True,
                 "email_verified_at": None,
+                "suspended_at": None,
                 "created_at": datetime.now(timezone.utc),
                 "updated_at": datetime.now(timezone.utc),
             }
@@ -400,6 +428,7 @@ class FakeConnection:
                 and session["expires_at"] > datetime.now(timezone.utc)
                 and user
                 and user["email_verified_at"]
+                and user["suspended_at"] is None
             ):
                 return FakeResult(user.copy())
             return FakeResult()
@@ -544,6 +573,7 @@ class FakeConnection:
             "profile_visible": user["profile_visible"],
             "discoverable": user["discoverable"],
             "email_verified_at": user["email_verified_at"],
+            "suspended_at": user["suspended_at"],
             "created_at": user["created_at"],
             "updated_at": user["updated_at"],
             "posts": 0,
@@ -579,6 +609,8 @@ class FakePool:
             "communities": [],
             "community_memberships": set(),
             "admin_audit": [],
+            "admin_roles": {},
+            "admin_role_lookups": 0,
             "likes": set(),
             "bookmarks": set(),
             "comments": [],
@@ -733,6 +765,7 @@ class AuthFlowTests(unittest.TestCase):
             "password": "a long test password",
         })
         self.assertEqual(login.status_code, 200)
+        self.assertEqual(self.pool.state["admin_role_lookups"], 0)
         logout = self.client.post("/api/auth/logout")
         self.assertEqual(logout.status_code, 204)
         self.assertEqual(self.client.get("/api/auth/me").status_code, 401)
@@ -943,6 +976,7 @@ class AuthFlowTests(unittest.TestCase):
             "password": "wrong password",
         })
         self.assertEqual(rejected.status_code, 401)
+        self.assertEqual(self.pool.state["admin_role_lookups"], 0)
         signed_in = self.client.post("/api/admin/login", json={
             "email": "new@example.com",
             "password": "a long test password",
@@ -980,6 +1014,33 @@ class AuthFlowTests(unittest.TestCase):
             self.client.get("/api/admin/users/00000000-0000-0000-0000-000000000002").status_code,
             404,
         )
+        self.assertEqual(self.client.get("/api/admin/content?type=posts").status_code, 200)
+        self.assertEqual(self.client.get("/api/admin/subadmins").json()["subAdmins"], [])
+        self.assertEqual(
+            self.client.post(
+                "/api/admin/users/{}/suspension".format(user["id"]),
+                json={"suspended": True},
+            ).status_code,
+            409,
+        )
+
+        self.pool.state["admin_roles"][user["id"]] = {
+            "created_by": user["id"],
+            "created_at": datetime.now(timezone.utc),
+        }
+        role_lookups_before_login = self.pool.state["admin_role_lookups"]
+        subadmin_login = not_allowlisted.post("/api/admin/login", json={
+            "email": "new@example.com",
+            "password": "a long test password",
+        })
+        self.assertEqual(subadmin_login.status_code, 200, subadmin_login.text)
+        self.assertEqual(self.pool.state["admin_role_lookups"], role_lookups_before_login + 1)
+        self.assertEqual(subadmin_login.json()["admin"]["role"], "sub_admin")
+        self.assertEqual(not_allowlisted.get("/api/admin/me").json()["admin"]["role"], "sub_admin")
+        subadmin_details = not_allowlisted.get("/api/admin/users/{}".format(user["id"]))
+        self.assertEqual(subadmin_details.status_code, 200, subadmin_details.text)
+        self.assertEqual(subadmin_details.json()["user"]["activity"]["messages"], [])
+        self.assertEqual(not_allowlisted.get("/api/admin/subadmins").status_code, 403)
 
     def test_marketplace_product_listings_are_persistent(self):
         self.assertEqual(self.client.get("/api/marketplace/products").status_code, 401)

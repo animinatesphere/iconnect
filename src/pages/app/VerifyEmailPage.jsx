@@ -4,7 +4,6 @@ import { Link, useLocation, useNavigate } from 'react-router-dom'
 import Brand from '../../components/Brand.jsx'
 import PageMeta from '../../components/PageMeta.jsx'
 import { apiRequest } from '../../utils/api.js'
-import { saveDemoProfile, startDemoSession } from '../../utils/demoAccount.js'
 
 export default function VerifyEmailPage() {
   const location = useLocation()
@@ -28,20 +27,12 @@ export default function VerifyEmailPage() {
     setNotice('')
     setSubmitting(true)
     try {
-      const { user } = await apiRequest('/api/auth/verify-email', {
+      await apiRequest('/api/auth/verify-email', {
         method: 'POST',
         body: JSON.stringify({ email: email.trim().toLowerCase(), code }),
       })
-      saveDemoProfile({
-        name: user.name,
-        email: user.email,
-        username: user.username,
-        bio: user.bio,
-        interests: user.interests,
-      })
-      startDemoSession()
       window.sessionStorage.removeItem('iconnect.pendingVerificationEmail')
-      navigate('/app/setup', { state: { displayName: user.name, email: user.email } })
+      navigate('/app/setup')
     } catch (verifyError) {
       setError(verifyError instanceof Error ? verifyError.message : 'Could not verify this email. Try again.')
     } finally {

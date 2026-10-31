@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react'
 import { Bell, ChevronRight, Eye, KeyRound, Link2, LockKeyhole, LogOut, Save, Shield, UserRound } from 'lucide-react'
 import { Link, useNavigate } from 'react-router-dom'
 import AppPageHeader from '../../components/AppPageHeader.jsx'
-import { demoInterests } from '../../data/demoContent.js'
+import { interestOptions } from '../../data/profileOptions.js'
 import { apiRequest } from '../../utils/api.js'
 
 const defaultPreferences = { profileVisible: true, discoverable: true }
@@ -115,7 +115,7 @@ export default function AccountPage() {
   return (
     <div className="app-content-width">
       <AppPageHeader eyebrow="YOUR SPACE, YOUR SETTINGS" title="Profile & settings" description="Manage the profile and privacy preferences saved to your iConnect account." />
-      <div className="account-demo-banner"><Shield size={16} /> Profile details, privacy settings, and sign-out use your account. Photo uploads, notification delivery, and external account connections are not available.</div>
+      <div className="account-status-banner"><Shield size={16} /> Profile details, privacy settings, and sign-out use your account. Photo uploads, notification delivery, and external account connections are not available.</div>
       <div className="account-layout">
         <nav className="account-tabs" aria-label="Profile settings">
           {['Profile', 'Preferences', 'Privacy'].map((tab) => <button type="button" key={tab} onClick={() => { setActiveTab(tab); setNotice(''); setError('') }} className={activeTab === tab ? 'account-tab-active' : ''}>{tab}<ChevronRight size={15} /></button>)}
@@ -138,7 +138,7 @@ export default function AccountPage() {
             <label className="account-field"><span>USERNAME</span><input value={username} onChange={(event) => setUsername(event.target.value.replace(/^@/, ''))} maxLength={30} /></label>
             <label className="account-field"><span>BIO</span><textarea value={bio} onChange={(event) => setBio(event.target.value)} rows={3} maxLength={120} /></label>
             <div className="account-interest-heading"><strong>INTERESTS</strong><span>Choose topics for your profile</span></div>
-            <div className="interest-chips">{demoInterests.map((interest) => <button type="button" className={selected.includes(interest) ? 'interest-chip selected' : 'interest-chip'} key={interest} onClick={() => toggleInterest(interest)} aria-pressed={selected.includes(interest)}>{interest}</button>)}</div>
+            <div className="interest-chips">{interestOptions.map((interest) => <button type="button" className={selected.includes(interest) ? 'interest-chip selected' : 'interest-chip'} key={interest} onClick={() => toggleInterest(interest)} aria-pressed={selected.includes(interest)}>{interest}</button>)}</div>
             <button type="button" className="app-primary-button account-save" onClick={saveProfile} disabled={savingProfile}><Save size={15} /> {savingProfile ? 'Saving…' : 'Save changes'}</button>
           </>}
           {!accountLoading && account && activeTab === 'Preferences' && <div className="account-settings-list">

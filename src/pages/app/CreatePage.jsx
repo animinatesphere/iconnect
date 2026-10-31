@@ -87,7 +87,7 @@ export default function CreatePage() {
     <div className="app-content-width app-create-width">
       <Link to="/app/home" className="app-back-link"><ArrowLeft size={15} /> Back to your home</Link>
       <AppPageHeader eyebrow="MAKE SOMETHING YOURS" title="Create a post" description="Share a text update and up to five photos with your iConnect feed." />
-      <div className="create-demo-banner"><PenLine size={16} /><span>Your post and photos are saved to iConnect and shown to signed-in members.</span></div>
+      <div className="create-account-banner"><PenLine size={16} /><span>Your post and photos are saved to iConnect and shown to signed-in members.</span></div>
       {accountError && <p className="feed-interaction-notice feed-error" role="alert">{accountError}</p>}
       <form className="create-layout" onSubmit={publishPost}>
         <section className="create-editor-card">

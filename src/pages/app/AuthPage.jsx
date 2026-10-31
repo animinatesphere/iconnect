@@ -4,7 +4,6 @@ import { Link, useLocation, useNavigate } from 'react-router-dom'
 import Brand from '../../components/Brand.jsx'
 import PageMeta from '../../components/PageMeta.jsx'
 import { apiRequest } from '../../utils/api.js'
-import { saveDemoProfile, startDemoSession } from '../../utils/demoAccount.js'
 
 export default function AuthPage() {
   const isSignup = useLocation().pathname.endsWith('/signup')
@@ -45,16 +44,14 @@ export default function AuthPage() {
         return
       }
 
-      const { user } = await apiRequest('/api/auth/login', {
+      await apiRequest('/api/auth/login', {
         method: 'POST',
         body: JSON.stringify({ email: normalizedEmail, password }),
       })
-      saveDemoProfile({ name: user.name, email: user.email, username: user.username, bio: user.bio, interests: user.interests })
-      startDemoSession()
       navigate('/app/home')
-    } catch (storageError) {
-      setError(storageError instanceof Error ? storageError.message : 'Could not complete sign in. Try again.')
-      if (storageError?.code === 'email_not_verified') {
+    } catch (loginError) {
+      setError(loginError instanceof Error ? loginError.message : 'Could not complete sign in. Try again.')
+      if (loginError?.code === 'email_not_verified') {
         window.sessionStorage.setItem('iconnect.pendingVerificationEmail', normalizedEmail)
         navigate('/app/verify-email', { state: { email: normalizedEmail } })
       }
