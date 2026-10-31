@@ -24,13 +24,14 @@ import AssistantPage from './pages/app/AssistantPage.jsx'
 import AccountPage from './pages/app/AccountPage.jsx'
 import VideoHubPage from './pages/app/VideoHubPage.jsx'
 import MoneyHubPage from './pages/app/MoneyHubPage.jsx'
-import CommercePage from './pages/app/CommercePage.jsx'
+import IBookPage from './pages/app/IBookPage.jsx'
+import IBuyPage from './pages/app/IBuyPage.jsx'
 import LocalMarketplacePage from './pages/app/LocalMarketplacePage.jsx'
 import SocialPage from './pages/app/SocialPage.jsx'
 import AdminLoginPage from './pages/admin/AdminLoginPage.jsx'
 import AdminDashboardPage from './pages/admin/AdminDashboardPage.jsx'
 import { apiRequest } from './utils/api.js'
-import { isDemoAdminSessionActive } from './utils/demoAdmin.js'
+import { getAdminSession } from './utils/adminApi.js'
 
 function RouteEffects() {
   const { pathname } = useLocation()
@@ -76,8 +77,38 @@ function RequireDemoSession() {
   return <Outlet />
 }
 
-function RequireDemoAdminSession() {
-  return isDemoAdminSessionActive() ? <Outlet /> : <Navigate to="/admin/login" replace />
+function RequireAdminSession() {
+  const [status, setStatus] = useState('checking')
+  const [retry, setRetry] = useState(0)
+
+  useEffect(() => {
+    const controller = new AbortController()
+    setStatus('checking')
+    getAdminSession({ signal: controller.signal })
+      .then(() => setStatus('authenticated'))
+      .catch((error) => {
+        if (controller.signal.aborted) return
+        setStatus(error.code === 'not_authenticated' || error.code === 'admin_required' ? 'unauthenticated' : 'unavailable')
+      })
+    return () => controller.abort()
+  }, [retry])
+
+  if (status === 'checking') {
+    return <main className="auth-screen"><p className="backend-auth-status" role="status">Checking administrator access…</p></main>
+  }
+  if (status === 'unauthenticated') return <Navigate to="/admin/login" replace />
+  if (status === 'unavailable') {
+    return (
+      <main className="auth-screen">
+        <section className="backend-auth-error" role="alert">
+          <h1>Administrator access could not be verified.</h1>
+          <p>Check your connection and try again.</p>
+          <button type="button" className="app-primary-button" onClick={() => setRetry((value) => value + 1)}>Try again</button>
+        </section>
+      </main>
+    )
+  }
+  return <Outlet />
 }
 
 function AppRoutes() {
@@ -110,9 +141,9 @@ function AppRoutes() {
               <Route path="wallet" element={<MoneyHubPage />} />
               <Route path="payments" element={<MoneyHubPage />} />
               <Route path="itrade" element={<MoneyHubPage />} />
-              <Route path="ibuy" element={<CommercePage />} />
-              <Route path="ibuy/:productId" element={<CommercePage />} />
-              <Route path="ibook" element={<CommercePage />} />
+              <Route path="ibuy" element={<IBuyPage />} />
+              <Route path="ibuy/:productId" element={<IBuyPage />} />
+              <Route path="ibook" element={<IBookPage />} />
               <Route path="marketplace" element={<LocalMarketplacePage />} />
               <Route path="marketplace/:listingId" element={<LocalMarketplacePage />} />
               <Route path="social" element={<SocialPage />} />
@@ -125,7 +156,7 @@ function AppRoutes() {
           </Route>
         </Route>
         <Route path="/admin/login" element={<AdminLoginPage />} />
-        <Route element={<RequireDemoAdminSession />}>
+        <Route element={<RequireAdminSession />}>
           <Route path="/admin" element={<Navigate to="/admin/dashboard" replace />} />
           <Route path="/admin/dashboard" element={<AdminDashboardPage />} />
           <Route path="/admin/dashboard/products/:productId" element={<AdminDashboardPage />} />

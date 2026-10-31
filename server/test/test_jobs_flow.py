@@ -241,6 +241,7 @@ class JobsFlowTests(unittest.TestCase):
             session_max_age_days=7,
             session_secret="test-session-secret-that-is-long-enough",
             trust_proxy=0,
+            admin_emails=frozenset(),
         )
         self.clients = {}
         for key in ("alice", "bob", "casey"):

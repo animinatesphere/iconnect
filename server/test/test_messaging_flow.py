@@ -315,6 +315,7 @@ class MessagingFlowTests(unittest.TestCase):
             session_max_age_days=7,
             session_secret="test-session-secret-that-is-long-enough",
             trust_proxy=0,
+            admin_emails=frozenset(),
         )
         self.client = TestClient(create_app(settings=settings, pool=self.pool))
         self.bob_client = TestClient(create_app(settings=settings, pool=self.pool))

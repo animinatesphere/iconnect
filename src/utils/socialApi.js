@@ -8,9 +8,15 @@ function relativeTime(value) {
   return `${Math.floor(elapsedSeconds / 86400)} d`
 }
 
+export function resolveFeedImageUrl(image) {
+  if (image.startsWith('data:') || image.startsWith('https://') || image.startsWith('/')) return image
+  return `https://images.unsplash.com/${image}?auto=format&fit=crop&w=1200&q=85`
+}
+
 export function toFeedPost(post) {
   return {
     id: post.id,
+    authorId: post.author.id,
     name: post.author.name,
     handle: `@${post.author.username}`,
     avatar: '',
@@ -18,12 +24,14 @@ export function toFeedPost(post) {
     time: relativeTime(post.createdAt),
     createdAt: post.createdAt,
     text: post.text,
-    image: null,
+    images: post.imageUrls ?? [],
+    image: post.imageUrls?.[0] ?? null,
     likes: post.likeCount,
     comments: post.commentCount,
     tag: 'Text update',
     isPersistent: true,
     likedByMe: post.likedByMe,
+    bookmarkedByMe: post.bookmarkedByMe,
   }
 }
 
@@ -39,9 +47,12 @@ export function toFeedComment(comment) {
   }
 }
 
-export async function getSocialPosts({ followingOnly = false } = {}) {
-  const query = followingOnly ? '?following_only=true' : ''
-  const payload = await apiRequest(`/api/social/posts${query}`)
+export async function getSocialPosts({ followingOnly = false, bookmarkedOnly = false } = {}) {
+  const params = new URLSearchParams()
+  if (followingOnly) params.set('following_only', 'true')
+  if (bookmarkedOnly) params.set('bookmarked_only', 'true')
+  const query = params.toString()
+  const payload = await apiRequest(`/api/social/posts${query ? `?${query}` : ''}`)
   return payload.posts.map(toFeedPost)
 }
 
@@ -50,10 +61,10 @@ export async function getSocialPost(postId) {
   return toFeedPost(payload.post)
 }
 
-export async function createSocialPost(text) {
+export async function createSocialPost(text, imageUrls = []) {
   const payload = await apiRequest('/api/social/posts', {
     method: 'POST',
-    body: JSON.stringify({ text }),
+    body: JSON.stringify({ text, image_urls: imageUrls }),
   })
   return toFeedPost(payload.post)
 }
@@ -64,6 +75,13 @@ export async function setSocialPostLike(postId, liked) {
     body: JSON.stringify({ liked }),
   })
   return toFeedPost(payload.post)
+}
+
+export async function setSocialPostBookmark(postId, bookmarked) {
+  return apiRequest(`/api/social/posts/${encodeURIComponent(postId)}/bookmark`, {
+    method: 'PUT',
+    body: JSON.stringify({ bookmarked }),
+  })
 }
 
 export async function getSocialComments(postId) {

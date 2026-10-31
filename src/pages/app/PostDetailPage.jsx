@@ -6,7 +6,7 @@ import PageMeta from '../../components/PageMeta.jsx'
 import { demoPosts } from '../../data/demoContent.js'
 import { demoAvatar, getDemoProfile } from '../../utils/demoAccount.js'
 import { emptyDemoFeedState, readDemoFeedState, writeDemoFeedState } from '../../utils/demoFeed.js'
-import { createSocialComment, getSocialComments, getSocialPost, setSocialPostLike } from '../../utils/socialApi.js'
+import { createSocialComment, getSocialComments, getSocialPost, resolveFeedImageUrl, setSocialPostBookmark, setSocialPostLike } from '../../utils/socialApi.js'
 
 const repliesByPost = {
   'jules-walk': [
@@ -33,6 +33,7 @@ export default function PostDetailPage() {
   const [notice, setNotice] = useState('')
   const [submittingReply, setSubmittingReply] = useState(false)
   const [likingPost, setLikingPost] = useState(false)
+  const [bookmarkingPost, setBookmarkingPost] = useState(false)
   const profile = getDemoProfile()
   const viewer = { name: profile?.name ?? 'Taylor Reed', image: profile?.avatar ?? demoAvatar }
   const [reply, setReply] = useState('')
@@ -41,6 +42,7 @@ export default function PostDetailPage() {
   const navigate = useNavigate()
   const isRemotePostId = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(postId ?? '')
   const post = remotePost ?? [...feedState.posts, ...demoPosts].find((item) => item.id === postId)
+  const postImages = post?.images?.length ? post.images : post?.image ? [post.image] : []
 
   useEffect(() => {
     let active = true
@@ -149,6 +151,26 @@ export default function PostDetailPage() {
     togglePostList('likedPostIds')
   }
 
+  async function togglePostBookmark() {
+    if (!post.isPersistent) {
+      togglePostList('savedPostIds')
+      return
+    }
+    if (bookmarkingPost) return
+    setBookmarkingPost(true)
+    try {
+      const bookmarkedByMe = !post.bookmarkedByMe
+      await setSocialPostBookmark(post.id, bookmarkedByMe)
+      setRemotePost((current) => ({ ...current, bookmarkedByMe }))
+      setNotice(bookmarkedByMe ? 'Post saved to your account.' : 'Post removed from your saved posts.')
+      setError('')
+    } catch (bookmarkError) {
+      setError(bookmarkError instanceof Error ? bookmarkError.message : 'Could not update your saved post.')
+    } finally {
+      setBookmarkingPost(false)
+    }
+  }
+
   function toggleReplyLike(replyId) {
     const nextReplies = (feedState.replies[post.id] ?? []).map((item) => item.id === replyId ? { ...item, liked: !item.liked } : item)
     updateState({ ...feedState, replies: { ...feedState.replies, [post.id]: nextReplies } })
@@ -187,7 +209,7 @@ export default function PostDetailPage() {
   const sampleReplies = repliesByPost[post.id] ?? []
   const localReplies = post.isPersistent ? remoteComments : feedState.replies[post.id] ?? []
   const liked = post.isPersistent ? post.likedByMe : feedState.likedPostIds.includes(post.id)
-  const saved = feedState.savedPostIds.includes(post.id)
+  const saved = post.isPersistent ? post.bookmarkedByMe : feedState.savedPostIds.includes(post.id)
 
   return (
     <div className="app-content-width post-detail-page">
@@ -198,7 +220,7 @@ export default function PostDetailPage() {
           <div><span className="app-page-eyebrow">POST DETAILS</span><h1>Conversation</h1></div>
           <button type="button" className="quiet-icon-button" aria-label={`More options for ${post.name}'s post`} aria-expanded={menuOpen} onClick={() => setMenuOpen((open) => !open)}><MoreHorizontal size={20} /></button>
           {menuOpen && <div className="feed-post-menu post-detail-menu" role="menu">
-            <button type="button" role="menuitem" onClick={() => { togglePostList('savedPostIds'); setMenuOpen(false) }}><Bookmark size={15} />{saved ? 'Unsave post' : 'Save post'}</button>
+            <button type="button" role="menuitem" onClick={() => { togglePostBookmark(); setMenuOpen(false) }}><Bookmark size={15} />{saved ? 'Unsave post' : 'Save post'}</button>
             <button type="button" role="menuitem" onClick={() => {
               updateState({ ...feedState, hiddenPostIds: [...feedState.hiddenPostIds, post.id] })
               setMenuOpen(false)
@@ -212,16 +234,18 @@ export default function PostDetailPage() {
             <div className="feed-author"><strong>{post.name}</strong><span>{post.handle}</span></div>
           </div>
           <p className="post-detail-copy">{post.text}</p>
-          {post.image && (post.mediaType === 'video'
-            ? <video className="post-detail-image post-detail-video" src={post.image} controls playsInline preload="metadata" aria-label={`Video shared by ${post.name}`} />
-            : <img className="post-detail-image" src={post.image.startsWith('data:') ? post.image : `https://images.unsplash.com/${post.image}?auto=format&fit=crop&w=1200&q=85`} alt={`A moment shared by ${post.name}`} />)}
+          {postImages.length > 0 && <div className="post-detail-gallery">
+            {postImages.map((image, index) => post.mediaType === 'video'
+              ? <video key={image} className="post-detail-image post-detail-video" src={image} controls playsInline preload="metadata" aria-label={`Video shared by ${post.name}`} />
+              : <img key={`${image}-${index}`} className="post-detail-image" src={resolveFeedImageUrl(image)} alt={`Photo ${index + 1} shared by ${post.name}`} />)}
+          </div>}
           {(post.tag || post.location) && <div className="post-detail-tag">{post.tag} {post.tag && post.location && <span>·</span>} {post.location}</div>}
           <p className="post-detail-time">{post.time === 'just now' ? 'Just now' : `${post.time} ago`} · Shared with their circle</p>
           <div className="post-detail-stats"><span><strong>{post.likes + Number(!post.isPersistent && liked)}</strong> likes</span><span><strong>{post.comments + (!post.isPersistent ? localReplies.length : 0)}</strong> replies</span></div>
           <div className="post-detail-actions">
             <button type="button" className={liked ? 'post-detail-action liked' : 'post-detail-action'} onClick={togglePostLike} disabled={post.isPersistent && likingPost} aria-pressed={liked}><Heart size={19} fill={liked ? 'currentColor' : 'none'} /><span>{liked ? 'Liked' : 'Like'}</span></button>
             <button type="button" className="post-detail-action" onClick={() => { replyInput.current?.focus(); replyInput.current?.scrollIntoView({ behavior: 'smooth', block: 'center' }) }}><MessageCircle size={19} /><span>Reply</span></button>
-            <button type="button" className={saved ? 'post-detail-action saved' : 'post-detail-action'} onClick={() => togglePostList('savedPostIds')} aria-pressed={saved}><Bookmark size={18} fill={saved ? 'currentColor' : 'none'} /><span>{saved ? 'Saved' : 'Save'}</span></button>
+            <button type="button" className={saved ? 'post-detail-action saved' : 'post-detail-action'} onClick={togglePostBookmark} disabled={post.isPersistent && bookmarkingPost} aria-pressed={saved}><Bookmark size={18} fill={saved ? 'currentColor' : 'none'} /><span>{saved ? 'Saved' : 'Save'}</span></button>
             <button type="button" className="post-detail-action" onClick={sharePost}><Send size={18} /><span>Share</span></button>
           </div>
         </article>
