@@ -1,397 +1,302 @@
-import React, { useEffect, useMemo, useState } from 'react'
-import { Activity, ArrowLeft, BadgeDollarSign, BarChart3, Check, CircleHelp, FileVideo, Flag, LayoutDashboard, LogOut, PackagePlus, Pencil, Search, Settings, ShieldAlert, ShoppingBag, Users, Video, X } from 'lucide-react'
-import { Link, useNavigate, useParams } from 'react-router-dom'
-import Avatar from '../../components/Avatar.jsx'
+import React, { useEffect, useState } from 'react'
+import { Activity, ChevronLeft, ChevronRight, LogOut, Search, ShieldAlert, Users, X } from 'lucide-react'
+import { Link, useNavigate } from 'react-router-dom'
 import PageMeta from '../../components/PageMeta.jsx'
-import { demoPeople, demoPosts } from '../../data/demoContent.js'
-import { demoProductImages, demoProducts } from '../../data/demoCommerce.js'
-import { emptyDemoServicesState, readDemoServicesState } from '../../utils/demoServices.js'
-import { endDemoAdminSession, readDemoAdminState, writeDemoAdminState, defaultAdminSettings } from '../../utils/demoAdmin.js'
-import { emptyDemoFeedState, readDemoFeedState, writeDemoFeedState } from '../../utils/demoFeed.js'
+import { adminLogout, getAdminAuditLog, getAdminOverview, getAdminSession, getAdminUserDetails, getAdminUsers } from '../../utils/adminApi.js'
 
-const sampleUsers = [
-  { ...demoPeople[0], status: 'Active', joined: 'Oct 18', posts: 12, reports: 0 },
-  { ...demoPeople[1], status: 'Active', joined: 'Oct 21', posts: 8, reports: 0 },
-  { ...demoPeople[2], status: 'Review', joined: 'Oct 23', posts: 4, reports: 1 },
-  { id: 'kai', name: 'Kai Bennett', handle: '@kaibennett', avatar: 'photo-1506794778202-cad84cf45f1d', status: 'Active', joined: 'Oct 26', posts: 6, reports: 0 },
+const pageSize = 100
+
+const overviewItems = [
+  ['users', 'Accounts'],
+  ['verifiedUsers', 'Verified accounts'],
+  ['posts', 'Posts'],
+  ['comments', 'Comments'],
+  ['messages', 'Private messages'],
+  ['products', 'iBuy products'],
+  ['localListings', 'Local listings'],
+  ['jobs', 'Job listings'],
+  ['applications', 'Applications'],
+  ['communities', 'Communities'],
+  ['memberships', 'Memberships'],
+  ['likes', 'Likes'],
+  ['bookmarks', 'Bookmarks'],
 ]
 
-const sampleReports = [
-  { id: 'report-profile-jules', subject: 'Jules Morgan', type: 'Profile', reason: 'Sample community report', date: 'Today' },
-  { id: 'report-video-example', subject: 'Creator video', type: 'Video', reason: 'Illustrative content review', date: 'Yesterday' },
-  { id: 'report-community-example', subject: 'Community post', type: 'Post', reason: 'Sample spam report', date: 'Oct 24' },
+const activityLabels = [
+  ['posts', 'Posts'],
+  ['comments', 'Comments'],
+  ['likes', 'Likes'],
+  ['bookmarks', 'Bookmarks'],
+  ['messages', 'Private messages'],
+  ['products', 'iBuy listings'],
+  ['localListings', 'Local marketplace listings'],
+  ['jobs', 'Job listings'],
+  ['applications', 'Job applications'],
+  ['communitiesJoined', 'Communities joined'],
+  ['communitiesCreated', 'Communities created'],
+  ['following', 'Following'],
+  ['followers', 'Followers'],
 ]
 
-const sections = [
-  { id: 'Overview', icon: LayoutDashboard },
-  { id: 'Users', icon: Users },
-  { id: 'Products', icon: ShoppingBag },
-  { id: 'Orders', icon: PackagePlus },
-  { id: 'Content', icon: FileVideo },
-  { id: 'Reports', icon: Flag },
-  { id: 'Promotions', icon: BadgeDollarSign },
-  { id: 'Settings', icon: Settings },
-  { id: 'Analytics', icon: BarChart3 },
-]
+function formatDate(value) {
+  if (!value) return '—'
+  return new Date(value).toLocaleString()
+}
 
-const featureSettings = [
-  ['walletsEnabled', 'Enable wallet previews', 'Wallet and multichain account screens'],
-  ['paymentsEnabled', 'Enable payment previews', 'Simulated transfers, remittance, conversion, and card mockup'],
-  ['tradingEnabled', 'Enable iTrade preview', 'Paper trading and mock market charts'],
-  ['marketplaceEnabled', 'Enable iBuy preview', 'Product browsing and demo checkout'],
-  ['bookingsEnabled', 'Enable iBook preview', 'Flight, taxi, and car booking previews'],
-  ['socialEnabled', 'Enable social updates', 'Text posts, likes, and reposts in this browser'],
-  ['liveVideoEnabled', 'Enable live video preview', 'On-device camera preview; no broadcast'],
-  ['videoUploadsEnabled', 'Enable video uploads', 'Local MP4/WebM video library'],
-  ['campaignDraftsEnabled', 'Enable promotion drafts', 'Mock campaign setup only; no billing or ad delivery'],
-]
+function formatRecord(key, item) {
+  switch (key) {
+    case 'posts':
+      return item.text
+    case 'comments':
+      return `Comment: ${item.text} · On: ${item.postText}`
+    case 'likes':
+      return `Liked @${item.author.username}’s post: ${item.postText}`
+    case 'bookmarks':
+      return `Saved @${item.author.username}’s post: ${item.postText}`
+    case 'messages':
+      return `${item.sender.name} → ${item.recipient.name}: ${item.text}`
+    case 'products':
+      return `${item.name} · ${item.category} · ₦${new Intl.NumberFormat('en-NG').format(item.price)} · Stock ${item.stock} · ${item.published ? 'Published' : 'Unpublished'} · ${item.description}`
+    case 'localListings':
+      return `${item.title} · ${item.category} · ${item.location} · ${item.price} · ${item.published ? 'Published' : 'Unpublished'} · ${item.description}`
+    case 'jobs':
+      return `${item.title} · ${item.company} · ${item.location} · ${item.workplaceType} · ${item.description}`
+    case 'applications':
+      return `Applied for ${item.jobTitle} at ${item.company} · ${item.status}${item.coverLetter ? ` · ${item.coverLetter}` : ''}`
+    case 'communitiesJoined':
+      return `Joined ${item.name} · ${item.memberCount} members · ${item.description}`
+    case 'communitiesCreated':
+      return `Created ${item.name} · ${item.memberCount} members · ${item.description}`
+    case 'following':
+      return `Follows ${item.name} (@${item.username})`
+    case 'followers':
+      return `${item.name} (@${item.username}) follows this account`
+    default:
+      return ''
+  }
+}
 
-function makeAuditEntry(description) {
-  return { id: `audit-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`, description, time: new Date().toLocaleString() }
+function UserDetails({ user, loading, error, onClose, onLoadOlder, loadingOlder, hasMore }) {
+  if (!user) return null
+  return (
+    <div className="admin-detail-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose() }}>
+      <section className="admin-detail-panel" role="dialog" aria-modal="true" aria-labelledby="admin-user-detail-title">
+        <header className="admin-detail-header">
+          <div><span className="app-page-eyebrow">ACCOUNT DETAILS</span><h2 id="admin-user-detail-title">{user.name}</h2><p>@{user.username} · {user.email}</p></div>
+          <button type="button" className="admin-detail-close" aria-label="Close user details" onClick={onClose}><X size={18} /></button>
+        </header>
+        {error && <p className="feed-interaction-notice feed-error" role="alert">{error}</p>}
+        <div className="admin-detail-profile">
+          <p>{user.bio || 'No bio provided.'}</p>
+          <div><span>{user.emailVerified ? 'Email verified' : 'Email not verified'}</span><span>{user.profileVisible ? 'Profile visible' : 'Profile hidden'}</span><span>{user.discoverable ? 'Discoverable' : 'Not discoverable'}</span></div>
+          <p>Joined {formatDate(user.createdAt)} · Last profile update {formatDate(user.updatedAt)}</p>
+          {!!user.interests?.length && <p>Interests: {user.interests.join(', ')}</p>}
+        </div>
+        <section className="admin-detail-counts" aria-label="Account activity totals">
+          {activityLabels.map(([key, label]) => <div key={key}><strong>{user.counts[key] ?? 0}</strong><span>{label}</span></div>)}
+        </section>
+        <div className="admin-detail-privacy-note"><ShieldAlert size={16} /><p>Private conversation contents are included at your direction. Each time an admin opens these user details, access is recorded in the audit log.</p></div>
+        {loading && <p className="admin-detail-loading">Loading all account activity…</p>}
+        {!loading && user.activity && <div className="admin-detail-activity">
+          {activityLabels.map(([key, label]) => {
+            const records = user.activity[key] ?? []
+            if (!records.length) return null
+            return <section key={key}><h3>{label} <span>{user.counts[key] ?? records.length}</span></h3><div>{records.map((item, index) => <article key={item.id ?? item.postId ?? `${key}-${index}`}><p>{formatRecord(key, item)}</p>{item.imageUrls?.length > 0 && <div className="admin-activity-images">{item.imageUrls.map((image, imageIndex) => <img key={`${image}-${imageIndex}`} src={image} alt={`User activity photo ${imageIndex + 1}`} loading="lazy" />)}</div>}<time>{formatDate(item.createdAt ?? item.joinedAt)}</time></article>)}</div></section>
+          })}
+          {hasMore && <button type="button" className="admin-load-older" onClick={onLoadOlder} disabled={loadingOlder}>{loadingOlder ? 'Loading…' : 'Load older activity'}</button>}
+        </div>}
+      </section>
+    </div>
+  )
 }
 
 export default function AdminDashboardPage() {
   const navigate = useNavigate()
-  const { productId } = useParams()
+  const [admin, setAdmin] = useState(null)
   const [section, setSection] = useState('Overview')
+  const [overview, setOverview] = useState(null)
+  const [users, setUsers] = useState([])
+  const [userTotal, setUserTotal] = useState(0)
+  const [userOffset, setUserOffset] = useState(0)
   const [search, setSearch] = useState('')
-  const [feedState, setFeedState] = useState(emptyDemoFeedState)
-  const [servicesState, setServicesState] = useState(emptyDemoServicesState)
-  const [adminState, setAdminState] = useState({
-    userStatuses: {},
-    reviewedReportIds: [],
-    settings: defaultAdminSettings,
-    campaignStatuses: {},
-    auditLog: [],
-    productCatalog: [],
-    productOverrides: {},
-    orderStatuses: {},
-  })
+  const [auditEvents, setAuditEvents] = useState([])
   const [selectedUser, setSelectedUser] = useState(null)
-  const [productForm, setProductForm] = useState(null)
-  const [editingProductId, setEditingProductId] = useState('')
+  const [loading, setLoading] = useState(true)
+  const [loadingUsers, setLoadingUsers] = useState(false)
+  const [loadingAudit, setLoadingAudit] = useState(false)
+  const [loadingOlder, setLoadingOlder] = useState(false)
+  const [detailError, setDetailError] = useState('')
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
 
   useEffect(() => {
-    try {
-      setFeedState(readDemoFeedState())
-      setServicesState(readDemoServicesState())
-      setAdminState(readDemoAdminState())
-    } catch (loadError) {
-      setError(loadError instanceof Error ? loadError.message : 'Could not load browser-local admin preview data.')
-    }
+    let active = true
+    Promise.all([getAdminSession(), getAdminOverview(), getAdminAuditLog(20)])
+      .then(([session, stats, events]) => {
+        if (!active) return
+        setAdmin(session.admin)
+        setOverview(stats)
+        setAuditEvents(events)
+        setError('')
+      })
+      .catch((loadError) => {
+        if (active) setError(loadError instanceof Error ? loadError.message : 'Could not load admin data.')
+      })
+      .finally(() => {
+        if (active) setLoading(false)
+      })
+    return () => { active = false }
   }, [])
 
   useEffect(() => {
-    if (productId) setSection('Products')
-  }, [productId])
+    if (section !== 'Users') return undefined
+    let active = true
+    const timer = window.setTimeout(() => {
+      setLoadingUsers(true)
+      getAdminUsers({ query: search, limit: 50, offset: userOffset })
+        .then((result) => {
+          if (active) {
+            setUsers(result.users)
+            setUserTotal(result.total)
+            setError('')
+          }
+        })
+        .catch((loadError) => {
+          if (active) setError(loadError instanceof Error ? loadError.message : 'Could not load accounts.')
+        })
+        .finally(() => {
+          if (active) setLoadingUsers(false)
+        })
+    }, search.trim() ? 250 : 0)
+    return () => {
+      active = false
+      window.clearTimeout(timer)
+    }
+  }, [search, section, userOffset])
 
-  const users = useMemo(() => sampleUsers.map((user) => ({
-    ...user,
-    status: adminState.userStatuses[user.id] ?? user.status,
-  })).filter((user) => `${user.name} ${user.handle} ${user.status}`.toLowerCase().includes(search.trim().toLowerCase())), [adminState.userStatuses, search])
-  const managedProducts = [
-    ...demoProducts.map((product) => ({ ...product, ...adminState.productOverrides[product.id], isSample: true })),
-    ...(adminState.productCatalog ?? []).map((product) => ({ ...product, isSample: false })),
-  ].filter((product) => `${product.name} ${product.category} ${product.description}`.toLowerCase().includes(search.trim().toLowerCase()))
-  const detailProduct = productId
-    ? [...demoProducts.map((product) => ({ ...product, ...adminState.productOverrides[product.id], isSample: true })), ...(adminState.productCatalog ?? []).map((product) => ({ ...product, isSample: false }))].find((product) => product.id === productId)
-    : null
-  const openOrders = servicesState.orders.map((order) => ({
-    ...order,
-    status: adminState.orderStatuses[order.id] ?? order.status,
-  }))
-  const contentItems = [...feedState.posts, ...demoPosts].filter((post) => `${post.name} ${post.videoTitle ?? ''} ${post.text}`.toLowerCase().includes(search.trim().toLowerCase()))
-  const localVideos = feedState.posts.filter((post) => post.mediaType === 'video')
-  const campaigns = feedState.promotionCampaigns.map((campaign) => ({
-    ...campaign,
-    status: adminState.campaignStatuses[campaign.id] ?? campaign.status,
-  }))
-  const pendingReports = sampleReports.filter((report) => !adminState.reviewedReportIds.includes(report.id))
-  const activityChartData = [
-    { label: 'Posts', value: feedState.posts.length },
-    { label: 'Reactions', value: feedState.likedPostIds.length },
-    { label: 'Payments', value: servicesState.transactions.length },
-    { label: 'Trades', value: servicesState.trades.length },
-    { label: 'Orders', value: servicesState.orders.length },
-    { label: 'Bookings', value: servicesState.bookings.length },
-  ]
-  const maxActivity = Math.max(1, ...activityChartData.map((item) => item.value))
+  useEffect(() => {
+    if (!selectedUser?.id) return undefined
+    let active = true
+    setDetailError('')
+    getAdminUserDetails(selectedUser.id, { limit: pageSize, offset: 0 })
+      .then((details) => {
+        if (!active) return
+        setSelectedUser(details)
+        return getAdminAuditLog(20).then((events) => {
+          if (active) setAuditEvents(events)
+        })
+      })
+      .catch((loadError) => {
+        if (active) setDetailError(loadError instanceof Error ? loadError.message : 'Could not load user details.')
+      })
+    return () => { active = false }
+  }, [selectedUser?.id])
 
-  function persistAdmin(nextState, message) {
+  async function loadOlderActivity() {
+    if (!selectedUser || loadingOlder) return
+    setLoadingOlder(true)
     try {
-      const withAudit = { ...nextState, auditLog: [makeAuditEntry(message), ...nextState.auditLog].slice(0, 20) }
-      writeDemoAdminState(withAudit)
-      setAdminState(withAudit)
-      setNotice(message)
+      const offset = selectedUser.page.offset + selectedUser.page.limit
+      const next = await getAdminUserDetails(selectedUser.id, { limit: pageSize, offset })
+      const activity = Object.fromEntries(
+        Object.keys(selectedUser.activity).map((key) => [
+          key,
+          [...selectedUser.activity[key], ...(next.activity[key] ?? [])],
+        ]),
+      )
+      setSelectedUser({ ...next, activity, page: { limit: pageSize, offset } })
+      setDetailError('')
+    } catch (loadError) {
+      setDetailError(loadError instanceof Error ? loadError.message : 'Could not load older activity.')
+    } finally {
+      setLoadingOlder(false)
+    }
+  }
+
+  async function refreshAudit() {
+    setLoadingAudit(true)
+    try {
+      setAuditEvents(await getAdminAuditLog(100))
       setError('')
-    } catch (saveError) {
-      setError(saveError instanceof Error ? saveError.message : 'The admin preview change could not be saved.')
+    } catch (loadError) {
+      setError(loadError instanceof Error ? loadError.message : 'Could not load the admin audit log.')
+    } finally {
+      setLoadingAudit(false)
     }
   }
 
-  function updateUserStatus(user) {
-    const currentStatus = adminState.userStatuses[user.id] ?? user.status
-    const nextStatus = currentStatus === 'Suspended demo' ? 'Active' : 'Suspended demo'
-    persistAdmin({
-      ...adminState,
-      userStatuses: { ...adminState.userStatuses, [user.id]: nextStatus },
-    }, `${user.name} marked ${nextStatus.toLowerCase()} in this browser demo.`)
-  }
-
-  function userDetails(user) {
-    setSelectedUser(user)
-  }
-
-  function startProductForm(product = null) {
-    setEditingProductId(product?.id ?? '')
-    setProductForm(product
-      ? { name: product.name, category: product.category, price: String(product.price), stock: String(product.stock), description: product.description }
-      : { name: '', category: 'Home', price: '', stock: '1', description: '' })
-    setNotice('')
-    setError('')
-  }
-
-  function saveProduct(event) {
-    event.preventDefault()
-    const price = Number(productForm.price)
-    const stock = Number(productForm.stock)
-    if (!productForm.name.trim() || !productForm.description.trim() || !Number.isFinite(price) || price <= 0 || !Number.isInteger(stock) || stock < 0) {
-      setError('Enter a product name, description, positive demo price, and whole-number inventory of zero or more.')
-      return
-    }
-
-    const existing = editingProductId ? managedProducts.find((product) => product.id === editingProductId) : null
-    const record = {
-      id: editingProductId || `admin-product-${Date.now()}`,
-      name: productForm.name.trim(),
-      category: productForm.category,
-      price,
-      stock,
-      description: productForm.description.trim(),
-      rating: existing?.rating ?? 'New',
-      image: existing?.image ?? demoProductImages[productForm.category] ?? demoProductImages.Other,
-      published: existing?.published ?? true,
-      archived: existing?.archived ?? false,
-    }
-    if (existing?.isSample) {
-      persistAdmin({
-        ...adminState,
-        productOverrides: { ...adminState.productOverrides, [record.id]: record },
-      }, `Product listing “${record.name}” updated in this browser demo.`)
-    } else {
-      const productCatalog = editingProductId
-        ? adminState.productCatalog.map((item) => item.id === record.id ? record : item)
-        : [record, ...adminState.productCatalog]
-      persistAdmin({ ...adminState, productCatalog }, `${editingProductId ? 'Product listing updated' : 'Product listed'}: “${record.name}”.`)
-    }
-    setProductForm(null)
-    setEditingProductId('')
-  }
-
-  function toggleProductPublished(product) {
-    const published = product.published === false
-    const updatedProduct = { ...product, published }
-    if (product.isSample) {
-      persistAdmin({
-        ...adminState,
-        productOverrides: { ...adminState.productOverrides, [product.id]: updatedProduct },
-      }, `Sample listing “${product.name}” ${published ? 'published' : 'unpublished'} in this browser.`)
-      return
-    }
-    persistAdmin({
-      ...adminState,
-      productCatalog: adminState.productCatalog.map((item) => item.id === product.id ? updatedProduct : item),
-    }, `Listing “${product.name}” ${published ? 'published' : 'unpublished'} in this browser.`)
-  }
-
-  function archiveProduct(product) {
-    if (product.isSample) {
-      persistAdmin({
-        ...adminState,
-        productOverrides: { ...adminState.productOverrides, [product.id]: { ...product, published: false, archived: true } },
-      }, `Sample listing “${product.name}” archived from this demo store.`)
-      return
-    }
-    persistAdmin({
-      ...adminState,
-      productCatalog: adminState.productCatalog.map((item) => item.id === product.id ? { ...item, published: false, archived: true } : item),
-    }, `Listing “${product.name}” archived from this demo store.`)
-  }
-
-  function restoreProduct(product) {
-    if (product.isSample) {
-      persistAdmin({
-        ...adminState,
-        productOverrides: { ...adminState.productOverrides, [product.id]: { ...product, published: false, archived: false } },
-      }, `Sample listing “${product.name}” restored as an unpublished listing.`)
-      return
-    }
-    persistAdmin({
-      ...adminState,
-      productCatalog: adminState.productCatalog.map((item) => item.id === product.id ? { ...item, published: false, archived: false } : item),
-    }, `Listing “${product.name}” restored as an unpublished listing.`)
-  }
-
-  function updateOrderStatus(order, status) {
-    const previousStatus = adminState.orderStatuses[order.id] ?? order.status
-    const stockDirection = status === 'Cancelled demo' && previousStatus !== 'Cancelled demo'
-      ? 1
-      : status !== 'Cancelled demo' && previousStatus === 'Cancelled demo'
-        ? -1
-        : 0
-    const productOverrides = { ...adminState.productOverrides }
-    let productCatalog = adminState.productCatalog
-    if (stockDirection) {
-      productCatalog = adminState.productCatalog.map((product) => ({ ...product }))
-      for (const item of order.items ?? []) {
-        const sample = demoProducts.find((product) => product.id === item.productId)
-        const custom = productCatalog.find((product) => product.id === item.productId)
-        const currentStock = sample
-          ? productOverrides[item.productId]?.stock ?? sample.stock
-          : custom?.stock
-        if (!Number.isInteger(currentStock) || (stockDirection < 0 && currentStock < item.quantity)) {
-          setError(`Could not update order ${order.id}: demo inventory is unavailable for ${item.name}.`)
-          return
-        }
-        const stock = currentStock + stockDirection * item.quantity
-        if (sample) {
-          productOverrides[item.productId] = { ...productOverrides[item.productId], stock }
-        } else if (custom) {
-          productCatalog = productCatalog.map((product) => product.id === item.productId ? { ...product, stock } : product)
-        }
-      }
-    }
-    persistAdmin({
-      ...adminState,
-      productOverrides,
-      productCatalog,
-      orderStatuses: { ...adminState.orderStatuses, [order.id]: status },
-    }, `Demo order ${order.id} marked ${status.toLowerCase()}.`)
-  }
-
-  function toggleContentVisibility(post) {
+  async function signOut() {
     try {
-      const current = readDemoFeedState()
-      const isHidden = current.hiddenPostIds.includes(post.id)
-      const hiddenPostIds = isHidden
-        ? current.hiddenPostIds.filter((id) => id !== post.id)
-        : [...current.hiddenPostIds, post.id]
-      const updatedFeed = { ...current, hiddenPostIds }
-      writeDemoFeedState(updatedFeed)
-      setFeedState(updatedFeed)
-      persistAdmin(adminState, `${post.name}'s sample post ${isHidden ? 'restored to' : 'hidden from'} this browser's feed.`)
-    } catch (saveError) {
-      setError(saveError instanceof Error ? saveError.message : 'Could not update local feed visibility.')
-    }
-  }
-
-  function reviewReport(report) {
-    persistAdmin({
-      ...adminState,
-      reviewedReportIds: [...new Set([...adminState.reviewedReportIds, report.id])],
-    }, `Sample report for ${report.subject} marked reviewed.`)
-  }
-
-  function updateCampaign(campaign, status) {
-    try {
-      const current = readDemoFeedState()
-      const promotionCampaigns = current.promotionCampaigns.map((item) => item.id === campaign.id ? { ...item, status } : item)
-      const updated = { ...current, promotionCampaigns }
-      writeDemoFeedState(updated)
-      setFeedState(updated)
-      persistAdmin({
-        ...adminState,
-        campaignStatuses: { ...adminState.campaignStatuses, [campaign.id]: status },
-      }, `Campaign draft ${status.toLowerCase()} locally. No payment or delivery occurred.`)
-    } catch (saveError) {
-      setError(saveError instanceof Error ? saveError.message : 'Could not update the local campaign draft.')
-    }
-  }
-
-  function updateSettings(key) {
-    const settingLabel = featureSettings.find(([settingKey]) => settingKey === key)?.[1] ?? key
-    persistAdmin({
-      ...adminState,
-      settings: { ...adminState.settings, [key]: !adminState.settings[key] },
-    }, `Demo setting “${settingLabel}” ${adminState.settings[key] ? 'disabled' : 'enabled'}.`)
-  }
-
-  function signOut() {
-    try {
-      endDemoAdminSession()
+      await adminLogout()
       navigate('/admin/login', { replace: true })
-    } catch (signOutError) {
-      setError(signOutError instanceof Error ? signOutError.message : 'Could not close the local admin preview.')
+    } catch (logoutError) {
+      setError(logoutError instanceof Error ? logoutError.message : 'Could not sign out.')
     }
   }
 
-  function openSection(nextSection) {
-    setSection(nextSection)
-    setSearch('')
-    setNotice('')
+  async function openUser(user) {
+    setSelectedUser({ ...user, activity: null, page: { limit: pageSize, offset: 0 } })
+    setDetailError('')
   }
 
-  const userTotal = sampleUsers.length
-  const contentTotal = demoPosts.length + feedState.posts.length
-  const title = productId ? detailProduct?.name ?? 'Product details' : section === 'Overview' ? 'Dashboard overview' : section
+  function chooseSection(nextSection) {
+    setSection(nextSection)
+    setError('')
+    setNotice('')
+    if (nextSection === 'Audit log') refreshAudit()
+  }
+
+  const olderOffset = selectedUser?.page ? selectedUser.page.offset + selectedUser.page.limit : 0
+  const hasMore = Boolean(selectedUser?.counts && activityLabels.some(([key]) => (selectedUser.activity?.[key]?.length ?? 0) < selectedUser.counts[key]))
 
   return (
     <div className="admin-portal">
-      <PageMeta title="Admin dashboard" description="Browser-only iConnect admin preview controls." />
+      <PageMeta title="Admin dashboard" description="iConnect administrator dashboard and account activity." />
       <aside className="admin-portal-sidebar">
-        <Link to="/admin/dashboard" className="admin-portal-brand">iConnect<span>ADMIN PREVIEW</span></Link>
-        <div className="admin-portal-account"><span className="admin-portal-avatar">A</span><span><strong>Demo administrator</strong><small>Local preview session</small></span><i /></div>
+        <Link to="/admin/dashboard" className="admin-portal-brand">iConnect<span>ADMIN PORTAL</span></Link>
+        <div className="admin-portal-account"><span className="admin-portal-avatar">{admin?.name?.slice(0, 1) ?? 'A'}</span><span><strong>{admin?.name ?? 'Administrator'}</strong><small>{admin?.email}</small></span><i /></div>
         <span className="admin-portal-nav-label">WORKSPACE</span>
         <nav className="admin-portal-nav" aria-label="Admin dashboard navigation">
-          {sections.map(({ id, icon: Icon }) => <button key={id} type="button" className={section === id ? 'admin-portal-nav-active' : ''} onClick={() => openSection(id)}><Icon size={16} /><span>{id}</span>{id === 'Reports' && pendingReports.length > 0 && <small>{pendingReports.length}</small>}</button>)}
+          {[['Overview', Activity], ['Users', Users], ['Audit log', ShieldAlert]].map(([label, Icon]) => <button key={label} type="button" className={section === label ? 'admin-portal-nav-active' : ''} onClick={() => chooseSection(label)}><Icon size={16} /><span>{label}</span></button>)}
         </nav>
-        <div className="admin-portal-sidebar-footer"><div className="admin-portal-local-note"><ShieldAlert size={15} /><span>Browser-only controls. Not real site administration.</span></div><button type="button" onClick={signOut}><LogOut size={15} /> Sign out of preview</button><Link to="/">Return to public site</Link></div>
+        <div className="admin-portal-sidebar-footer"><div className="admin-portal-local-note"><ShieldAlert size={15} /><span>Admin access is server-authorized and audited.</span></div><Link to="/app/ibuy">Open iBuy to list a product</Link><button type="button" onClick={signOut}><LogOut size={15} /> Sign out</button><Link to="/">Return to public site</Link></div>
       </aside>
-
       <div className="admin-portal-main">
-        <header className="admin-portal-topbar"><div><span>iConnect admin</span><b>/</b><strong>{title}</strong></div><div className="admin-portal-topbar-actions"><span className="admin-preview-chip"><i /> LOCAL DEMO</span><button type="button" onClick={signOut}><LogOut size={14} /> Sign out</button></div></header>
+        <header className="admin-portal-topbar"><div><span>iConnect admin</span><b>/</b><strong>{section}</strong></div><div className="admin-portal-topbar-actions"><span className="admin-preview-chip"><i /> SECURE ADMIN</span><button type="button" onClick={signOut}><LogOut size={14} /> Sign out</button></div></header>
         <main className="admin-portal-content">
-          <div className="admin-portal-page-heading"><div><span className="app-page-eyebrow">WEBSITE OPERATIONS · DEMO</span><h1>{title}</h1><p>Manage sample records and this browser's local preview state.</p></div>{['Users', 'Products', 'Content'].includes(section) && <label className="admin-user-search"><Search size={15} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder={`Search ${section.toLowerCase()}`} aria-label={`Search ${section.toLowerCase()}`} /></label>}</div>
-          <div className="admin-safety-banner"><ShieldAlert size={18} /><span><strong>Separate demo portal—not secure access control.</strong> The sign-in is client-side only. Changes affect sample or browser-local records; they do not control the public website or real users.</span></div>
+          <div className="admin-portal-page-heading"><div><span className="app-page-eyebrow">WEBSITE OPERATIONS</span><h1>{section === 'Overview' ? 'Dashboard overview' : section}</h1><p>{section === 'Users' ? 'Search accounts and open a user to review their complete account activity.' : section === 'Audit log' ? 'Review recorded administrator access to user details and private conversations.' : 'Live counts and user activity loaded from the iConnect database.'}</p></div>{section === 'Users' && <label className="admin-user-search"><Search size={15} /><input value={search} onChange={(event) => { setSearch(event.target.value); setUserOffset(0) }} placeholder="Search name, username, or email" aria-label="Search users" /></label>}</div>
+          <div className="admin-safety-banner"><ShieldAlert size={18} /><span><strong>Restricted administrator data.</strong> User profile details and private conversations are visible to allowlisted admins. User-detail access is recorded in the audit log.</span></div>
           {error && <p className="feed-interaction-notice feed-error" role="alert">{error}</p>}
           {notice && <p className="feed-interaction-notice" role="status">{notice}</p>}
-
-          {section === 'Overview' && <>
-            <div className="admin-metric-grid">
-              <article className="admin-metric-card"><span><Users size={16} /> Sample users</span><strong>{userTotal}</strong><small>Fictional directory records</small></article>
-              <article className="admin-metric-card"><span><Video size={16} /> Local videos</span><strong>{localVideos.length}</strong><small>Stored in this browser only</small></article>
-              <article className="admin-metric-card"><span><Activity size={16} /> Feed items</span><strong>{contentTotal}</strong><small>Sample + local posts</small></article>
-              <article className="admin-metric-card"><span><Flag size={16} /> Reports pending</span><strong>{pendingReports.length}</strong><small>Illustrative moderation queue</small></article>
-            </div>
-            <div className="admin-overview-grid">
-              <section className="admin-panel admin-chart-panel"><div className="admin-panel-heading"><div><span className="app-page-eyebrow">LOCAL DEMO ACTIVITY</span><h2>Activity chart</h2></div><span>Events in this browser</span></div><div className="admin-activity-chart" role="img" aria-label="Local demo activity counts for posts, reactions, payments, trades, orders and bookings">{activityChartData.map((item) => <div key={item.label}><strong>{item.value}</strong><span style={{ height: `${Math.max(7, item.value / maxActivity * 100)}%` }} /><small>{item.label}</small></div>)}</div><p className="admin-panel-note">Counts update from local demo actions. They are not real user or business analytics.</p></section>
-              <section className="admin-panel admin-chart-panel"><div className="admin-panel-heading"><div><span className="app-page-eyebrow">PAYMENTS NOT CONNECTED</span><h2>Revenue</h2></div><BadgeDollarSign size={17} /></div><div className="admin-chart-total"><strong>$0.00</strong><small>No actual payments or earnings are available in this demo.</small></div><div className="admin-revenue-state"><BarChart3 size={21} /><p>Connect verified billing and server-side transaction records before reporting revenue.</p></div></section>
-              <section className="admin-panel admin-queue-panel"><div className="admin-panel-heading"><div><span className="app-page-eyebrow">RECENT ACTIVITY</span><h2>Local admin log</h2></div><Activity size={17} /></div>{adminState.auditLog.length ? adminState.auditLog.slice(0, 5).map((entry) => <div className="admin-audit-entry" key={entry.id}><span /><div><strong>{entry.description}</strong><small>{entry.time}</small></div></div>) : <div className="admin-content-empty"><CircleHelp size={18} /><p>No local admin actions yet.</p><small>Changes made in this preview will appear here.</small></div>}</section>
-            </div>
-            <div className="admin-preview-footnote"><CircleHelp size={15} /> Metrics are computed from sample/local data. They are not production analytics, user counts, or revenue.</div>
+          {loading && <p className="admin-detail-loading">Loading administrator data…</p>}
+          {!loading && section === 'Overview' && overview && <>
+            <div className="admin-metric-grid">{overviewItems.map(([key, label]) => <article className="admin-metric-card" key={key}><span>{label}</span><strong>{overview[key].toLocaleString()}</strong><small>Live database total</small></article>)}</div>
+            <section className="admin-panel admin-queue-panel"><div className="admin-panel-heading"><div><span className="app-page-eyebrow">ADMIN ACCESS</span><h2>Recent audit events</h2></div><button type="button" className="admin-row-action" onClick={() => chooseSection('Audit log')}>View all</button></div>{auditEvents.length ? auditEvents.slice(0, 8).map((event) => <div className="admin-audit-entry" key={event.id}><span /><div><strong>{event.admin.name} accessed {event.action.replaceAll('_', ' ')}</strong><small>{event.subject ? `${event.subject.name} · ${event.subject.email} · ` : ''}{formatDate(event.createdAt)}</small></div></div>) : <div className="admin-content-empty"><Activity size={18} /><p>No administrator detail access recorded yet.</p></div>}</section>
           </>}
-
-          {section === 'Users' && <section className="admin-panel admin-users-panel"><div className="admin-panel-heading"><div><span className="app-page-eyebrow">SAMPLE ACCOUNT DIRECTORY</span><h2>{users.length} demo profiles</h2></div></div><div className="admin-user-table-wrap"><table className="admin-user-table"><thead><tr><th>User</th><th>Status</th><th>Joined</th><th>Posts</th><th>Reports</th><th>Demo actions</th></tr></thead><tbody>{users.map((user) => <tr key={user.id}><td><div className="admin-user-cell"><Avatar person={{ name: user.name, image: user.avatar }} /><span><strong>{user.name}</strong><small>{user.handle}</small></span></div></td><td><span className={`admin-user-status ${user.status !== 'Active' ? 'status-review' : ''}`}>{user.status}</span></td><td>{user.joined}</td><td>{user.posts}</td><td>{user.reports}</td><td><div className="admin-row-actions"><button type="button" className="admin-row-action" onClick={() => userDetails(user)}>Details</button><button type="button" className="admin-row-action" onClick={() => updateUserStatus(user)}>{user.status === 'Suspended demo' ? 'Reactivate' : 'Suspend'}</button></div></td></tr>)}</tbody></table>{!users.length && <p className="admin-no-users">No sample users match that search.</p>}</div><p className="admin-panel-note">Only fictional sample records are available. Private credentials, messages, bank details, and wallet keys are never shown or managed.</p></section>}
-
-          {section === 'Products' && (productId ? <section className="admin-panel admin-product-detail-panel">{detailProduct ? <><button type="button" className="admin-product-back" onClick={() => { setSection('Products'); navigate('/admin/dashboard') }}><ArrowLeft size={14} /> Back to product catalog</button><div className="admin-product-detail-layout"><img src={`https://images.unsplash.com/${detailProduct.image}?auto=format&fit=crop&w=1200&h=1000&q=85`} alt={detailProduct.name} /><div className="admin-product-detail-copy"><span className="app-page-eyebrow">IBUY · {detailProduct.isSample ? 'SAMPLE LISTING' : 'ADMIN LISTING'}</span><div className="admin-product-detail-title"><h2>{detailProduct.name}</h2><span className={detailProduct.archived || detailProduct.published === false ? 'admin-hidden-status' : 'admin-visible-status'}>{detailProduct.archived ? 'Archived' : detailProduct.published === false ? 'Unpublished' : 'Published'}</span></div><p>{detailProduct.description}</p><strong className="admin-product-detail-price">₦{new Intl.NumberFormat('en-NG').format(detailProduct.price)}</strong><dl><div><dt>Product ID</dt><dd>{detailProduct.id}</dd></div><div><dt>Category</dt><dd>{detailProduct.category}</dd></div><div><dt>Inventory</dt><dd>{detailProduct.stock} demo units</dd></div><div><dt>Rating</dt><dd>{detailProduct.rating ?? 'New'}</dd></div><div><dt>Seller</dt><dd>iBuy sample store</dd></div><div><dt>Listing source</dt><dd>{detailProduct.isSample ? 'Fictional sample catalog' : 'Created in this browser demo'}</dd></div></dl><div className="admin-product-detail-actions"><button type="button" className="admin-row-action" onClick={() => startProductForm(detailProduct)}><Pencil size={13} /> Edit product</button>{detailProduct.archived ? <button type="button" className="admin-row-action" onClick={() => restoreProduct(detailProduct)}>Restore listing</button> : <button type="button" className="admin-row-action" onClick={() => toggleProductPublished(detailProduct)}>{detailProduct.published === false ? 'Publish listing' : 'Unpublish listing'}</button>}</div><p className="admin-panel-note">This page shows sample data held only in this browser. It does not represent a real seller, inventory system, or sale.</p></div></div></> : <div className="admin-content-empty"><PackagePlus size={18} /><p>We couldn't find this product.</p><button type="button" className="admin-row-action" onClick={() => { setSection('Products'); navigate('/admin/dashboard') }}>Return to product catalog</button></div>}</section> : <section className="admin-panel admin-products-panel"><div className="admin-panel-heading"><div><span className="app-page-eyebrow">IBUY CATALOG MANAGEMENT</span><h2>{managedProducts.length} listings</h2></div><button type="button" className="app-primary-button admin-add-product" onClick={() => startProductForm()}><PackagePlus size={15} /> Add product</button></div><div className="admin-product-list">{managedProducts.map((product) => <article key={product.id}><button type="button" className="admin-product-thumbnail" aria-label={`View ${product.name} details`} onClick={() => navigate(`/admin/dashboard/products/${encodeURIComponent(product.id)}`)}><img src={`https://images.unsplash.com/${product.image}?auto=format&fit=crop&w=140&h=120&q=70`} alt="" /></button><div className="admin-product-copy"><button type="button" className="admin-product-open" onClick={() => navigate(`/admin/dashboard/products/${encodeURIComponent(product.id)}`)}>{product.name}</button><small>{product.category} · {product.isSample ? 'Sample listing' : 'Admin-created listing'}</small><small>{product.description}</small></div><div className="admin-product-metrics"><b>₦{new Intl.NumberFormat('en-NG').format(product.price)}</b><small>{product.stock} in demo stock</small></div><span className={product.archived || product.published === false ? 'admin-hidden-status' : 'admin-visible-status'}>{product.archived ? 'Archived' : product.published === false ? 'Unpublished' : 'Published'}</span><div className="admin-row-actions"><button type="button" className="admin-row-action" onClick={() => startProductForm(product)}><Pencil size={12} /> Edit</button>{product.archived ? <button type="button" className="admin-row-action" onClick={() => restoreProduct(product)}>Restore</button> : <button type="button" className="admin-row-action" onClick={() => toggleProductPublished(product)}>{product.published === false ? 'Publish' : 'Unpublish'}</button>}{!product.isSample && !product.archived && <button type="button" className="admin-row-action is-danger" onClick={() => archiveProduct(product)}>Archive</button>}</div></article>)}</div><p className="admin-panel-note">Product listings are created by the demo administrator and appear in iBuy on this browser. Inventory, prices, and orders are mock records; no sales or deliveries occur.</p></section>)}
-
-          {section === 'Orders' && <section className="admin-panel admin-orders-panel"><div className="admin-panel-heading"><div><span className="app-page-eyebrow">IBUY ORDER PREVIEW</span><h2>{openOrders.length} local orders</h2></div><ShoppingBag size={17} /></div>{openOrders.length ? <div className="admin-order-list">{openOrders.map((order) => <article key={order.id}><div className="admin-order-heading"><div><strong>Order {order.id}</strong><small>{new Date(order.createdAt).toLocaleString()} · demo customer</small></div><span>{order.status}</span></div><div className="admin-order-items">{(order.items ?? []).map((item) => <div key={item.productId}><span>{item.name} × {item.quantity}</span><b>₦{new Intl.NumberFormat('en-NG').format(item.price * item.quantity)}</b></div>)}</div><div className="admin-order-footer"><span>Total · ₦{new Intl.NumberFormat('en-NG').format(order.total)} · Payment not collected</span><div className="admin-row-actions"><button type="button" className="admin-row-action" onClick={() => updateOrderStatus(order, 'Processing demo')}>Mark processing</button><button type="button" className="admin-row-action" onClick={() => updateOrderStatus(order, 'Completed demo')}>Complete demo</button><button type="button" className="admin-row-action is-danger" onClick={() => updateOrderStatus(order, 'Cancelled demo')}>Cancel demo</button></div></div><p className="admin-order-private-note">Shipping address and payment details were not collected.</p></article>)}</div> : <div className="admin-content-empty"><ShoppingBag size={18} /><p>No local demo orders yet.</p><small>Demo checkout records appear here. No payment is processed.</small></div>}<p className="admin-panel-note">Order status changes are local mock updates only. No seller, customer, payment provider, or carrier is notified.</p></section>}
-
-          {section === 'Content' && <section className="admin-panel admin-content-panel"><div className="admin-panel-heading"><div><span className="app-page-eyebrow">LOCAL FEED MODERATION PREVIEW</span><h2>{contentItems.length} sample and local posts</h2></div></div>{contentItems.length ? <div className="admin-content-list">{contentItems.map((post) => { const hidden = feedState.hiddenPostIds.includes(post.id); return <article key={post.id}><div className="admin-content-item-type">{post.mediaType === 'video' ? <Video size={16} /> : <FileVideo size={16} />}</div><div className="admin-content-copy"><strong>{post.videoTitle ?? post.name}</strong><small>{post.name} · {post.mediaType === 'video' ? 'Video' : 'Post'} · {post.text}</small></div><span className={hidden ? 'admin-hidden-status' : 'admin-visible-status'}>{hidden ? 'Hidden locally' : 'Visible in demo'}</span><button type="button" className="admin-row-action" onClick={() => toggleContentVisibility(post)}>{hidden ? 'Restore' : 'Hide'}</button></article>})}</div> : <p className="admin-no-users">No posts match that search.</p>}<p className="admin-panel-note">Hide/restore updates this browser's demo feed only. It does not remove a public post or notify its author.</p></section>}
-
-          {section === 'Reports' && <section className="admin-panel admin-reports-panel"><div className="admin-panel-heading"><div><span className="app-page-eyebrow">ILLUSTRATIVE MODERATION QUEUE</span><h2>{pendingReports.length} reports need review</h2></div><Flag size={17} /></div>{sampleReports.map((report) => { const reviewed = adminState.reviewedReportIds.includes(report.id); return <article className="admin-report-row" key={report.id}><span className={`admin-report-icon ${reviewed ? 'is-reviewed' : ''}`}>{reviewed ? <Check size={16} /> : <Flag size={16} />}</span><div><strong>{report.subject}</strong><small>{report.type} · {report.reason} · {report.date}</small><small>{reviewed ? 'Reviewed in this browser' : 'Sample report — no user submitted this'}</small></div><button type="button" className="admin-row-action" onClick={() => reviewReport(report)} disabled={reviewed}>{reviewed ? 'Reviewed' : 'Mark reviewed'}</button></article>})}<p className="admin-panel-note">Reports are illustrative fixtures. No real user report or moderation case is connected.</p></section>}
-
-          {section === 'Promotions' && <section className="admin-panel admin-promotions-panel"><div className="admin-panel-heading"><div><span className="app-page-eyebrow">CAMPAIGN REVIEW</span><h2>{campaigns.length} local campaign drafts</h2></div><BadgeDollarSign size={17} /></div>{campaigns.length ? campaigns.map((campaign) => <article className="admin-promotion-row" key={campaign.id}><div><strong>{feedState.posts.find((post) => post.id === campaign.postId)?.videoTitle ?? 'Local video campaign'}</strong><small>{campaign.objective} · {campaign.dailyBudget} demo credits/day · {campaign.days} days</small><span>{campaign.status} · not charged, delivered, or guaranteed to gain viewers</span></div><div className="admin-promotion-actions"><button type="button" className="admin-row-action" onClick={() => updateCampaign(campaign, 'Reviewed in demo')}>Review</button><button type="button" className="admin-row-action is-danger" onClick={() => updateCampaign(campaign, 'Rejected in demo')}>Reject</button></div></article>) : <div className="admin-content-empty"><BadgeDollarSign size={18} /><p>No local campaign drafts.</p><small>Drafts created in the video studio will appear here.</small></div>}<p className="admin-panel-note">Review/reject changes only the browser-local draft label. There is no ad system, billing, or viewer guarantee.</p></section>}
-
-          {section === 'Settings' && <section className="admin-panel admin-settings-panel"><div className="admin-panel-heading"><div><span className="app-page-eyebrow">LOCAL PREVIEW SETTINGS</span><h2>Demo feature controls</h2></div><Settings size={17} /></div>{featureSettings.map(([key, label, description]) => <button type="button" className="admin-setting-row" key={key} onClick={() => updateSettings(key)}><span><strong>{label}</strong><small>{description}</small></span><span className={adminState.settings[key] ? 'preference-toggle is-on' : 'preference-toggle'} aria-label={adminState.settings[key] ? 'On' : 'Off'} /></button>)}<p className="admin-panel-note">These browser-local preview switches gate the matching feature screens on this device. They are not global production website controls.</p></section>}
-
-          {section === 'Analytics' && <section className="admin-panel admin-analytics-panel"><div className="admin-panel-heading"><div><span className="app-page-eyebrow">LOCAL DEMO COUNTS</span><h2>Preview analytics</h2></div><BarChart3 size={17} /></div><div className="admin-analytics-grid"><article><span>Fictional sample profiles</span><strong>{userTotal}</strong></article><article><span>Sample posts</span><strong>{demoPosts.length}</strong></article><article><span>Local posts</span><strong>{feedState.posts.length}</strong></article><article><span>Local video uploads</span><strong>{localVideos.length}</strong></article><article><span>Campaign drafts</span><strong>{campaigns.length}</strong></article><article><span>Demo payments / trades / orders</span><strong>{servicesState.transactions.length} / {servicesState.trades.length} / {servicesState.orders.length}</strong></article><article><span>Demo bookings</span><strong>{servicesState.bookings.length}</strong></article><article><span>Actual revenue connected</span><strong>$0.00</strong></article></div><div className="admin-activity-chart admin-analytics-chart" role="img" aria-label="Local demo activity chart">{activityChartData.map((item) => <div key={item.label}><strong>{item.value}</strong><span style={{ height: `${Math.max(7, item.value / maxActivity * 100)}%` }} /><small>{item.label}</small></div>)}</div><div className="admin-revenue-state"><BadgeDollarSign size={19} /><p>Actual revenue is $0.00 in this prototype because no payment processor or transactions are connected.</p></div></section>}
-          {productForm && <div className="admin-modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) { setProductForm(null); setEditingProductId('') } }}><section className="admin-modal-card" role="dialog" aria-modal="true" aria-labelledby="product-form-title"><div className="admin-modal-heading"><div><span className="app-page-eyebrow">IBUY CATALOG</span><h2 id="product-form-title">{editingProductId ? 'Edit product listing' : 'Create a product listing'}</h2></div><button type="button" aria-label="Close product form" onClick={() => { setProductForm(null); setEditingProductId('') }}><X size={17} /></button></div><p className="admin-modal-note">This listing will appear in the local iBuy demo store. Do not enter real payment or customer details.</p><form className="admin-product-form" onSubmit={saveProduct}><label>Product name<input value={productForm.name} onChange={(event) => setProductForm({ ...productForm, name: event.target.value })} maxLength={70} required /></label><div className="admin-product-form-row"><label>Category<select value={productForm.category} onChange={(event) => setProductForm({ ...productForm, category: event.target.value })}><option>Home</option><option>Style</option><option>Tech</option><option>Other</option></select></label><label>Price (demo NGN)<input type="number" min="1" step="1" value={productForm.price} onChange={(event) => setProductForm({ ...productForm, price: event.target.value })} required /></label><label>Inventory<input type="number" min="0" step="1" value={productForm.stock} onChange={(event) => setProductForm({ ...productForm, stock: event.target.value })} required /></label></div><label>Description<textarea value={productForm.description} onChange={(event) => setProductForm({ ...productForm, description: event.target.value })} maxLength={240} rows={3} required /></label><div className="admin-modal-actions"><button type="button" className="admin-row-action" onClick={() => { setProductForm(null); setEditingProductId('') }}>Cancel</button><button type="submit" className="app-primary-button">{editingProductId ? 'Save product' : 'Publish product'}</button></div></form></section></div>}
-          {selectedUser && <div className="admin-modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) setSelectedUser(null) }}><section className="admin-modal-card admin-user-detail-modal" role="dialog" aria-modal="true" aria-labelledby="user-detail-title"><div className="admin-modal-heading"><div><span className="app-page-eyebrow">FICTIONAL SAMPLE ACCOUNT</span><h2 id="user-detail-title">User details</h2></div><button type="button" aria-label="Close user details" onClick={() => setSelectedUser(null)}><X size={17} /></button></div><div className="admin-user-detail-head"><Avatar person={{ name: selectedUser.name, image: selectedUser.avatar }} /><div><strong>{selectedUser.name}</strong><small>{selectedUser.handle}</small></div><span className={`admin-user-status ${(adminState.userStatuses[selectedUser.id] ?? selectedUser.status) !== 'Active' ? 'status-review' : ''}`}>{adminState.userStatuses[selectedUser.id] ?? selectedUser.status}</span></div><dl className="admin-user-detail-list"><div><dt>Demo profile ID</dt><dd>{selectedUser.id}</dd></div><div><dt>Joined (sample date)</dt><dd>{selectedUser.joined}</dd></div><div><dt>Sample posts</dt><dd>{selectedUser.posts}</dd></div><div><dt>Sample reports</dt><dd>{selectedUser.reports}</dd></div><div><dt>Interests</dt><dd>{selectedUser.interests ?? 'Not included in this sample record'}</dd></div><div><dt>Profile note</dt><dd>{selectedUser.note ?? 'No sample bio provided'}</dd></div></dl><p className="admin-modal-note">No real account data, private messages, passwords, financial details, or wallet keys exist in this sample record.</p><button type="button" className="app-primary-button" onClick={() => { updateUserStatus(selectedUser); setSelectedUser(null) }}>{(adminState.userStatuses[selectedUser.id] ?? selectedUser.status) === 'Suspended demo' ? 'Reactivate sample account' : 'Suspend sample account'}</button></section></div>}
+          {!loading && section === 'Users' && <section className="admin-panel admin-users-panel">
+            <div className="admin-panel-heading"><div><span className="app-page-eyebrow">REGISTERED ACCOUNTS</span><h2>{userTotal.toLocaleString()} users</h2></div></div>
+            {loadingUsers && <p className="admin-detail-loading">Loading accounts…</p>}
+            {!loadingUsers && <div className="admin-live-user-list">{users.map((user) => <button type="button" className="admin-live-user-row" key={user.id} onClick={() => openUser(user)}>
+              <span className="admin-live-user-avatar">{user.name.slice(0, 1)}</span>
+              <span className="admin-live-user-identity"><strong>{user.name}</strong><small>@{user.username} · {user.email}</small></span>
+              <span className={`admin-user-status ${user.emailVerified ? '' : 'status-review'}`}>{user.emailVerified ? 'Verified' : 'Unverified'}</span>
+              <span className="admin-live-user-counts">{user.counts.posts} posts · {user.counts.messages} messages</span><ChevronRight size={16} />
+            </button>)}
+            {!users.length && <p className="admin-no-users">No accounts match your search.</p>}</div>}
+            <div className="admin-users-pagination"><span>Showing {userTotal ? userOffset + 1 : 0}–{Math.min(userOffset + 50, userTotal)} of {userTotal}</span><div><button type="button" aria-label="Previous users" disabled={userOffset === 0 || loadingUsers} onClick={() => setUserOffset((offset) => Math.max(0, offset - 50))}><ChevronLeft size={15} /></button><button type="button" aria-label="Next users" disabled={userOffset + 50 >= userTotal || loadingUsers} onClick={() => setUserOffset((offset) => offset + 50)}><ChevronRight size={15} /></button></div></div>
+          </section>}
+          {!loading && section === 'Audit log' && <section className="admin-panel admin-queue-panel"><div className="admin-panel-heading"><div><span className="app-page-eyebrow">RECORDED ADMIN ACCESS</span><h2>Latest 100 events</h2></div><button type="button" className="admin-row-action" onClick={refreshAudit} disabled={loadingAudit}>{loadingAudit ? 'Loading…' : 'Refresh'}</button></div>{auditEvents.map((event) => <div className="admin-audit-entry" key={event.id}><span /><div><strong>{event.admin.name} ({event.admin.email}) · {event.action.replaceAll('_', ' ')}</strong><small>{event.subject ? `User: ${event.subject.name} (${event.subject.email}) · ` : ''}{formatDate(event.createdAt)}</small></div></div>)}{!auditEvents.length && <div className="admin-content-empty"><Activity size={18} /><p>No audit events recorded.</p></div>}</section>}
         </main>
       </div>
+      {selectedUser && <UserDetails
+        user={selectedUser}
+        loading={!selectedUser.activity}
+        error={detailError}
+        onClose={() => setSelectedUser(null)}
+        onLoadOlder={loadOlderActivity}
+        loadingOlder={loadingOlder}
+        hasMore={hasMore && olderOffset > 0}
+      />}
     </div>
   )
 }

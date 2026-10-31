@@ -36,12 +36,30 @@ CREATE TABLE IF NOT EXISTS auth_sessions (
 CREATE INDEX IF NOT EXISTS auth_sessions_expires_at_idx
   ON auth_sessions(expires_at);
 
+CREATE TABLE IF NOT EXISTS admin_audit_log (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  admin_user_id uuid NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+  subject_user_id uuid REFERENCES users(id) ON DELETE SET NULL,
+  action varchar(40) NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS admin_audit_log_created_at_idx
+  ON admin_audit_log(created_at DESC, id DESC);
+
+CREATE INDEX IF NOT EXISTS admin_audit_log_subject_created_at_idx
+  ON admin_audit_log(subject_user_id, created_at DESC);
+
 CREATE TABLE IF NOT EXISTS social_posts (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   body varchar(500) NOT NULL CHECK (char_length(btrim(body)) BETWEEN 1 AND 500),
+  image_urls text[] NOT NULL DEFAULT '{}',
   created_at timestamptz NOT NULL DEFAULT now()
 );
+
+ALTER TABLE social_posts
+  ADD COLUMN IF NOT EXISTS image_urls text[] NOT NULL DEFAULT '{}';
 
 CREATE INDEX IF NOT EXISTS social_posts_created_at_idx
   ON social_posts(created_at DESC);
@@ -52,6 +70,16 @@ CREATE TABLE IF NOT EXISTS social_post_likes (
   created_at timestamptz NOT NULL DEFAULT now(),
   PRIMARY KEY (post_id, user_id)
 );
+
+CREATE TABLE IF NOT EXISTS social_post_bookmarks (
+  post_id uuid NOT NULL REFERENCES social_posts(id) ON DELETE CASCADE,
+  user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (post_id, user_id)
+);
+
+CREATE INDEX IF NOT EXISTS social_post_bookmarks_user_created_at_idx
+  ON social_post_bookmarks(user_id, created_at DESC);
 
 CREATE TABLE IF NOT EXISTS social_post_comments (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -118,6 +146,28 @@ CREATE TABLE IF NOT EXISTS user_follows (
 CREATE INDEX IF NOT EXISTS user_follows_following_id_idx
   ON user_follows(following_id, follower_id);
 
+CREATE TABLE IF NOT EXISTS communities (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  owner_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  name varchar(80) NOT NULL,
+  description varchar(500) NOT NULL
+    CHECK (char_length(btrim(description)) BETWEEN 1 AND 500),
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS communities_created_at_idx
+  ON communities(created_at DESC, id DESC);
+
+CREATE TABLE IF NOT EXISTS community_memberships (
+  community_id uuid NOT NULL REFERENCES communities(id) ON DELETE CASCADE,
+  user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (community_id, user_id)
+);
+
+CREATE INDEX IF NOT EXISTS community_memberships_user_id_idx
+  ON community_memberships(user_id, created_at DESC);
+
 CREATE INDEX IF NOT EXISTS users_discoverable_profile_idx
   ON users(lower(display_name), lower(username))
   WHERE email_verified_at IS NOT NULL AND profile_visible AND discoverable;
@@ -163,3 +213,53 @@ CREATE TABLE IF NOT EXISTS job_applications (
 
 CREATE INDEX IF NOT EXISTS job_applications_applicant_created_at_idx
   ON job_applications(applicant_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS marketplace_products (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  seller_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  name varchar(120) NOT NULL,
+  category varchar(12) NOT NULL
+    CHECK (category IN ('Style', 'Tech', 'Home', 'Other')),
+  price bigint NOT NULL CHECK (price > 0),
+  stock integer NOT NULL CHECK (stock >= 0),
+  description varchar(2000) NOT NULL
+    CHECK (char_length(btrim(description)) BETWEEN 1 AND 2000),
+  image_url varchar(2048),
+  image_urls text[] NOT NULL DEFAULT '{}',
+  published boolean NOT NULL DEFAULT true,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+ALTER TABLE marketplace_products
+  ADD COLUMN IF NOT EXISTS image_urls text[] NOT NULL DEFAULT '{}';
+
+CREATE INDEX IF NOT EXISTS marketplace_products_published_created_at_idx
+  ON marketplace_products(created_at DESC, id DESC)
+  WHERE published;
+
+CREATE INDEX IF NOT EXISTS marketplace_products_seller_id_idx
+  ON marketplace_products(seller_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS local_marketplace_listings (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  seller_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  category varchar(12) NOT NULL
+    CHECK (category IN ('Homes', 'Services', 'Farm')),
+  title varchar(120) NOT NULL,
+  price varchar(80) NOT NULL,
+  location varchar(120) NOT NULL,
+  detail varchar(280) NOT NULL,
+  description varchar(2000) NOT NULL
+    CHECK (char_length(btrim(description)) BETWEEN 1 AND 2000),
+  image_url varchar(2048),
+  published boolean NOT NULL DEFAULT true,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS local_marketplace_listings_published_created_at_idx
+  ON local_marketplace_listings(created_at DESC, id DESC)
+  WHERE published;
+
+CREATE INDEX IF NOT EXISTS local_marketplace_listings_category_location_idx
+  ON local_marketplace_listings(category, lower(location))
+  WHERE published;

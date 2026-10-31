@@ -1,32 +1,17 @@
-import React, { useCallback, useEffect, useState } from 'react'
-import { Bookmark, Heart, Image, MessageCircle, MoreHorizontal, PenLine, Send, TrendingUp, X } from 'lucide-react'
+import React, { useEffect, useState } from 'react'
+import { Bookmark, Heart, Image, MessageCircle, MoreHorizontal, PenLine, Send, TrendingUp } from 'lucide-react'
 import { Link, useNavigate } from 'react-router-dom'
 import AppPageHeader from '../../components/AppPageHeader.jsx'
 import Avatar from '../../components/Avatar.jsx'
-import { demoPosts } from '../../data/demoContent.js'
-import { people } from '../../data/siteContent.js'
-import { demoAvatar, getDemoProfile } from '../../utils/demoAccount.js'
-import { emptyDemoFeedState, readDemoFeedState, writeDemoFeedState } from '../../utils/demoFeed.js'
-import { getSocialPosts, setSocialPostLike } from '../../utils/socialApi.js'
+import { getDemoProfile } from '../../utils/demoAccount.js'
+import { getPeople } from '../../utils/peopleApi.js'
+import { getSocialPosts, resolveFeedImageUrl, setSocialPostBookmark, setSocialPostLike } from '../../utils/socialApi.js'
 
-const storyPeople = [
-  { ...people[0], note: 'Slow morning', image: 'photo-1470252649378-9c29740c9fa8', text: 'Taking a slow start and letting the morning find its own pace.' },
-  { ...people[1], note: 'On repeat', image: 'photo-1516280440614-37939bbacd81', text: 'Found the perfect soundtrack for a long walk.' },
-  { ...people[2], note: 'Little walk', image: 'photo-1441974231531-c6227db76b6e', text: 'Took the scenic route, as usual.' },
-  { ...people[3], note: 'Weekend bits', image: 'photo-1470770841072-f978cf4d019e', text: 'A few quiet moments from the weekend.' },
-]
-
-function FeedPost({ post, state, updateState, announce, sharePost, hidePost, onLike, liking }) {
+function FeedPost({ post, sharePost, onLike, liking, onBookmark, bookmarking }) {
   const [menuOpen, setMenuOpen] = useState(false)
-  const liked = post.isPersistent ? post.likedByMe : state.likedPostIds.includes(post.id)
-  const saved = state.savedPostIds.includes(post.id)
-
-  function togglePostList(key) {
-    const updated = state[key].includes(post.id)
-      ? state[key].filter((id) => id !== post.id)
-      : [...state[key], post.id]
-    updateState({ ...state, [key]: updated })
-  }
+  const liked = post.likedByMe
+  const saved = post.bookmarkedByMe
+  const images = post.images?.length ? post.images : post.image ? [post.image] : []
 
   return (
     <article className="feed-card">
@@ -36,22 +21,23 @@ function FeedPost({ post, state, updateState, announce, sharePost, hidePost, onL
           <div className="feed-author"><strong>{post.name}</strong><span>{post.handle} · {post.time === 'just now' ? post.time : `${post.time} ago`} · <span className="feed-location">{post.location}</span></span></div>
         </div>
         <p className="feed-card-copy">{post.text}</p>
-        {post.image && (post.mediaType === 'video'
-          ? <video className="feed-card-image feed-card-video" src={post.image} controls playsInline preload="metadata" aria-label={`Video shared by ${post.name}`} />
-          : <img className="feed-card-image" src={post.image.startsWith('data:') ? post.image : `https://images.unsplash.com/${post.image}?auto=format&fit=crop&w=1100&q=85`} alt={`A moment shared by ${post.name}`} loading="lazy" />)}
+        {images.length > 0 && <div className={`feed-card-gallery feed-card-gallery-${Math.min(images.length, 3)}`}>
+          {images.map((image, index) => post.mediaType === 'video'
+            ? <video key={image} className="feed-card-image feed-card-video" src={image} controls playsInline preload="metadata" aria-label={`Video shared by ${post.name}`} />
+            : <img key={`${image}-${index}`} className="feed-card-image" src={resolveFeedImageUrl(image)} alt={`Photo ${index + 1} shared by ${post.name}`} loading="lazy" />)}
+        </div>}
         <div className="feed-card-tag">{post.tag}</div>
       </Link>
       <div className="feed-post-menu-wrap">
         <button type="button" className="quiet-icon-button feed-card-more" aria-label={`More options for ${post.name}'s post`} aria-expanded={menuOpen} onClick={() => setMenuOpen((open) => !open)}><MoreHorizontal size={19} /></button>
         {menuOpen && <div className="feed-post-menu" role="menu">
-          <button type="button" role="menuitem" onClick={() => { togglePostList('savedPostIds'); announce(saved ? 'Post removed from your saved list.' : 'Post saved in this browser.'); setMenuOpen(false) }}><Bookmark size={15} />{saved ? 'Unsave post' : 'Save post'}</button>
-          <button type="button" role="menuitem" onClick={() => { hidePost(post); setMenuOpen(false) }}><X size={15} />Hide post</button>
+          <button type="button" role="menuitem" onClick={() => { onBookmark(post); setMenuOpen(false) }}><Bookmark size={15} />{saved ? 'Unsave post' : 'Save post'}</button>
         </div>}
       </div>
       <div className="feed-card-actions">
-        <button type="button" className={liked ? 'feed-action liked' : 'feed-action'} onClick={() => post.isPersistent ? onLike(post) : togglePostList('likedPostIds')} disabled={post.isPersistent && liking} aria-pressed={liked} aria-label={liked ? `Unlike ${post.name}'s post` : `Like ${post.name}'s post`}><Heart size={17} fill={liked ? 'currentColor' : 'none'} /> <span>{post.likes + Number(!post.isPersistent && liked)}</span></button>
-        <Link to={`/app/post/${post.id}`} className="feed-action"><MessageCircle size={17} /> <span>{post.comments + (!post.isPersistent ? state.replies[post.id]?.length ?? 0 : 0)} replies</span></Link>
-        <button type="button" className={saved ? 'feed-action saved' : 'feed-action'} onClick={() => togglePostList('savedPostIds')} aria-pressed={saved} aria-label={saved ? 'Remove saved post' : 'Save post'}><Bookmark size={16} fill={saved ? 'currentColor' : 'none'} /></button>
+        <button type="button" className={liked ? 'feed-action liked' : 'feed-action'} onClick={() => onLike(post)} disabled={liking} aria-pressed={liked} aria-label={liked ? `Unlike ${post.name}'s post` : `Like ${post.name}'s post`}><Heart size={17} fill={liked ? 'currentColor' : 'none'} /> <span>{post.likes}</span></button>
+        <Link to={`/app/post/${post.id}`} className="feed-action"><MessageCircle size={17} /> <span>{post.comments} replies</span></Link>
+        <button type="button" className={saved ? 'feed-action saved' : 'feed-action'} onClick={() => onBookmark(post)} disabled={bookmarking} aria-pressed={saved} aria-label={saved ? 'Remove saved post' : 'Save post'}><Bookmark size={16} fill={saved ? 'currentColor' : 'none'} /></button>
         <button type="button" className="feed-action feed-share" onClick={() => sharePost(post)} aria-label="Share post link"><Send size={16} /></button>
       </div>
       <Link to={`/app/post/${post.id}`} className="feed-view-details">View conversation</Link>
@@ -59,80 +45,65 @@ function FeedPost({ post, state, updateState, announce, sharePost, hidePost, onL
   )
 }
 
-function StoryViewer({ person, onClose, onPrevious, onNext, index, total }) {
-  useEffect(() => {
-    function onKeyDown(event) {
-      if (event.key === 'Escape') onClose()
-      if (event.key === 'ArrowLeft') onPrevious()
-      if (event.key === 'ArrowRight') onNext()
-    }
-
-    window.addEventListener('keydown', onKeyDown)
-    return () => window.removeEventListener('keydown', onKeyDown)
-  }, [onClose, onNext, onPrevious])
-
-  return (
-    <div className="story-viewer-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose() }}>
-      <section className="story-viewer" role="dialog" aria-modal="true" aria-label={`${person.name}'s story`}>
-        <img src={`https://images.unsplash.com/${person.image}?auto=format&fit=crop&w=900&h=1400&q=85`} alt="" />
-        <div className="story-viewer-shade" />
-        <div className="story-viewer-progress"><span style={{ width: `${((index + 1) / total) * 100}%` }} /></div>
-        <div className="story-viewer-header"><Avatar person={person} /><span><strong>{person.name}</strong><small>iConnect story · preview</small></span><button type="button" onClick={onClose} aria-label="Close story"><X size={20} /></button></div>
-        <p>{person.text}</p>
-        <div className="story-viewer-controls"><button type="button" onClick={onPrevious} aria-label="Previous story">‹</button><button type="button" onClick={onNext} aria-label="Next story">›</button></div>
-      </section>
-    </div>
-  )
-}
-
 export default function FeedPage() {
   const [filter, setFilter] = useState('For you')
   const [sort, setSort] = useState('Recent')
-  const [feedState, setFeedState] = useState(emptyDemoFeedState)
   const [socialPosts, setSocialPosts] = useState([])
+  const [loadingPosts, setLoadingPosts] = useState(true)
+  const [feedLoadError, setFeedLoadError] = useState('')
+  const [retryFeedLoad, setRetryFeedLoad] = useState(0)
+  const [followedPeople, setFollowedPeople] = useState([])
+  const [loadingFollowedPeople, setLoadingFollowedPeople] = useState(true)
+  const [followedPeopleError, setFollowedPeopleError] = useState('')
   const [likingPostIds, setLikingPostIds] = useState([])
+  const [bookmarkingPostIds, setBookmarkingPostIds] = useState([])
   const [feedError, setFeedError] = useState('')
   const [notice, setNotice] = useState('')
-  const [undoPostId, setUndoPostId] = useState('')
-  const [storyIndex, setStoryIndex] = useState(null)
   const navigate = useNavigate()
   const profile = getDemoProfile()
-  const viewer = { name: profile?.name ?? 'Taylor Reed', image: profile?.avatar ?? demoAvatar }
-  const filters = ['For you', 'Following', 'Communities', 'Videos']
-
-  useEffect(() => {
-    try {
-      setFeedState(readDemoFeedState())
-    } catch (error) {
-      setFeedError(error instanceof Error ? error.message : 'Could not load saved feed activity.')
-    }
-  }, [])
+  const viewer = { name: profile?.name ?? 'You', image: profile?.avatar ?? '' }
+  const filters = ['For you', 'Following', 'Saved']
 
   useEffect(() => {
     let active = true
-    getSocialPosts({ followingOnly: filter === 'Following' })
+    setLoadingPosts(true)
+    setFeedLoadError('')
+    getSocialPosts({
+      followingOnly: filter === 'Following',
+      bookmarkedOnly: filter === 'Saved',
+    })
       .then((posts) => {
-        if (active) setSocialPosts(posts)
+        if (active) {
+          setSocialPosts(posts)
+          setFeedError('')
+        }
       })
       .catch((error) => {
-        if (active) setFeedError(error instanceof Error ? error.message : 'Could not load published posts.')
+        if (active) {
+          setFeedLoadError(error instanceof Error ? error.message : 'Could not load published posts.')
+          setFeedError(error instanceof Error ? error.message : 'Could not load published posts.')
+        }
+      })
+      .finally(() => {
+        if (active) setLoadingPosts(false)
       })
     return () => { active = false }
-  }, [filter])
+  }, [filter, retryFeedLoad])
 
-  function updateState(nextState) {
-    try {
-      writeDemoFeedState(nextState)
-      setFeedState(nextState)
-      setFeedError('')
-    } catch (error) {
-      setFeedError(error instanceof Error ? error.message : 'Could not save this feed change.')
-    }
-  }
-
-  function announce(message) {
-    setNotice(message)
-  }
+  useEffect(() => {
+    let active = true
+    getPeople({ followingOnly: true })
+      .then((people) => {
+        if (active) setFollowedPeople(people)
+      })
+      .catch((error) => {
+        if (active) setFollowedPeopleError(error instanceof Error ? error.message : 'Could not load the people you follow.')
+      })
+      .finally(() => {
+        if (active) setLoadingFollowedPeople(false)
+      })
+    return () => { active = false }
+  }, [])
 
   async function toggleSocialLike(post) {
     if (likingPostIds.includes(post.id)) return
@@ -145,6 +116,27 @@ export default function FeedPage() {
       setFeedError(error instanceof Error ? error.message : 'Could not update this like.')
     } finally {
       setLikingPostIds((current) => current.filter((id) => id !== post.id))
+    }
+  }
+
+  async function toggleSocialBookmark(post) {
+    if (bookmarkingPostIds.includes(post.id)) return
+    const bookmarked = !post.bookmarkedByMe
+    setBookmarkingPostIds((current) => [...current, post.id])
+    try {
+      await setSocialPostBookmark(post.id, bookmarked)
+      setSocialPosts((current) => current.map((item) => item.id === post.id
+        ? { ...item, bookmarkedByMe: bookmarked }
+        : item))
+      if (filter === 'Saved' && !bookmarked) {
+        setSocialPosts((current) => current.filter((item) => item.id !== post.id))
+      }
+      setNotice(bookmarked ? 'Post saved to your account.' : 'Post removed from your saved posts.')
+      setFeedError('')
+    } catch (error) {
+      setFeedError(error instanceof Error ? error.message : 'Could not update your saved post.')
+    } finally {
+      setBookmarkingPostIds((current) => current.filter((id) => id !== post.id))
     }
   }
 
@@ -166,52 +158,14 @@ export default function FeedPage() {
     }
   }
 
-  function hidePost(post) {
-    updateState({ ...feedState, hiddenPostIds: [...feedState.hiddenPostIds, post.id] })
-    setUndoPostId(post.id)
-    setNotice(`${post.name}'s post was hidden from your feed.`)
-  }
-
-  function undoHide() {
-    updateState({ ...feedState, hiddenPostIds: feedState.hiddenPostIds.filter((id) => id !== undoPostId) })
-    setUndoPostId('')
-    setNotice('Post restored to your feed.')
-  }
-
-  const closeStory = useCallback(() => setStoryIndex(null), [])
-  const previousStory = useCallback(() => setStoryIndex((current) => (current + storyPeople.length - 1) % storyPeople.length), [])
-  const nextStory = useCallback(() => setStoryIndex((current) => (current + 1) % storyPeople.length), [])
-
-  const allPosts = [...socialPosts, ...feedState.posts, ...demoPosts]
-  const visiblePosts = allPosts
-    .filter((post) => !feedState.hiddenPostIds.includes(post.id))
-    .filter((post) => {
-      if (filter === 'Following') return feedState.followedHandles.includes(post.handle)
-      if (filter === 'Videos') return post.mediaType === 'video'
-      if (filter === 'Communities') return ['Outside, eventually', 'Currently on repeat', 'Camera roll club', 'The reading nook'].includes(post.location)
-      return true
-    })
-    .sort((left, right) => sort === 'Most liked'
-      ? (right.likes + Number(right.isPersistent ? right.likedByMe : feedState.likedPostIds.includes(right.id))) - (left.likes + Number(left.isPersistent ? left.likedByMe : feedState.likedPostIds.includes(left.id)))
-      : left.isPersistent && right.isPersistent
-        ? new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime()
-        : left.isPersistent
-          ? -1
-          : right.isPersistent
-            ? 1
-            : (feedState.posts.some((post) => post.id === right.id) ? 1 : 0) - (feedState.posts.some((post) => post.id === left.id) ? 1 : 0))
+  const visiblePosts = [...socialPosts].sort((left, right) => sort === 'Most liked'
+    ? right.likes - left.likes
+    : new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime())
 
   return (
     <div className="app-content-width">
       <AppPageHeader eyebrow="YOUR iCONNECT HOME" title="Your home" description="A little of what your people are sharing." />
       <div className="feed-welcome-callout"><span className="welcome-icon"><Heart size={17} /></span><span><strong>Welcome, {profile?.name.split(' ')[0] ?? 'friend'}.</strong> Here’s what your people are sharing.</span><Link to="/app/profile">Your profile →</Link></div>
-      <section className="stories-panel">
-        <div className="panel-title-row"><div><h2>Your circles</h2><p>Little updates from your people</p></div><Link to="/app/connect">Find people <span>→</span></Link></div>
-        <div className="story-list">
-          <Link to="/app/create" className="story-bubble story-create"><span className="story-avatar"><Avatar person={viewer} /><i>+</i></span><span>Your story</span></Link>
-          {storyPeople.map((person, index) => <button type="button" className="story-bubble" key={person.name} onClick={() => setStoryIndex(index)}><span className={`story-avatar story-ring ring-${index + 1}`}><Avatar person={person} /></span><span>{person.name}</span><small>{person.note}</small></button>)}
-        </div>
-      </section>
       <div className="feed-layout-grid">
         <section className="feed-main-column">
           <Link to="/app/social" className="quick-compose">
@@ -223,12 +177,16 @@ export default function FeedPage() {
             <div className="feed-filters" role="tablist" aria-label="Feed filter">{filters.map((item) => <button type="button" role="tab" aria-selected={filter === item} className={filter === item ? 'feed-filter-active' : ''} onClick={() => setFilter(item)} key={item}>{item}</button>)}</div>
             <button type="button" className="feed-sort" onClick={() => setSort((current) => current === 'Recent' ? 'Most liked' : 'Recent')} aria-label={`Sort by ${sort === 'Recent' ? 'most liked' : 'recent'}`}><TrendingUp size={15} /> {sort}</button>
           </div>
-          <div className="demo-feed-note"><span className="demo-indicator" /> Published text updates are saved to your account · Other feed content is illustrative</div>
+          <div className="feed-account-note">Posts, likes, replies, and saved posts are connected to your account.</div>
           {feedError && <p className="feed-interaction-notice feed-error" role="alert">{feedError}</p>}
-          {notice && <p className="feed-interaction-notice" role="status">{notice}{undoPostId && <button type="button" onClick={undoHide}>Undo</button>}</p>}
-          {visiblePosts.length
-            ? visiblePosts.map((post) => <FeedPost key={post.id} post={post} state={feedState} updateState={updateState} announce={announce} sharePost={sharePost} hidePost={hidePost} onLike={toggleSocialLike} liking={likingPostIds.includes(post.id)} />)
-            : <section className="feed-empty-state"><h2>{filter === 'Following' ? 'Your circle is just getting started.' : 'No posts in this view yet.'}</h2><p>{filter === 'Following' ? 'Follow people in Connect and their posts will show up here.' : 'Try another feed or discover more communities.'}</p><button type="button" className="app-primary-button" onClick={() => filter === 'Following' ? navigate('/app/connect') : setFilter('For you')}>{filter === 'Following' ? 'Find people' : 'Show all posts'}</button></section>}
+          {notice && <p className="feed-interaction-notice" role="status">{notice}</p>}
+          {loadingPosts
+            ? <p className="inbox-empty-state">Loading posts…</p>
+            : feedLoadError
+              ? <section className="feed-empty-state"><h2>Posts couldn’t be loaded.</h2><p>{feedLoadError}</p><button type="button" className="app-primary-button" onClick={() => setRetryFeedLoad((current) => current + 1)}>Try again</button></section>
+            : visiblePosts.length
+              ? visiblePosts.map((post) => <FeedPost key={post.id} post={post} sharePost={sharePost} onLike={toggleSocialLike} liking={likingPostIds.includes(post.id)} onBookmark={toggleSocialBookmark} bookmarking={bookmarkingPostIds.includes(post.id)} />)
+              : <section className="feed-empty-state"><h2>{filter === 'Following' ? 'Your circle is just getting started.' : filter === 'Saved' ? 'No saved posts yet.' : 'No posts in your feed yet.'}</h2><p>{filter === 'Following' ? 'Follow people in Connect and their posts will show up here.' : filter === 'Saved' ? 'Save a post and it will be waiting here.' : 'When you or people you follow share a post, it will appear here.'}</p><button type="button" className="app-primary-button" onClick={() => filter === 'Following' ? navigate('/app/connect') : filter === 'Saved' ? setFilter('For you') : navigate('/app/social')}>{filter === 'Following' ? 'Find people' : filter === 'Saved' ? 'Show all posts' : 'Write a post'}</button></section>}
         </section>
         <aside className="feed-right-column">
           <section className="side-widget daily-prompt">
@@ -238,17 +196,16 @@ export default function FeedPage() {
             <div className="prompt-decoration">“</div>
           </section>
           <section className="side-widget community-widget">
-            <div className="widget-heading"><div><span className="widget-eyebrow">YOUR CORNERS</span><h3>Spaces to wander into</h3></div><Link to="/app/connect" aria-label="Browse communities">→</Link></div>
-            <Link to="/app/connect" className="mini-community"><span className="mini-community-icon mini-green">↗</span><span><strong>Outside, eventually</strong><small>For the long way home</small></span><span className="mini-arrow">↗</span></Link>
-            <Link to="/app/connect" className="mini-community"><span className="mini-community-icon mini-purple">▤</span><span><strong>The reading nook</strong><small>Readers welcome</small></span><span className="mini-arrow">↗</span></Link>
-            <Link to="/app/connect" className="mini-community"><span className="mini-community-icon mini-peach">♫</span><span><strong>Currently on repeat</strong><small>What are you listening to?</small></span><span className="mini-arrow">↗</span></Link>
-            <Link to="/app/connect" className="widget-footer-link">Explore all communities <span>→</span></Link>
+            <div className="widget-heading"><div><span className="widget-eyebrow">YOUR CIRCLE</span><h3>People you follow</h3></div><Link to="/app/connect" aria-label="Find people to follow">→</Link></div>
+            {loadingFollowedPeople && <p className="inbox-empty-state">Loading your circle…</p>}
+            {!loadingFollowedPeople && followedPeopleError && <p className="inbox-empty-state" role="alert">{followedPeopleError}</p>}
+            {!loadingFollowedPeople && !followedPeopleError && followedPeople.length === 0 && <p className="inbox-empty-state">Follow people in Connect to see their posts here.</p>}
+            {followedPeople.slice(0, 3).map((person) => <Link to="/app/connect" state={{ activeTab: 'People', search: person.name }} className="mini-community" key={person.id}><Avatar person={person} /><span><strong>{person.name}</strong><small>@{person.username}</small></span><span className="mini-arrow">↗</span></Link>)}
+            <Link to="/app/connect" className="widget-footer-link">Find people <span>→</span></Link>
           </section>
-          <div className="side-preview-note">Text posts and likes are connected to your account.<br />Other social features remain a preview.</div>
         </aside>
       </div>
       <div className="mobile-compose-button"><Link to="/app/create"><Image size={17} /> Share a moment</Link></div>
-      {storyIndex !== null && <StoryViewer person={storyPeople[storyIndex]} index={storyIndex} total={storyPeople.length} onClose={closeStory} onPrevious={previousStory} onNext={nextStory} />}
     </div>
   )
 }

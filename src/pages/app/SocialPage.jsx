@@ -1,55 +1,53 @@
 import React, { useEffect, useState } from 'react'
-import { ArrowUpRight, Heart, MessageCircle, PenLine, Repeat2, Send, ShieldCheck } from 'lucide-react'
-import { Link } from 'react-router-dom'
+import { ArrowUpRight, Heart, MessageCircle, PenLine, Send } from 'lucide-react'
+import { Link, useNavigate } from 'react-router-dom'
 import AppPageHeader from '../../components/AppPageHeader.jsx'
 import Avatar from '../../components/Avatar.jsx'
-import { demoPosts } from '../../data/demoContent.js'
-import { demoAvatar, getDemoProfile } from '../../utils/demoAccount.js'
-import { getDemoAdminSettings } from '../../utils/demoAdmin.js'
-import { emptyDemoFeedState, readDemoFeedState, writeDemoFeedState } from '../../utils/demoFeed.js'
-import { createSocialPost, getSocialPosts, setSocialPostLike } from '../../utils/socialApi.js'
+import { getDemoProfile } from '../../utils/demoAccount.js'
+import { openConversation } from '../../utils/messageApi.js'
+import { createSocialPost, getSocialPosts, resolveFeedImageUrl, setSocialPostLike } from '../../utils/socialApi.js'
 
 export default function SocialPage() {
   const profile = getDemoProfile()
-  const author = { name: profile?.name ?? 'Taylor Reed', image: profile?.avatar ?? demoAvatar }
-  const [feedState, setFeedState] = useState(emptyDemoFeedState)
+  const author = { name: profile?.name ?? 'You', image: profile?.avatar ?? '' }
   const [socialPosts, setSocialPosts] = useState([])
+  const [loadingPosts, setLoadingPosts] = useState(true)
+  const [loadError, setLoadError] = useState('')
+  const [retryLoad, setRetryLoad] = useState(0)
   const [caption, setCaption] = useState('')
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
-  const [enabled, setEnabled] = useState(true)
   const [publishing, setPublishing] = useState(false)
   const [likingPostIds, setLikingPostIds] = useState([])
+  const [messagingAuthorIds, setMessagingAuthorIds] = useState([])
+  const navigate = useNavigate()
 
   useEffect(() => {
-    try {
-      setFeedState(readDemoFeedState())
-      setEnabled(getDemoAdminSettings().socialEnabled)
-    } catch (loadError) {
-      setError(loadError instanceof Error ? loadError.message : 'Could not load local social preview.')
-    }
+    let active = true
+    setLoadingPosts(true)
+    setLoadError('')
     getSocialPosts()
-      .then(setSocialPosts)
-      .catch((loadError) => setError(loadError instanceof Error ? loadError.message : 'Could not load published posts.'))
-  }, [])
-
-  function saveState(nextState, message = '') {
-    try {
-      writeDemoFeedState(nextState)
-      setFeedState(nextState)
-      setError('')
-      setNotice(message)
-    } catch (saveError) {
-      setError(saveError instanceof Error ? saveError.message : 'Could not save this browser demo action.')
-    }
-  }
+      .then((posts) => {
+        if (active) {
+          setSocialPosts(posts)
+          setError('')
+        }
+      })
+      .catch((loadError) => {
+        if (active) {
+          const message = loadError instanceof Error ? loadError.message : 'Could not load published posts.'
+          setLoadError(message)
+          setError(message)
+        }
+      })
+      .finally(() => {
+        if (active) setLoadingPosts(false)
+      })
+    return () => { active = false }
+  }, [retryLoad])
 
   async function publishTextPost(event) {
     event.preventDefault()
-    if (!enabled) {
-      setError('Social posting is disabled by the local admin demo setting.')
-      return
-    }
     if (!caption.trim()) {
       setError('Write a short update before posting.')
       return
@@ -82,40 +80,50 @@ export default function SocialPage() {
     }
   }
 
-  function toggleList(post, key, message) {
-    const list = feedState[key] ?? []
-    const updatedList = list.includes(post.id) ? list.filter((id) => id !== post.id) : [...list, post.id]
-    saveState({ ...feedState, [key]: updatedList }, message)
+  async function messageAuthor(post) {
+    if (messagingAuthorIds.includes(post.authorId)) return
+    setMessagingAuthorIds((current) => [...current, post.authorId])
+    try {
+      const conversationId = await openConversation(post.authorId)
+      navigate('/app/chat', { state: { conversationId } })
+    } catch (messageError) {
+      setError(messageError instanceof Error ? messageError.message : 'Could not open this conversation.')
+    } finally {
+      setMessagingAuthorIds((current) => current.filter((id) => id !== post.authorId))
+    }
   }
 
   async function sharePost(post) {
     const url = `${window.location.origin}/app/post/${post.id}`
     try {
-      if (navigator.share) await navigator.share({ title: `Update by ${post.name}`, text: post.text, url })
-      else if (navigator.clipboard?.writeText) await navigator.clipboard.writeText(url)
-      else {
+      if (navigator.share) {
+        await navigator.share({ title: `Update by ${post.name}`, text: post.text, url })
+      } else if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(url)
+      } else {
         setNotice(`Copy this post link: ${url}`)
         return
       }
-      setNotice(post.isPersistent ? 'Link shared.' : 'Link shared. This preview post remains local to this demo.')
+      setNotice('Post link shared.')
     } catch (shareError) {
       if (shareError instanceof DOMException && shareError.name === 'AbortError') return
       setError('Could not share the post. Copy its URL from your browser address bar.')
     }
   }
 
-  const posts = [...socialPosts, ...feedState.posts, ...demoPosts].filter((post) => !feedState.hiddenPostIds.includes(post.id))
+  const isOwnPost = (post) => post.handle === `@${profile?.username}`
 
   return (
     <div className="app-content-width social-page">
-      <AppPageHeader eyebrow="ICONNECT SOCIAL · PREVIEW" title="Short updates, real conversations." description="A text-first social feed concept inspired by familiar microblogging patterns." />
-      <div className="social-preview-banner"><ShieldCheck size={16} /><span>Your text updates, likes, and replies are saved to your account. Sample posts and reposts are preview content; photo and video uploads are not connected yet.</span></div>
+      <AppPageHeader eyebrow="ICONNECT SOCIAL" title="Short updates, real conversations." description="Share a text update, join the conversation, or message someone privately." />
       {error && <p className="feed-interaction-notice feed-error" role="alert">{error}</p>}
       {notice && <p className="feed-interaction-notice" role="status">{notice}</p>}
-      {!enabled && <p className="money-disabled-note">Social features are disabled by the local admin demo setting.</p>}
-      <section className="social-compose-card"><Avatar person={author} /><form onSubmit={publishTextPost}><textarea value={caption} onChange={(event) => { setCaption(event.target.value); setError('') }} placeholder="What’s happening in your corner?" maxLength={280} rows={3} disabled={!enabled || publishing} aria-label="Write a short update" /><div><span>{caption.length}/280</span><button type="submit" className="app-primary-button" disabled={!enabled || publishing || !caption.trim()}><PenLine size={14} /> {publishing ? 'Posting…' : 'Post update'}</button></div></form></section>
-      <div className="social-feed-toolbar"><div><span className="app-page-eyebrow">YOUR FEED</span><h2>Latest updates</h2></div><Link to="/app/create">Add a photo or video <ArrowUpRight size={14} /></Link></div>
-      <section className="social-post-list">{posts.map((post) => { const liked = post.isPersistent ? post.likedByMe : feedState.likedPostIds.includes(post.id); const reposted = (feedState.repostedPostIds ?? []).includes(post.id); return <article className="social-post-card" key={post.id}><Avatar person={{ name: post.name, image: post.avatar }} /><div className="social-post-body"><div className="social-post-author"><strong>{post.name}</strong><span>{post.handle} · {post.time === 'just now' ? 'just now' : `${post.time} ago`}</span></div><p>{post.text}</p>{post.image && <Link to={`/app/post/${post.id}`} className="social-post-media">{post.mediaType === 'video' ? <video src={post.image} controls playsInline preload="metadata" /> : <img src={post.image.startsWith('data:') ? post.image : `https://images.unsplash.com/${post.image}?auto=format&fit=crop&w=800&q=80`} alt="" loading="lazy" />}</Link>}<div className="social-post-actions"><button type="button" className={liked ? 'is-liked' : ''} onClick={() => post.isPersistent ? toggleLike(post) : toggleList(post, 'likedPostIds', liked ? 'Like removed.' : 'Update liked in this browser.')} aria-pressed={liked} disabled={post.isPersistent && likingPostIds.includes(post.id)}><Heart size={15} fill={liked ? 'currentColor' : 'none'} /> {post.likes + Number(!post.isPersistent && liked)}</button><Link to={`/app/post/${post.id}`}><MessageCircle size={15} /> {post.comments + (!post.isPersistent ? feedState.replies[post.id]?.length ?? 0 : 0)} replies</Link><button type="button" className={reposted ? 'is-reposted' : ''} onClick={() => toggleList(post, 'repostedPostIds', reposted ? 'Repost removed from this demo.' : 'Repost saved in this browser.')} aria-pressed={reposted}><Repeat2 size={15} /> {reposted ? 'Reposted' : 'Repost'}</button><button type="button" onClick={() => sharePost(post)}><Send size={14} /> Share</button></div></div></article>})}</section>
+      <section className="social-compose-card"><Avatar person={author} /><form onSubmit={publishTextPost}><textarea value={caption} onChange={(event) => { setCaption(event.target.value); setError('') }} placeholder="What’s happening in your corner?" maxLength={500} rows={3} disabled={publishing} aria-label="Write a short update" /><div><span>{caption.length}/500</span><button type="submit" className="app-primary-button" disabled={publishing || !caption.trim()}><PenLine size={14} /> {publishing ? 'Posting…' : 'Post update'}</button></div></form></section>
+      <div className="social-feed-toolbar"><div><span className="app-page-eyebrow">YOUR FEED</span><h2>Latest updates</h2></div><Link to="/app/create">Create a post <ArrowUpRight size={14} /></Link></div>
+      {loadingPosts && <p className="inbox-empty-state">Loading posts…</p>}
+      {!loadingPosts && loadError && <section className="feed-empty-state"><h2>Posts couldn’t be loaded.</h2><p>{loadError}</p><button type="button" className="app-primary-button" onClick={() => setRetryLoad((current) => current + 1)}>Try again</button></section>}
+      {!loadingPosts && !loadError && !socialPosts.length && <section className="feed-empty-state"><h2>No updates yet.</h2><p>Be the first to share something with your community.</p></section>}
+      {!loadingPosts && !loadError && <section className="social-post-list">{socialPosts.map((post) => <article className="social-post-card" key={post.id}><Avatar person={{ name: post.name, image: post.avatar }} /><div className="social-post-body"><div className="social-post-author"><strong>{post.name}</strong><span>{post.handle} · {post.time === 'just now' ? 'just now' : `${post.time} ago`}</span></div><p>{post.text}</p>{post.images?.length > 0 && <div className="social-post-photo-grid">{post.images.map((image, index) => <img key={`${image}-${index}`} src={resolveFeedImageUrl(image)} alt={`Photo ${index + 1} shared by ${post.name}`} loading="lazy" />)}</div>}<div className="social-post-actions"><button type="button" className={post.likedByMe ? 'is-liked' : ''} onClick={() => toggleLike(post)} aria-pressed={post.likedByMe} disabled={likingPostIds.includes(post.id)}><Heart size={15} fill={post.likedByMe ? 'currentColor' : 'none'} /> {post.likes}</button><Link to={`/app/post/${post.id}`}><MessageCircle size={15} /> {post.comments} replies</Link>{!isOwnPost(post) && <button type="button" onClick={() => messageAuthor(post)} disabled={messagingAuthorIds.includes(post.authorId)}><MessageCircle size={15} /> {messagingAuthorIds.includes(post.authorId) ? 'Opening…' : 'Message'}</button>}<button type="button" onClick={() => sharePost(post)}><Send size={14} /> Share</button></div></div></article>)}</section>}
     </div>
   )
 }

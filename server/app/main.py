@@ -1,6 +1,8 @@
+import asyncio
 import html
 import json
 import logging
+import os
 import re
 import threading
 import time
@@ -9,12 +11,16 @@ import urllib.request
 from collections import defaultdict, deque
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
+from io import BytesIO
 from pathlib import Path
 from typing import Any, Callable, Deque, Dict, List, Literal, Optional
-from uuid import UUID
+from urllib.parse import urlsplit
+from uuid import UUID, uuid4
 from fastapi import Depends, FastAPI, Query, Request, Response
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
+from PIL import Image, ImageOps, UnidentifiedImageError
+from PIL.Image import DecompressionBombError
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from psycopg.rows import dict_row
 from psycopg_pool import ConnectionPool
@@ -41,6 +47,12 @@ SOCIAL_WINDOW_SECONDS = 15 * 60
 SOCIAL_REQUEST_LIMIT = 60
 MESSAGE_WINDOW_SECONDS = 15 * 60
 MESSAGE_REQUEST_LIMIT = 120
+MEDIA_UPLOAD_WINDOW_SECONDS = 15 * 60
+MEDIA_UPLOAD_REQUEST_LIMIT = 30
+MAX_IMAGE_BYTES = 4 * 1024 * 1024
+MAX_IMAGE_PIXELS = 20_000_000
+MAX_IMAGES_PER_RECORD = 5
+DEFAULT_MEDIA_DIRECTORY = Path(__file__).resolve().parents[2] / "uploads"
 MIGRATION_PATH = Path(__file__).resolve().parents[1] / "migrations" / "001_initial.sql"
 
 
@@ -154,6 +166,7 @@ class ProfileInput(StrictModel):
 
 class SocialPostInput(StrictModel):
     text: str = Field(min_length=1, max_length=500)
+    image_urls: List[str] = Field(default_factory=list, max_length=MAX_IMAGES_PER_RECORD)
 
     @field_validator("text")
     @classmethod
@@ -162,6 +175,11 @@ class SocialPostInput(StrictModel):
         if not value:
             raise ValueError("Post text is required.")
         return value
+
+    @field_validator("image_urls")
+    @classmethod
+    def valid_image_urls(cls, values: List[str]) -> List[str]:
+        return validate_image_urls(values)
 
 
 class SocialCommentInput(StrictModel):
@@ -178,6 +196,112 @@ class SocialCommentInput(StrictModel):
 
 class SocialLikeInput(StrictModel):
     liked: bool
+
+
+class SocialBookmarkInput(StrictModel):
+    bookmarked: bool
+
+
+class MarketplaceProductInput(StrictModel):
+    name: str = Field(min_length=1, max_length=120)
+    category: Literal["Style", "Tech", "Home", "Other"]
+    price: int = Field(ge=1, le=1_000_000_000)
+    stock: int = Field(ge=0, le=1_000_000)
+    description: str = Field(min_length=1, max_length=2000)
+    image_url: Optional[str] = Field(default=None, max_length=2048)
+    image_urls: List[str] = Field(default_factory=list, max_length=MAX_IMAGES_PER_RECORD)
+
+    @field_validator("name", "description")
+    @classmethod
+    def clean_listing_text(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("Product name and description are required.")
+        return value
+
+    @field_validator("image_url")
+    @classmethod
+    def valid_image_url(cls, value: Optional[str]) -> Optional[str]:
+        if value is None or not value.strip():
+            return None
+        value = value.strip()
+        parsed = urlsplit(value)
+        if parsed.scheme != "https" or not parsed.netloc:
+            raise ValueError("Product images must use an https URL.")
+        return value
+
+    @field_validator("image_urls")
+    @classmethod
+    def valid_image_urls(cls, values: List[str]) -> List[str]:
+        return validate_image_urls(values)
+
+
+def validate_image_urls(values: List[str]) -> List[str]:
+    if len(values) > MAX_IMAGES_PER_RECORD:
+        raise ValueError("Choose no more than five images.")
+    cleaned = []
+    for value in values:
+        value = value.strip()
+        if not value or len(value) > 2048:
+            raise ValueError("Image URL is invalid.")
+        if value.startswith("/api/media/images/"):
+            filename = value.rsplit("/", 1)[-1]
+            if not re.fullmatch(r"[a-f0-9]{32}\.webp", filename):
+                raise ValueError("Uploaded image URL is invalid.")
+        else:
+            parsed = urlsplit(value)
+            if parsed.scheme != "https" or not parsed.netloc:
+                raise ValueError("Images must use an uploaded image or https URL.")
+        cleaned.append(value)
+    if len(set(cleaned)) != len(cleaned):
+        raise ValueError("Image URLs must be unique.")
+    return cleaned
+
+
+class LocalMarketplaceListingInput(StrictModel):
+    category: Literal["Homes", "Services", "Farm"]
+    title: str = Field(min_length=1, max_length=120)
+    price: str = Field(min_length=1, max_length=80)
+    location: str = Field(min_length=1, max_length=120)
+    detail: str = Field(min_length=1, max_length=280)
+    description: str = Field(min_length=1, max_length=2000)
+    image_url: Optional[str] = Field(default=None, max_length=2048)
+
+    @field_validator("title", "price", "location", "detail", "description")
+    @classmethod
+    def clean_listing_text(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("Listing details are required.")
+        return value
+
+    @field_validator("image_url")
+    @classmethod
+    def valid_image_url(cls, value: Optional[str]) -> Optional[str]:
+        if value is None or not value.strip():
+            return None
+        value = value.strip()
+        parsed = urlsplit(value)
+        if parsed.scheme != "https" or not parsed.netloc:
+            raise ValueError("Listing images must use an https URL.")
+        return value
+
+
+class CommunityInput(StrictModel):
+    name: str = Field(min_length=1, max_length=80)
+    description: str = Field(min_length=1, max_length=500)
+
+    @field_validator("name", "description")
+    @classmethod
+    def clean_community_text(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("Community name and description are required.")
+        return value
+
+
+class CommunityMembershipInput(StrictModel):
+    joined: bool
 
 
 class DirectConversationInput(StrictModel):
@@ -275,16 +399,50 @@ def _send_otp_email(
         raise RuntimeError("Email delivery is not configured.")
 
     safe_name = html.escape(name)
+    email_html = """<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Your iConnect verification code</title>
+  </head>
+  <body style="margin:0;padding:0;background:#f4f4ef;font-family:Arial,Helvetica,sans-serif;color:#292b25;">
+    <div style="display:none;max-height:0;overflow:hidden;opacity:0;">Your iConnect sign-in code is inside. It expires in 10 minutes.</div>
+    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#f4f4ef;padding:32px 12px;">
+      <tr><td align="center">
+        <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width:520px;background:#fffefa;border:1px solid #e8e8df;border-radius:16px;overflow:hidden;">
+          <tr><td style="padding:25px 32px;background:#25271f;color:#fffefa;">
+            <div style="font-size:21px;font-weight:700;letter-spacing:-.5px;">iConnect<span style="color:#c6d89b;">.</span></div>
+            <div style="padding-top:6px;color:#d4d5ca;font-size:12px;">A little more connection.</div>
+          </td></tr>
+          <tr><td style="padding:34px 32px 18px;">
+            <div style="color:#788653;font-size:11px;font-weight:700;letter-spacing:1.5px;">EMAIL VERIFICATION</div>
+            <h1 style="margin:12px 0 10px;font-size:25px;line-height:1.25;color:#292b25;">You’re almost home, {name}.</h1>
+            <p style="margin:0;color:#66685e;font-size:15px;line-height:1.65;">Enter this one-time code to verify your email and finish setting up your iConnect account.</p>
+          </td></tr>
+          <tr><td style="padding:10px 32px 18px;">
+            <div style="padding:21px 12px;border:1px solid #e5e9d8;border-radius:12px;background:#f5f7ee;text-align:center;">
+              <div style="color:#77796e;font-size:10px;font-weight:700;letter-spacing:1.6px;">YOUR VERIFICATION CODE</div>
+              <div style="padding-top:10px;color:#34382b;font-size:34px;font-weight:700;letter-spacing:9px;">{code}</div>
+            </div>
+          </td></tr>
+          <tr><td style="padding:0 32px 30px;">
+            <p style="margin:0;color:#77796e;font-size:13px;line-height:1.65;"><strong style="color:#494b43;">This code expires in 10 minutes.</strong><br>If you didn’t request it, you can safely ignore this email. Never share your code with anyone.</p>
+          </td></tr>
+          <tr><td style="padding:18px 32px;border-top:1px solid #eeeee7;background:#fafaf6;color:#85867d;font-size:11px;line-height:1.6;">
+            Sent by iConnect to verify your email address.<br>iConnect · Social, made a little more human
+          </td></tr>
+        </table>
+      </td></tr>
+    </table>
+  </body>
+</html>""".format(name=safe_name, code=html.escape(code))
     payload = json.dumps({
         "from": settings.email_from,
         "to": [email],
         "subject": "Your iConnect verification code",
         "text": "Hi {}, your iConnect verification code is {}. It expires in 10 minutes.".format(name, code),
-        "html": (
-            "<p>Hi {},</p><p>Your iConnect verification code is:</p>"
-            '<p style="font-size:28px;font-weight:bold;letter-spacing:8px">{}</p>'
-            "<p>This code expires in 10 minutes. If you did not request it, you can ignore this email.</p>"
-        ).format(safe_name, code),
+        "html": email_html,
     }).encode("utf-8")
     request = urllib.request.Request(
         "https://api.resend.com/emails",
@@ -309,6 +467,7 @@ def create_app(
     pool: Optional[Any] = None,
     send_otp_email: Optional[Callable[[str, str, str], None]] = None,
     logger: logging.Logger = LOGGER,
+    media_directory: Optional[Path] = None,
 ) -> FastAPI:
     settings = settings or load_settings()
     owns_pool = pool is None
@@ -329,6 +488,17 @@ def create_app(
     social_rate_limit_lock = threading.Lock()
     message_rate_limit_state: Dict[str, Deque[float]] = defaultdict(deque)
     message_rate_limit_lock = threading.Lock()
+    media_upload_rate_limit_state: Dict[str, Deque[float]] = defaultdict(deque)
+    media_upload_rate_limit_lock = threading.Lock()
+    configured_media_directory = media_directory or Path(os.getenv(
+        "ICONNECT_MEDIA_DIR",
+        str(DEFAULT_MEDIA_DIRECTORY),
+    )).expanduser()
+    uploads_directory = (
+        configured_media_directory
+        if configured_media_directory.is_absolute()
+        else DEFAULT_MEDIA_DIRECTORY.parent / configured_media_directory
+    )
     cookie_name = "__Host-iconnect.sid" if settings.production else "iconnect.sid"
 
     @asynccontextmanager
@@ -399,7 +569,12 @@ def create_app(
         content_length = request.headers.get("content-length")
         if content_length:
             try:
-                if int(content_length) > MAX_REQUEST_BYTES:
+                body_limit = (
+                    MAX_IMAGE_BYTES
+                    if request.url.path == "/api/media/images"
+                    else MAX_REQUEST_BYTES
+                )
+                if int(content_length) > body_limit:
                     return JSONResponse(
                         status_code=413,
                         content={"error": {"code": "request_too_large", "message": "The request body is too large."}},
@@ -410,7 +585,8 @@ def create_app(
                     content={"error": {"code": "invalid_input", "message": "Check the information and try again."}},
                 )
         response = await call_next(request)
-        response.headers["Cache-Control"] = "no-store"
+        if "Cache-Control" not in response.headers:
+            response.headers["Cache-Control"] = "no-store"
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["X-Frame-Options"] = "DENY"
         response.headers["Referrer-Policy"] = "no-referrer"
@@ -478,26 +654,51 @@ def create_app(
                 )
             attempts.append(now)
 
+    def enforce_media_upload_rate_limit(request: Request) -> None:
+        forwarded_for = request.headers.get("x-forwarded-for", "")
+        client_ip = (
+            forwarded_for.split(",")[0].strip()
+            if settings.trust_proxy and forwarded_for
+            else request.client.host if request.client else "unknown"
+        )
+        now = time.monotonic()
+        with media_upload_rate_limit_lock:
+            attempts = media_upload_rate_limit_state[client_ip]
+            while attempts and now - attempts[0] >= MEDIA_UPLOAD_WINDOW_SECONDS:
+                attempts.popleft()
+            if len(attempts) >= MEDIA_UPLOAD_REQUEST_LIMIT:
+                raise ApiError(
+                    429,
+                    "rate_limited",
+                    "Too many image uploads. Please try again later.",
+                )
+            attempts.append(now)
+
     def social_post(connection: Any, post_id: Any, viewer_id: Any) -> Optional[Dict[str, Any]]:
         return connection.execute(
-            """SELECT p.id, p.body, p.created_at,
+            """SELECT p.id, p.body, p.image_urls, p.created_at,
                       u.id AS author_id, u.display_name, u.username,
                       (SELECT count(*) FROM social_post_likes l WHERE l.post_id = p.id) AS like_count,
                       (SELECT count(*) FROM social_post_comments c WHERE c.post_id = p.id) AS comment_count,
                       EXISTS (
                           SELECT 1 FROM social_post_likes mine
                           WHERE mine.post_id = p.id AND mine.user_id = %s
-                      ) AS liked_by_me
+                      ) AS liked_by_me,
+                      EXISTS (
+                          SELECT 1 FROM social_post_bookmarks mine
+                          WHERE mine.post_id = p.id AND mine.user_id = %s
+                      ) AS bookmarked_by_me
                FROM social_posts p
                JOIN users u ON u.id = p.user_id
                WHERE p.id = %s""",
-            (viewer_id, post_id),
+            (viewer_id, viewer_id, post_id),
         ).fetchone()
 
     def public_social_post(row: Dict[str, Any]) -> Dict[str, Any]:
         return {
             "id": str(row["id"]),
             "text": row["body"],
+            "imageUrls": row.get("image_urls") or [],
             "createdAt": row["created_at"].isoformat(),
             "author": {
                 "id": str(row["author_id"]),
@@ -507,6 +708,7 @@ def create_app(
             "likeCount": int(row["like_count"]),
             "commentCount": int(row["comment_count"]),
             "likedByMe": bool(row["liked_by_me"]),
+            "bookmarkedByMe": bool(row["bookmarked_by_me"]),
         }
 
     def public_social_comment(row: Dict[str, Any]) -> Dict[str, Any]:
@@ -520,6 +722,66 @@ def create_app(
                 "username": row["username"],
             },
         }
+
+    def public_marketplace_product(row: Dict[str, Any]) -> Dict[str, Any]:
+        return {
+            "id": str(row["id"]),
+            "name": row["name"],
+            "category": row["category"],
+            "price": int(row["price"]),
+            "stock": int(row["stock"]),
+            "description": row["description"],
+            "imageUrl": (row.get("image_urls") or [row["image_url"]])[0],
+            "imageUrls": row.get("image_urls") or ([row["image_url"]] if row["image_url"] else []),
+            "createdAt": row["created_at"].isoformat(),
+            "seller": {
+                "id": str(row["seller_id"]),
+                "name": row["seller_name"],
+                "username": row["seller_username"],
+            },
+        }
+
+    def public_local_marketplace_listing(row: Dict[str, Any]) -> Dict[str, Any]:
+        return {
+            "id": str(row["id"]),
+            "category": row["category"],
+            "title": row["title"],
+            "price": row["price"],
+            "location": row["location"],
+            "detail": row["detail"],
+            "description": row["description"],
+            "imageUrl": row["image_url"],
+            "createdAt": row["created_at"].isoformat(),
+            "seller": {
+                "id": str(row["seller_id"]),
+                "name": row["seller_name"],
+                "username": row["seller_username"],
+            },
+        }
+
+    def public_community(row: Dict[str, Any]) -> Dict[str, Any]:
+        return {
+            "id": str(row["id"]),
+            "name": row["name"],
+            "description": row["description"],
+            "memberCount": int(row["member_count"]),
+            "joinedByMe": bool(row["joined_by_me"]),
+            "createdAt": row["created_at"].isoformat(),
+        }
+
+    def community_record(connection: Any, community_id: UUID, viewer_id: Any) -> Optional[Dict[str, Any]]:
+        return connection.execute(
+            """SELECT c.id, c.name, c.description, c.created_at,
+                      (SELECT count(*) FROM community_memberships members
+                       WHERE members.community_id = c.id) AS member_count,
+                      EXISTS (
+                          SELECT 1 FROM community_memberships mine
+                          WHERE mine.community_id = c.id AND mine.user_id = %s
+                      ) AS joined_by_me
+               FROM communities c
+               WHERE c.id = %s""",
+            (viewer_id, community_id),
+        ).fetchone()
 
     def public_direct_message(row: Dict[str, Any], viewer_id: Any) -> Dict[str, Any]:
         return {
@@ -648,6 +910,88 @@ def create_app(
             raise ApiError(401, "not_authenticated", "Sign in to continue.")
         return user
 
+    def require_admin(request: Request) -> Dict[str, Any]:
+        user = require_user(request)
+        if user["email"].strip().lower() not in settings.admin_emails:
+            raise ApiError(403, "admin_required", "This account is not authorized to access admin tools.")
+        return user
+
+    @app.post("/api/media/images", status_code=201)
+    async def upload_image(
+        request: Request,
+        user: Dict[str, Any] = Depends(require_user),
+    ) -> Dict[str, str]:
+        enforce_media_upload_rate_limit(request)
+        media_type = request.headers.get("content-type", "").split(";", 1)[0].strip().lower()
+        formats = {
+            "image/jpeg": "JPEG",
+            "image/png": "PNG",
+            "image/webp": "WEBP",
+        }
+        expected_format = formats.get(media_type)
+        if not expected_format:
+            raise ApiError(400, "invalid_image", "Choose a JPEG, PNG, or WebP image.")
+
+        content = bytearray()
+        async for chunk in request.stream():
+            content.extend(chunk)
+            if len(content) > MAX_IMAGE_BYTES:
+                raise ApiError(413, "image_too_large", "Each image must be 4 MB or smaller.")
+        try:
+            original_bytes = bytes(content)
+            source = Image.open(BytesIO(original_bytes))
+            if source.format != expected_format:
+                raise ApiError(400, "invalid_image", "The uploaded image does not match its content type.")
+            if source.width * source.height > MAX_IMAGE_PIXELS:
+                raise ApiError(400, "invalid_image", "Images must be 20 megapixels or smaller.")
+            source.verify()
+
+            source = Image.open(BytesIO(original_bytes))
+            source.load()
+            source = ImageOps.exif_transpose(source)
+            source.thumbnail((1920, 1920), Image.Resampling.LANCZOS)
+            has_alpha = "A" in source.getbands() or "transparency" in source.info
+            normalized = source.convert("RGBA" if has_alpha else "RGB")
+            output = BytesIO()
+            normalized.save(output, format="WEBP", quality=82, method=5)
+            image_bytes = output.getvalue()
+            if len(image_bytes) > MAX_IMAGE_BYTES:
+                source = Image.open(BytesIO(original_bytes))
+                source.thumbnail((1280, 1280), Image.Resampling.LANCZOS)
+                normalized = source.convert("RGBA" if has_alpha else "RGB")
+                output = BytesIO()
+                normalized.save(output, format="WEBP", quality=70, method=5)
+                image_bytes = output.getvalue()
+            if len(image_bytes) > MAX_IMAGE_BYTES:
+                raise ApiError(413, "image_too_large", "The optimized image is still larger than 4 MB.")
+        except ApiError:
+            raise
+        except (UnidentifiedImageError, OSError, DecompressionBombError) as error:
+            raise ApiError(400, "invalid_image", "The uploaded file is not a valid supported image.") from error
+
+        filename = uuid4().hex + ".webp"
+        try:
+            await asyncio.to_thread(uploads_directory.mkdir, parents=True, exist_ok=True)
+            await asyncio.to_thread((uploads_directory / filename).write_bytes, image_bytes)
+        except OSError as error:
+            logger.exception("Could not save an uploaded image for user %s", user["id"])
+            raise ApiError(500, "media_unavailable", "The image could not be saved. Try again later.") from error
+        return {"url": "/api/media/images/{}".format(filename)}
+
+    @app.get("/api/media/images/{filename}")
+    def get_uploaded_image(filename: str, request: Request) -> Response:
+        require_user(request)
+        if not re.fullmatch(r"[a-f0-9]{32}\.webp", filename):
+            raise ApiError(404, "image_not_found", "That image could not be found.")
+        image_path = uploads_directory / filename
+        if not image_path.is_file():
+            raise ApiError(404, "image_not_found", "That image could not be found.")
+        return FileResponse(
+            image_path,
+            media_type="image/webp",
+            headers={"Cache-Control": "public, max-age=31536000, immutable"},
+        )
+
     @app.get("/api/health")
     def health() -> Dict[str, str]:
         with database.connection() as connection:
@@ -755,6 +1099,35 @@ def create_app(
         create_session(user["id"], request, response)
         return {"user": public_user(user)}
 
+    @app.post("/api/admin/login", dependencies=[Depends(enforce_auth_rate_limit)])
+    def admin_login(input: LoginInput, request: Request, response: Response) -> Dict[str, Any]:
+        with database.connection() as connection:
+            user = connection.execute(
+                """SELECT id, display_name, username, email, bio, interests,
+                          profile_visible, discoverable,
+                          password_hash, email_verified_at
+                   FROM users WHERE email = %s""",
+                (input.email,),
+            ).fetchone()
+        password_valid = verify_password(
+            input.password,
+            user["password_hash"] if user else dummy_password_hash,
+        )
+        if not user or not password_valid:
+            raise ApiError(401, "invalid_credentials", "Email or password is incorrect.")
+        if not user["email_verified_at"]:
+            raise ApiError(403, "email_not_verified", "Verify your email address before signing in.")
+        if user["email"].strip().lower() not in settings.admin_emails:
+            raise ApiError(403, "admin_required", "This account is not authorized to access admin tools.")
+        create_session(user["id"], request, response)
+        return {
+            "admin": {
+                "id": str(user["id"]),
+                "name": user["display_name"],
+                "email": user["email"],
+            },
+        }
+
     @app.get("/api/auth/me")
     def get_current_user(request: Request) -> Dict[str, Any]:
         return {"user": public_user(require_user(request))}
@@ -819,22 +1192,448 @@ def create_app(
         response.status_code = 204
         return response
 
+    @app.get("/api/admin/me")
+    def get_admin_session(admin: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+        return {
+            "admin": {
+                "id": str(admin["id"]),
+                "name": admin["display_name"],
+                "email": admin["email"],
+            },
+        }
+
+    @app.get("/api/admin/overview")
+    def get_admin_overview(
+        _admin: Dict[str, Any] = Depends(require_admin),
+    ) -> Dict[str, Any]:
+        with database.connection() as connection:
+            row = connection.execute(
+                """SELECT
+                       (SELECT count(*) FROM users) AS users,
+                       (SELECT count(*) FROM users WHERE email_verified_at IS NOT NULL) AS verified_users,
+                       (SELECT count(*) FROM social_posts) AS posts,
+                       (SELECT count(*) FROM social_post_comments) AS comments,
+                       (SELECT count(*) FROM social_post_likes) AS likes,
+                       (SELECT count(*) FROM social_post_bookmarks) AS bookmarks,
+                       (SELECT count(*) FROM direct_messages) AS messages,
+                       (SELECT count(*) FROM marketplace_products) AS products,
+                       (SELECT count(*) FROM local_marketplace_listings) AS local_listings,
+                       (SELECT count(*) FROM job_listings) AS jobs,
+                       (SELECT count(*) FROM job_applications) AS applications,
+                       (SELECT count(*) FROM communities) AS communities,
+                       (SELECT count(*) FROM community_memberships) AS memberships"""
+            ).fetchone()
+        if not row:
+            raise ApiError(500, "internal_error", "Admin overview could not be loaded.")
+        return {
+            "overview": {
+                "users": int(row["users"]),
+                "verifiedUsers": int(row["verified_users"]),
+                "posts": int(row["posts"]),
+                "comments": int(row["comments"]),
+                "likes": int(row["likes"]),
+                "bookmarks": int(row["bookmarks"]),
+                "messages": int(row["messages"]),
+                "products": int(row["products"]),
+                "localListings": int(row["local_listings"]),
+                "jobs": int(row["jobs"]),
+                "applications": int(row["applications"]),
+                "communities": int(row["communities"]),
+                "memberships": int(row["memberships"]),
+            },
+        }
+
+    @app.get("/api/admin/users")
+    def list_admin_users(
+        query: Optional[str] = Query(default=None, max_length=80),
+        limit: int = Query(default=50, ge=1, le=100),
+        offset: int = Query(default=0, ge=0),
+        _admin: Dict[str, Any] = Depends(require_admin),
+    ) -> Dict[str, Any]:
+        normalized_query = (query or "").strip().lower()
+        if normalized_query and len(normalized_query) < 2:
+            raise ApiError(400, "invalid_input", "Enter at least two characters to search.")
+        escaped_query = (
+            normalized_query
+            .replace("\\", "\\\\")
+            .replace("%", "\\%")
+            .replace("_", "\\_")
+        )
+        pattern = "%" + escaped_query + "%" if escaped_query else None
+        with database.connection() as connection:
+            total = connection.execute(
+                """SELECT count(*) AS total
+                   FROM users u
+                   WHERE %s::text IS NULL
+                      OR lower(u.display_name) LIKE %s ESCAPE E'\\\\'
+                      OR lower(u.username) LIKE %s ESCAPE E'\\\\'
+                      OR lower(u.email) LIKE %s ESCAPE E'\\\\'""",
+                (pattern, pattern, pattern, pattern),
+            ).fetchone()
+            rows = connection.execute(
+                """SELECT u.id, u.display_name, u.username, u.email, u.bio,
+                          u.interests, u.profile_visible, u.discoverable,
+                          u.email_verified_at, u.created_at, u.updated_at,
+                          (SELECT count(*) FROM social_posts p WHERE p.user_id = u.id) AS posts,
+                          (SELECT count(*) FROM social_post_comments c WHERE c.user_id = u.id) AS comments,
+                          (SELECT count(*) FROM direct_messages m
+                           WHERE m.sender_id = u.id OR m.recipient_id = u.id) AS messages,
+                          (SELECT count(*) FROM marketplace_products p WHERE p.seller_id = u.id) AS products,
+                          (SELECT count(*) FROM local_marketplace_listings l WHERE l.seller_id = u.id) AS local_listings,
+                          (SELECT count(*) FROM job_listings j WHERE j.user_id = u.id) AS jobs,
+                          (SELECT count(*) FROM job_applications a WHERE a.applicant_id = u.id) AS applications
+                   FROM users u
+                   WHERE %s::text IS NULL
+                      OR lower(u.display_name) LIKE %s ESCAPE E'\\\\'
+                      OR lower(u.username) LIKE %s ESCAPE E'\\\\'
+                      OR lower(u.email) LIKE %s ESCAPE E'\\\\'
+                   ORDER BY u.created_at DESC, u.id DESC
+                   LIMIT %s OFFSET %s""",
+                (pattern, pattern, pattern, pattern, limit, offset),
+            ).fetchall()
+        users = [
+            {
+                "id": str(user["id"]),
+                "name": user["display_name"],
+                "username": user["username"],
+                "email": user["email"],
+                "bio": user["bio"],
+                "interests": user["interests"],
+                "profileVisible": bool(user["profile_visible"]),
+                "discoverable": bool(user["discoverable"]),
+                "emailVerified": user["email_verified_at"] is not None,
+                "createdAt": user["created_at"].isoformat(),
+                "updatedAt": user["updated_at"].isoformat(),
+                "counts": {
+                    "posts": int(user["posts"]),
+                    "comments": int(user["comments"]),
+                    "messages": int(user["messages"]),
+                    "products": int(user["products"]),
+                    "localListings": int(user["local_listings"]),
+                    "jobs": int(user["jobs"]),
+                    "applications": int(user["applications"]),
+                },
+            }
+            for user in rows
+        ]
+        return {
+            "users": users,
+            "total": int(total["total"]) if total else 0,
+            "limit": limit,
+            "offset": offset,
+        }
+
+    @app.get("/api/admin/users/{user_id}")
+    def get_admin_user_details(
+        user_id: UUID,
+        limit: int = Query(default=100, ge=1, le=200),
+        offset: int = Query(default=0, ge=0),
+        admin: Dict[str, Any] = Depends(require_admin),
+    ) -> Dict[str, Any]:
+        with database.connection() as connection:
+            user = connection.execute(
+                """SELECT id, display_name, username, email, bio, interests,
+                          profile_visible, discoverable, email_verified_at,
+                          created_at, updated_at
+                   FROM users
+                   WHERE id = %s""",
+                (user_id,),
+            ).fetchone()
+            if not user:
+                raise ApiError(404, "user_not_found", "That account could not be found.")
+
+            connection.execute(
+                """INSERT INTO admin_audit_log (admin_user_id, subject_user_id, action)
+                   VALUES (%s, %s, 'view_user_details')""",
+                (admin["id"], user_id),
+            )
+            counts = connection.execute(
+                """SELECT
+                       (SELECT count(*) FROM social_posts WHERE user_id = %s) AS posts,
+                       (SELECT count(*) FROM social_post_comments WHERE user_id = %s) AS comments,
+                       (SELECT count(*) FROM social_post_likes WHERE user_id = %s) AS likes,
+                       (SELECT count(*) FROM social_post_bookmarks WHERE user_id = %s) AS bookmarks,
+                       (SELECT count(*) FROM direct_messages
+                        WHERE sender_id = %s OR recipient_id = %s) AS messages,
+                       (SELECT count(*) FROM marketplace_products WHERE seller_id = %s) AS products,
+                       (SELECT count(*) FROM local_marketplace_listings WHERE seller_id = %s) AS local_listings,
+                       (SELECT count(*) FROM job_listings WHERE user_id = %s) AS jobs,
+                       (SELECT count(*) FROM job_applications WHERE applicant_id = %s) AS applications,
+                       (SELECT count(*) FROM communities WHERE owner_id = %s) AS communities_created,
+                       (SELECT count(*) FROM community_memberships WHERE user_id = %s) AS communities_joined,
+                       (SELECT count(*) FROM user_follows WHERE follower_id = %s) AS following,
+                       (SELECT count(*) FROM user_follows WHERE following_id = %s) AS followers""",
+                (user_id,) * 14,
+            ).fetchone()
+            posts = connection.execute(
+                """SELECT p.id, p.body, p.image_urls, p.created_at,
+                          (SELECT count(*) FROM social_post_likes l WHERE l.post_id = p.id) AS like_count,
+                          (SELECT count(*) FROM social_post_comments c WHERE c.post_id = p.id) AS comment_count
+                   FROM social_posts p WHERE p.user_id = %s
+                   ORDER BY p.created_at DESC, p.id DESC LIMIT %s OFFSET %s""",
+                (user_id, limit, offset),
+            ).fetchall()
+            comments = connection.execute(
+                """SELECT c.id, c.post_id, c.body, c.created_at, p.body AS post_text
+                   FROM social_post_comments c
+                   JOIN social_posts p ON p.id = c.post_id
+                   WHERE c.user_id = %s
+                   ORDER BY c.created_at DESC, c.id DESC LIMIT %s OFFSET %s""",
+                (user_id, limit, offset),
+            ).fetchall()
+            likes = connection.execute(
+                """SELECT l.created_at, p.id AS post_id, p.body AS post_text,
+                          author.display_name AS author_name, author.username AS author_username
+                   FROM social_post_likes l
+                   JOIN social_posts p ON p.id = l.post_id
+                   JOIN users author ON author.id = p.user_id
+                   WHERE l.user_id = %s
+                   ORDER BY l.created_at DESC, p.id DESC LIMIT %s OFFSET %s""",
+                (user_id, limit, offset),
+            ).fetchall()
+            bookmarks = connection.execute(
+                """SELECT b.created_at, p.id AS post_id, p.body AS post_text,
+                          author.display_name AS author_name, author.username AS author_username
+                   FROM social_post_bookmarks b
+                   JOIN social_posts p ON p.id = b.post_id
+                   JOIN users author ON author.id = p.user_id
+                   WHERE b.user_id = %s
+                   ORDER BY b.created_at DESC, p.id DESC LIMIT %s OFFSET %s""",
+                (user_id, limit, offset),
+            ).fetchall()
+            products = connection.execute(
+                """SELECT id, name, category, price, stock, description, image_url, image_urls,
+                          published, created_at
+                   FROM marketplace_products WHERE seller_id = %s
+                   ORDER BY created_at DESC, id DESC LIMIT %s OFFSET %s""",
+                (user_id, limit, offset),
+            ).fetchall()
+            local_listings = connection.execute(
+                """SELECT id, category, title, price, location, detail, description,
+                          image_url, published, created_at
+                   FROM local_marketplace_listings WHERE seller_id = %s
+                   ORDER BY created_at DESC, id DESC LIMIT %s OFFSET %s""",
+                (user_id, limit, offset),
+            ).fetchall()
+            jobs = connection.execute(
+                """SELECT id, title, company, location, employment_type,
+                          workplace_type, summary, description, created_at, updated_at
+                   FROM job_listings WHERE user_id = %s
+                   ORDER BY created_at DESC, id DESC LIMIT %s OFFSET %s""",
+                (user_id, limit, offset),
+            ).fetchall()
+            applications = connection.execute(
+                """SELECT a.id, a.job_id, a.cover_letter, a.status, a.created_at,
+                          j.title AS job_title, j.company AS job_company
+                   FROM job_applications a
+                   JOIN job_listings j ON j.id = a.job_id
+                   WHERE a.applicant_id = %s
+                   ORDER BY a.created_at DESC, a.id DESC LIMIT %s OFFSET %s""",
+                (user_id, limit, offset),
+            ).fetchall()
+            communities_joined = connection.execute(
+                """SELECT c.id, c.name, c.description, c.created_at AS joined_at,
+                          (SELECT count(*) FROM community_memberships m
+                           WHERE m.community_id = c.id) AS member_count
+                   FROM community_memberships membership
+                   JOIN communities c ON c.id = membership.community_id
+                   WHERE membership.user_id = %s
+                   ORDER BY membership.created_at DESC, c.id DESC LIMIT %s OFFSET %s""",
+                (user_id, limit, offset),
+            ).fetchall()
+            communities_created = connection.execute(
+                """SELECT c.id, c.name, c.description, c.created_at,
+                          (SELECT count(*) FROM community_memberships m
+                           WHERE m.community_id = c.id) AS member_count
+                   FROM communities c WHERE c.owner_id = %s
+                   ORDER BY c.created_at DESC, c.id DESC LIMIT %s OFFSET %s""",
+                (user_id, limit, offset),
+            ).fetchall()
+            following = connection.execute(
+                """SELECT followed.id, followed.display_name, followed.username, f.created_at
+                   FROM user_follows f JOIN users followed ON followed.id = f.following_id
+                   WHERE f.follower_id = %s
+                   ORDER BY f.created_at DESC, followed.id LIMIT %s OFFSET %s""",
+                (user_id, limit, offset),
+            ).fetchall()
+            followers = connection.execute(
+                """SELECT follower.id, follower.display_name, follower.username, f.created_at
+                   FROM user_follows f JOIN users follower ON follower.id = f.follower_id
+                   WHERE f.following_id = %s
+                   ORDER BY f.created_at DESC, follower.id LIMIT %s OFFSET %s""",
+                (user_id, limit, offset),
+            ).fetchall()
+            messages = connection.execute(
+                """SELECT m.id, m.conversation_id, m.body, m.created_at, m.read_at,
+                          sender.id AS sender_id, sender.display_name AS sender_name,
+                          sender.username AS sender_username,
+                          recipient.id AS recipient_id, recipient.display_name AS recipient_name,
+                          recipient.username AS recipient_username
+                   FROM direct_messages m
+                   JOIN direct_conversations conversation ON conversation.id = m.conversation_id
+                   JOIN users sender ON sender.id = m.sender_id
+                   JOIN users recipient ON recipient.id = m.recipient_id
+                   WHERE conversation.participant_one_id = %s
+                      OR conversation.participant_two_id = %s
+                   ORDER BY m.created_at DESC, m.id DESC LIMIT %s OFFSET %s""",
+                (user_id, user_id, limit, offset),
+            ).fetchall()
+
+        def timestamp(row: Dict[str, Any], key: str) -> Optional[str]:
+            value = row[key]
+            return value.isoformat() if value else None
+
+        details = {
+            "id": str(user["id"]),
+            "name": user["display_name"],
+            "username": user["username"],
+            "email": user["email"],
+            "bio": user["bio"],
+            "interests": user["interests"],
+            "profileVisible": bool(user["profile_visible"]),
+            "discoverable": bool(user["discoverable"]),
+            "emailVerified": user["email_verified_at"] is not None,
+            "emailVerifiedAt": timestamp(user, "email_verified_at"),
+            "createdAt": timestamp(user, "created_at"),
+            "updatedAt": timestamp(user, "updated_at"),
+            "counts": {
+                "posts": int(counts["posts"]),
+                "comments": int(counts["comments"]),
+                "likes": int(counts["likes"]),
+                "bookmarks": int(counts["bookmarks"]),
+                "messages": int(counts["messages"]),
+                "products": int(counts["products"]),
+                "localListings": int(counts["local_listings"]),
+                "jobs": int(counts["jobs"]),
+                "applications": int(counts["applications"]),
+                "communitiesCreated": int(counts["communities_created"]),
+                "communitiesJoined": int(counts["communities_joined"]),
+                "following": int(counts["following"]),
+                "followers": int(counts["followers"]),
+            },
+            "activity": {
+                "posts": [
+                    {"id": str(row["id"]), "text": row["body"], "imageUrls": row.get("image_urls") or [], "createdAt": timestamp(row, "created_at"), "likeCount": int(row["like_count"]), "commentCount": int(row["comment_count"])}
+                    for row in posts
+                ],
+                "comments": [
+                    {"id": str(row["id"]), "postId": str(row["post_id"]), "text": row["body"], "postText": row["post_text"], "createdAt": timestamp(row, "created_at")}
+                    for row in comments
+                ],
+                "likes": [
+                    {"postId": str(row["post_id"]), "postText": row["post_text"], "author": {"name": row["author_name"], "username": row["author_username"]}, "createdAt": timestamp(row, "created_at")}
+                    for row in likes
+                ],
+                "bookmarks": [
+                    {"postId": str(row["post_id"]), "postText": row["post_text"], "author": {"name": row["author_name"], "username": row["author_username"]}, "createdAt": timestamp(row, "created_at")}
+                    for row in bookmarks
+                ],
+                "messages": [
+                    {
+                        "id": str(row["id"]),
+                        "conversationId": str(row["conversation_id"]),
+                        "text": row["body"],
+                        "createdAt": timestamp(row, "created_at"),
+                        "readAt": timestamp(row, "read_at"),
+                        "sender": {"id": str(row["sender_id"]), "name": row["sender_name"], "username": row["sender_username"]},
+                        "recipient": {"id": str(row["recipient_id"]), "name": row["recipient_name"], "username": row["recipient_username"]},
+                    }
+                    for row in messages
+                ],
+                "products": [
+                    {"id": str(row["id"]), "name": row["name"], "category": row["category"], "price": int(row["price"]), "stock": row["stock"], "description": row["description"], "imageUrl": (row.get("image_urls") or [row["image_url"]])[0], "imageUrls": row.get("image_urls") or ([row["image_url"]] if row["image_url"] else []), "published": bool(row["published"]), "createdAt": timestamp(row, "created_at")}
+                    for row in products
+                ],
+                "localListings": [
+                    {"id": str(row["id"]), "category": row["category"], "title": row["title"], "price": row["price"], "location": row["location"], "detail": row["detail"], "description": row["description"], "imageUrl": row["image_url"], "published": bool(row["published"]), "createdAt": timestamp(row, "created_at")}
+                    for row in local_listings
+                ],
+                "jobs": [
+                    {"id": str(row["id"]), "title": row["title"], "company": row["company"], "location": row["location"], "employmentType": row["employment_type"], "workplaceType": row["workplace_type"], "summary": row["summary"], "description": row["description"], "createdAt": timestamp(row, "created_at"), "updatedAt": timestamp(row, "updated_at")}
+                    for row in jobs
+                ],
+                "applications": [
+                    {"id": str(row["id"]), "jobId": str(row["job_id"]), "jobTitle": row["job_title"], "company": row["job_company"], "coverLetter": row["cover_letter"], "status": row["status"], "createdAt": timestamp(row, "created_at")}
+                    for row in applications
+                ],
+                "communitiesJoined": [
+                    {"id": str(row["id"]), "name": row["name"], "description": row["description"], "memberCount": int(row["member_count"]), "joinedAt": timestamp(row, "joined_at")}
+                    for row in communities_joined
+                ],
+                "communitiesCreated": [
+                    {"id": str(row["id"]), "name": row["name"], "description": row["description"], "memberCount": int(row["member_count"]), "createdAt": timestamp(row, "created_at")}
+                    for row in communities_created
+                ],
+                "following": [
+                    {"id": str(row["id"]), "name": row["display_name"], "username": row["username"], "createdAt": timestamp(row, "created_at")}
+                    for row in following
+                ],
+                "followers": [
+                    {"id": str(row["id"]), "name": row["display_name"], "username": row["username"], "createdAt": timestamp(row, "created_at")}
+                    for row in followers
+                ],
+            },
+            "page": {"limit": limit, "offset": offset},
+        }
+        return {"user": details}
+
+    @app.get("/api/admin/audit-log")
+    def get_admin_audit_log(
+        limit: int = Query(default=100, ge=1, le=200),
+        _admin: Dict[str, Any] = Depends(require_admin),
+    ) -> Dict[str, Any]:
+        with database.connection() as connection:
+            rows = connection.execute(
+                """SELECT log.id, log.action, log.created_at,
+                          admin.id AS admin_id, admin.display_name AS admin_name,
+                          admin.email AS admin_email,
+                          subject.id AS subject_id, subject.display_name AS subject_name,
+                          subject.email AS subject_email
+                   FROM admin_audit_log log
+                   JOIN users admin ON admin.id = log.admin_user_id
+                   LEFT JOIN users subject ON subject.id = log.subject_user_id
+                   ORDER BY log.created_at DESC, log.id DESC
+                   LIMIT %s""",
+                (limit,),
+            ).fetchall()
+        return {
+            "events": [
+                {
+                    "id": str(row["id"]),
+                    "action": row["action"],
+                    "createdAt": row["created_at"].isoformat(),
+                    "admin": {"id": str(row["admin_id"]), "name": row["admin_name"], "email": row["admin_email"]},
+                    "subject": None if row["subject_id"] is None else {
+                        "id": str(row["subject_id"]),
+                        "name": row["subject_name"],
+                        "email": row["subject_email"],
+                    },
+                }
+                for row in rows
+            ],
+        }
+
     @app.get("/api/social/posts")
     def list_social_posts(
         user: Dict[str, Any] = Depends(require_user),
         following_only: bool = False,
+        bookmarked_only: bool = False,
         limit: int = Query(default=50, ge=1, le=100),
     ) -> Dict[str, Any]:
         with database.connection() as connection:
             rows = connection.execute(
-                """SELECT p.id, p.body, p.created_at,
+                """SELECT p.id, p.body, p.image_urls, p.created_at,
                           u.id AS author_id, u.display_name, u.username,
                           (SELECT count(*) FROM social_post_likes l WHERE l.post_id = p.id) AS like_count,
                           (SELECT count(*) FROM social_post_comments c WHERE c.post_id = p.id) AS comment_count,
                           EXISTS (
                               SELECT 1 FROM social_post_likes mine
                               WHERE mine.post_id = p.id AND mine.user_id = %s
-                          ) AS liked_by_me
+                          ) AS liked_by_me,
+                          EXISTS (
+                              SELECT 1 FROM social_post_bookmarks mine
+                              WHERE mine.post_id = p.id AND mine.user_id = %s
+                          ) AS bookmarked_by_me
                    FROM social_posts p
                    JOIN users u ON u.id = p.user_id
                    WHERE (
@@ -845,9 +1644,25 @@ def create_app(
                              AND followed.following_id = p.user_id
                        )
                    )
+                   AND (
+                       NOT %s
+                       OR EXISTS (
+                           SELECT 1 FROM social_post_bookmarks bookmark_filter
+                           WHERE bookmark_filter.user_id = %s
+                             AND bookmark_filter.post_id = p.id
+                       )
+                   )
                    ORDER BY p.created_at DESC
                    LIMIT %s""",
-                (user["id"], following_only, user["id"], limit),
+                (
+                    user["id"],
+                    user["id"],
+                    following_only,
+                    user["id"],
+                    bookmarked_only,
+                    user["id"],
+                    limit,
+                ),
             ).fetchall()
         return {"posts": [public_social_post(row) for row in rows]}
 
@@ -862,10 +1677,10 @@ def create_app(
     ) -> Dict[str, Any]:
         with database.connection() as connection:
             inserted = connection.execute(
-                """INSERT INTO social_posts (user_id, body)
-                   VALUES (%s, %s)
+                """INSERT INTO social_posts (user_id, body, image_urls)
+                   VALUES (%s, %s, %s)
                    RETURNING id""",
-                (user["id"], input.text),
+                (user["id"], input.text, input.image_urls),
             ).fetchone()
             if not inserted:
                 raise ApiError(500, "internal_error", "The post could not be created.")
@@ -873,6 +1688,37 @@ def create_app(
         if not post:
             raise ApiError(500, "internal_error", "The post could not be created.")
         return {"post": public_social_post(post)}
+
+    @app.put(
+        "/api/social/posts/{post_id}/bookmark",
+        dependencies=[Depends(enforce_social_rate_limit)],
+    )
+    def set_social_post_bookmark(
+        post_id: UUID,
+        input: SocialBookmarkInput,
+        user: Dict[str, Any] = Depends(require_user),
+    ) -> Dict[str, bool]:
+        with database.connection() as connection:
+            post = connection.execute(
+                "SELECT id FROM social_posts WHERE id = %s",
+                (post_id,),
+            ).fetchone()
+            if not post:
+                raise ApiError(404, "post_not_found", "That post could not be found.")
+            if input.bookmarked:
+                connection.execute(
+                    """INSERT INTO social_post_bookmarks (post_id, user_id)
+                       VALUES (%s, %s)
+                       ON CONFLICT (post_id, user_id) DO NOTHING""",
+                    (post_id, user["id"]),
+                )
+            else:
+                connection.execute(
+                    """DELETE FROM social_post_bookmarks
+                       WHERE post_id = %s AND user_id = %s""",
+                    (post_id, user["id"]),
+                )
+        return {"bookmarked": input.bookmarked}
 
     @app.get("/api/social/posts/{post_id}")
     def get_social_post(
@@ -976,6 +1822,239 @@ def create_app(
             raise ApiError(500, "internal_error", "The reply could not be created.")
         return {"comment": public_social_comment(row)}
 
+    @app.get("/api/marketplace/products")
+    def list_marketplace_products(
+        request: Request,
+        query: Optional[str] = Query(default=None, max_length=80),
+        category: Optional[Literal["Style", "Tech", "Home", "Other"]] = None,
+        limit: int = Query(default=50, ge=1, le=100),
+    ) -> Dict[str, Any]:
+        require_user(request)
+        normalized_query = (query or "").strip().lower()
+        if normalized_query and len(normalized_query) < 2:
+            raise ApiError(400, "invalid_input", "Enter at least two characters to search.")
+        filters = ["p.published"]
+        parameters: List[Any] = []
+        if category:
+            filters.append("p.category = %s")
+            parameters.append(category)
+        if normalized_query:
+            escaped_query = (
+                normalized_query
+                .replace("\\", "\\\\")
+                .replace("%", "\\%")
+                .replace("_", "\\_")
+            )
+            pattern = "%" + escaped_query + "%"
+            filters.append(
+                "(lower(p.name) LIKE %s ESCAPE E'\\\\' "
+                "OR lower(p.description) LIKE %s ESCAPE E'\\\\' "
+                "OR lower(s.display_name) LIKE %s ESCAPE E'\\\\' "
+                "OR lower(s.username) LIKE %s ESCAPE E'\\\\')"
+            )
+            parameters.extend([pattern] * 4)
+        parameters.append(limit)
+        with database.connection() as connection:
+            rows = connection.execute(
+                """SELECT p.id, p.name, p.category, p.price, p.stock,
+                          p.description, p.image_url, p.image_urls, p.created_at,
+                          s.id AS seller_id, s.display_name AS seller_name,
+                          s.username AS seller_username
+                   FROM marketplace_products p
+                   JOIN users s ON s.id = p.seller_id
+                   WHERE {}
+                   ORDER BY p.created_at DESC, p.id DESC
+                   LIMIT %s""".format(" AND ".join(filters)),
+                tuple(parameters),
+            ).fetchall()
+        return {"products": [public_marketplace_product(row) for row in rows]}
+
+    @app.post(
+        "/api/marketplace/products",
+        status_code=201,
+        dependencies=[Depends(enforce_social_rate_limit)],
+    )
+    def create_marketplace_product(
+        input: MarketplaceProductInput,
+        user: Dict[str, Any] = Depends(require_user),
+    ) -> Dict[str, Any]:
+        with database.connection() as connection:
+            inserted = connection.execute(
+                """INSERT INTO marketplace_products
+                       (seller_id, name, category, price, stock, description, image_url, image_urls)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                   RETURNING id""",
+                (
+                    user["id"],
+                    input.name,
+                    input.category,
+                    input.price,
+                    input.stock,
+                    input.description,
+                    input.image_url,
+                    input.image_urls or ([input.image_url] if input.image_url else []),
+                ),
+            ).fetchone()
+            if not inserted:
+                raise ApiError(500, "internal_error", "The product listing could not be created.")
+            row = connection.execute(
+                """SELECT p.id, p.name, p.category, p.price, p.stock,
+                          p.description, p.image_url, p.image_urls, p.created_at,
+                          s.id AS seller_id, s.display_name AS seller_name,
+                          s.username AS seller_username
+                   FROM marketplace_products p
+                   JOIN users s ON s.id = p.seller_id
+                   WHERE p.id = %s""",
+                (inserted["id"],),
+            ).fetchone()
+        if not row:
+            raise ApiError(500, "internal_error", "The product listing could not be loaded.")
+        return {"product": public_marketplace_product(row)}
+
+    @app.get("/api/marketplace/products/{product_id}")
+    def get_marketplace_product(
+        product_id: UUID,
+        request: Request,
+    ) -> Dict[str, Any]:
+        require_user(request)
+        with database.connection() as connection:
+            row = connection.execute(
+                """SELECT p.id, p.name, p.category, p.price, p.stock,
+                          p.description, p.image_url, p.image_urls, p.created_at,
+                          s.id AS seller_id, s.display_name AS seller_name,
+                          s.username AS seller_username
+                   FROM marketplace_products p
+                   JOIN users s ON s.id = p.seller_id
+                   WHERE p.id = %s AND p.published""",
+                (product_id,),
+            ).fetchone()
+        if not row:
+            raise ApiError(404, "product_not_found", "That product could not be found.")
+        return {"product": public_marketplace_product(row)}
+
+    @app.get("/api/local-marketplace/listings")
+    def list_local_marketplace_listings(
+        request: Request,
+        query: Optional[str] = Query(default=None, max_length=80),
+        location: Optional[str] = Query(default=None, max_length=80),
+        category: Optional[Literal["Homes", "Services", "Farm"]] = None,
+        limit: int = Query(default=50, ge=1, le=100),
+    ) -> Dict[str, Any]:
+        require_user(request)
+        normalized_query = (query or "").strip().lower()
+        normalized_location = (location or "").strip().lower()
+        if normalized_query and len(normalized_query) < 2:
+            raise ApiError(400, "invalid_input", "Enter at least two characters to search.")
+        filters = ["l.published"]
+        parameters: List[Any] = []
+        if category:
+            filters.append("l.category = %s")
+            parameters.append(category)
+        if normalized_query:
+            escaped_query = (
+                normalized_query
+                .replace("\\", "\\\\")
+                .replace("%", "\\%")
+                .replace("_", "\\_")
+            )
+            pattern = "%" + escaped_query + "%"
+            filters.append(
+                "(lower(l.title) LIKE %s ESCAPE E'\\\\' "
+                "OR lower(l.description) LIKE %s ESCAPE E'\\\\' "
+                "OR lower(l.detail) LIKE %s ESCAPE E'\\\\' "
+                "OR lower(s.display_name) LIKE %s ESCAPE E'\\\\' "
+                "OR lower(s.username) LIKE %s ESCAPE E'\\\\')"
+            )
+            parameters.extend([pattern] * 5)
+        if normalized_location:
+            escaped_location = (
+                normalized_location
+                .replace("\\", "\\\\")
+                .replace("%", "\\%")
+                .replace("_", "\\_")
+            )
+            filters.append("lower(l.location) LIKE %s ESCAPE E'\\\\'")
+            parameters.append("%" + escaped_location + "%")
+        parameters.append(limit)
+        with database.connection() as connection:
+            rows = connection.execute(
+                """SELECT l.id, l.category, l.title, l.price, l.location,
+                          l.detail, l.description, l.image_url, l.created_at,
+                          s.id AS seller_id, s.display_name AS seller_name,
+                          s.username AS seller_username
+                   FROM local_marketplace_listings l
+                   JOIN users s ON s.id = l.seller_id
+                   WHERE {}
+                   ORDER BY l.created_at DESC, l.id DESC
+                   LIMIT %s""".format(" AND ".join(filters)),
+                tuple(parameters),
+            ).fetchall()
+        return {"listings": [public_local_marketplace_listing(row) for row in rows]}
+
+    @app.post(
+        "/api/local-marketplace/listings",
+        status_code=201,
+        dependencies=[Depends(enforce_social_rate_limit)],
+    )
+    def create_local_marketplace_listing(
+        input: LocalMarketplaceListingInput,
+        user: Dict[str, Any] = Depends(require_user),
+    ) -> Dict[str, Any]:
+        with database.connection() as connection:
+            inserted = connection.execute(
+                """INSERT INTO local_marketplace_listings
+                       (seller_id, category, title, price, location, detail,
+                        description, image_url)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                   RETURNING id""",
+                (
+                    user["id"],
+                    input.category,
+                    input.title,
+                    input.price,
+                    input.location,
+                    input.detail,
+                    input.description,
+                    input.image_url,
+                ),
+            ).fetchone()
+            if not inserted:
+                raise ApiError(500, "internal_error", "The listing could not be created.")
+            row = connection.execute(
+                """SELECT l.id, l.category, l.title, l.price, l.location,
+                          l.detail, l.description, l.image_url, l.created_at,
+                          s.id AS seller_id, s.display_name AS seller_name,
+                          s.username AS seller_username
+                   FROM local_marketplace_listings l
+                   JOIN users s ON s.id = l.seller_id
+                   WHERE l.id = %s""",
+                (inserted["id"],),
+            ).fetchone()
+        if not row:
+            raise ApiError(500, "internal_error", "The listing could not be loaded.")
+        return {"listing": public_local_marketplace_listing(row)}
+
+    @app.get("/api/local-marketplace/listings/{listing_id}")
+    def get_local_marketplace_listing(
+        listing_id: UUID,
+        request: Request,
+    ) -> Dict[str, Any]:
+        require_user(request)
+        with database.connection() as connection:
+            row = connection.execute(
+                """SELECT l.id, l.category, l.title, l.price, l.location,
+                          l.detail, l.description, l.image_url, l.created_at,
+                          s.id AS seller_id, s.display_name AS seller_name,
+                          s.username AS seller_username
+                   FROM local_marketplace_listings l
+                   JOIN users s ON s.id = l.seller_id
+                   WHERE l.id = %s AND l.published""",
+                (listing_id,),
+            ).fetchone()
+        if not row:
+            raise ApiError(404, "listing_not_found", "That listing could not be found.")
+        return {"listing": public_local_marketplace_listing(row)}
+
     @app.get("/api/messages/users")
     def search_message_recipients(
         request: Request,
@@ -1018,6 +2097,104 @@ def create_app(
                 for row in rows
             ],
         }
+
+    @app.get("/api/communities")
+    def list_communities(
+        request: Request,
+        query: Optional[str] = Query(default=None, max_length=80),
+        limit: int = Query(default=50, ge=1, le=100),
+    ) -> Dict[str, Any]:
+        user = require_user(request)
+        normalized_query = (query or "").strip().lower()
+        if normalized_query and len(normalized_query) < 2:
+            raise ApiError(400, "invalid_input", "Enter at least two characters to search.")
+        escaped_query = (
+            normalized_query
+            .replace("\\", "\\\\")
+            .replace("%", "\\%")
+            .replace("_", "\\_")
+        )
+        pattern = "%" + escaped_query + "%" if escaped_query else None
+        with database.connection() as connection:
+            rows = connection.execute(
+                """SELECT c.id, c.name, c.description, c.created_at,
+                          (SELECT count(*) FROM community_memberships members
+                           WHERE members.community_id = c.id) AS member_count,
+                          EXISTS (
+                              SELECT 1 FROM community_memberships mine
+                              WHERE mine.community_id = c.id AND mine.user_id = %s
+                          ) AS joined_by_me
+                   FROM communities c
+                   WHERE %s::text IS NULL
+                      OR lower(c.name) LIKE %s ESCAPE E'\\\\'
+                      OR lower(c.description) LIKE %s ESCAPE E'\\\\'
+                   ORDER BY c.created_at DESC, c.id DESC
+                   LIMIT %s""",
+                (user["id"], pattern, pattern, pattern, limit),
+            ).fetchall()
+        return {"communities": [public_community(row) for row in rows]}
+
+    @app.post(
+        "/api/communities",
+        status_code=201,
+        dependencies=[Depends(enforce_social_rate_limit)],
+    )
+    def create_community(
+        input: CommunityInput,
+        user: Dict[str, Any] = Depends(require_user),
+    ) -> Dict[str, Any]:
+        with database.connection() as connection:
+            inserted = connection.execute(
+                """INSERT INTO communities (owner_id, name, description)
+                   VALUES (%s, %s, %s)
+                   RETURNING id""",
+                (user["id"], input.name, input.description),
+            ).fetchone()
+            if not inserted:
+                raise ApiError(500, "internal_error", "The community could not be created.")
+            connection.execute(
+                """INSERT INTO community_memberships (community_id, user_id)
+                   VALUES (%s, %s)
+                   ON CONFLICT (community_id, user_id) DO NOTHING""",
+                (inserted["id"], user["id"]),
+            )
+            row = community_record(connection, inserted["id"], user["id"])
+        if not row:
+            raise ApiError(500, "internal_error", "The community could not be loaded.")
+        return {"community": public_community(row)}
+
+    @app.put(
+        "/api/communities/{community_id}/membership",
+        dependencies=[Depends(enforce_social_rate_limit)],
+    )
+    def set_community_membership(
+        community_id: UUID,
+        input: CommunityMembershipInput,
+        user: Dict[str, Any] = Depends(require_user),
+    ) -> Dict[str, Any]:
+        with database.connection() as connection:
+            if not connection.execute(
+                "SELECT id FROM communities WHERE id = %s",
+                (community_id,),
+            ).fetchone():
+                raise ApiError(404, "community_not_found", "That community could not be found.")
+            if input.joined:
+                connection.execute(
+                    """INSERT INTO community_memberships (community_id, user_id)
+                       VALUES (%s, %s)
+                       ON CONFLICT (community_id, user_id) DO NOTHING""",
+                    (community_id, user["id"]),
+                )
+            else:
+                connection.execute(
+                    """DELETE FROM community_memberships
+                       WHERE community_id = %s AND user_id = %s""",
+                    (community_id, user["id"]),
+                )
+            row = community_record(connection, community_id, user["id"])
+        if not row:
+            raise ApiError(404, "community_not_found", "That community could not be found.")
+        return {"community": public_community(row)}
 
     @app.get("/api/people")
     def discover_people(

@@ -1,5 +1,7 @@
 import os
+import re
 from dataclasses import dataclass
+from typing import FrozenSet
 from urllib.parse import urlparse
 
 from dotenv import load_dotenv
@@ -19,6 +21,7 @@ class Settings:
     session_max_age_days: int
     session_secret: str
     trust_proxy: int
+    admin_emails: FrozenSet[str]
 
 
 def _required_secret(name: str) -> str:
@@ -73,6 +76,13 @@ def load_settings() -> Settings:
     database_url = os.getenv("DATABASE_URL", "")
     if not database_url:
         raise RuntimeError("DATABASE_URL must be set.")
+    admin_emails = frozenset(
+        email.strip().lower()
+        for email in os.getenv("ADMIN_EMAILS", "").split(",")
+        if email.strip()
+    )
+    if any(not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", email) for email in admin_emails):
+        raise RuntimeError("ADMIN_EMAILS must contain comma-separated valid email addresses.")
 
     return Settings(
         app_origin=app_origin.rstrip("/"),
@@ -87,4 +97,5 @@ def load_settings() -> Settings:
         session_max_age_days=session_max_age_days,
         session_secret=_required_secret("SESSION_SECRET"),
         trust_proxy=trust_proxy,
+        admin_emails=admin_emails,
     )
