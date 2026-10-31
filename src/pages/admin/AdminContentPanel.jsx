@@ -15,6 +15,10 @@ function formatDate(value) {
   return new Date(value).toLocaleString()
 }
 
+function formatCount(value) {
+  return Number.isFinite(value) ? value.toLocaleString() : '—'
+}
+
 export default function AdminContentPanel() {
   const [type, setType] = useState('posts')
   const [query, setQuery] = useState('')
@@ -72,7 +76,7 @@ export default function AdminContentPanel() {
       <div className="admin-panel-heading">
         <div>
           <span className="app-page-eyebrow">LIVE USER CONTENT</span>
-          <h2>Manage {contentTypes.find(([value]) => value === type)?.[1]} <small>{total.toLocaleString()}</small></h2>
+          <h2>Manage {contentTypes.find(([value]) => value === type)?.[1]} <small>{formatCount(total)}</small></h2>
         </div>
         <div className="admin-content-controls">
           <select value={type} onChange={(event) => { setType(event.target.value); setNotice('') }} aria-label="Content type">
