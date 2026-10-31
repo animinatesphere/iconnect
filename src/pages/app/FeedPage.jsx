@@ -7,6 +7,7 @@ import { demoPosts } from '../../data/demoContent.js'
 import { people } from '../../data/siteContent.js'
 import { demoAvatar, getDemoProfile } from '../../utils/demoAccount.js'
 import { emptyDemoFeedState, readDemoFeedState, writeDemoFeedState } from '../../utils/demoFeed.js'
+import { getSocialPosts, setSocialPostLike } from '../../utils/socialApi.js'
 
 const storyPeople = [
   { ...people[0], note: 'Slow morning', image: 'photo-1470252649378-9c29740c9fa8', text: 'Taking a slow start and letting the morning find its own pace.' },
@@ -15,9 +16,9 @@ const storyPeople = [
   { ...people[3], note: 'Weekend bits', image: 'photo-1470770841072-f978cf4d019e', text: 'A few quiet moments from the weekend.' },
 ]
 
-function FeedPost({ post, state, updateState, announce, sharePost, hidePost }) {
+function FeedPost({ post, state, updateState, announce, sharePost, hidePost, onLike, liking }) {
   const [menuOpen, setMenuOpen] = useState(false)
-  const liked = state.likedPostIds.includes(post.id)
+  const liked = post.isPersistent ? post.likedByMe : state.likedPostIds.includes(post.id)
   const saved = state.savedPostIds.includes(post.id)
 
   function togglePostList(key) {
@@ -48,8 +49,8 @@ function FeedPost({ post, state, updateState, announce, sharePost, hidePost }) {
         </div>}
       </div>
       <div className="feed-card-actions">
-        <button type="button" className={liked ? 'feed-action liked' : 'feed-action'} onClick={() => togglePostList('likedPostIds')} aria-pressed={liked} aria-label={liked ? `Unlike ${post.name}'s post` : `Like ${post.name}'s post`}><Heart size={17} fill={liked ? 'currentColor' : 'none'} /> <span>{post.likes + Number(liked)}</span></button>
-        <Link to={`/app/post/${post.id}`} className="feed-action"><MessageCircle size={17} /> <span>{post.comments + (state.replies[post.id]?.length ?? 0)} replies</span></Link>
+        <button type="button" className={liked ? 'feed-action liked' : 'feed-action'} onClick={() => post.isPersistent ? onLike(post) : togglePostList('likedPostIds')} disabled={post.isPersistent && liking} aria-pressed={liked} aria-label={liked ? `Unlike ${post.name}'s post` : `Like ${post.name}'s post`}><Heart size={17} fill={liked ? 'currentColor' : 'none'} /> <span>{post.likes + Number(!post.isPersistent && liked)}</span></button>
+        <Link to={`/app/post/${post.id}`} className="feed-action"><MessageCircle size={17} /> <span>{post.comments + (!post.isPersistent ? state.replies[post.id]?.length ?? 0 : 0)} replies</span></Link>
         <button type="button" className={saved ? 'feed-action saved' : 'feed-action'} onClick={() => togglePostList('savedPostIds')} aria-pressed={saved} aria-label={saved ? 'Remove saved post' : 'Save post'}><Bookmark size={16} fill={saved ? 'currentColor' : 'none'} /></button>
         <button type="button" className="feed-action feed-share" onClick={() => sharePost(post)} aria-label="Share post link"><Send size={16} /></button>
       </div>
@@ -88,6 +89,8 @@ export default function FeedPage() {
   const [filter, setFilter] = useState('For you')
   const [sort, setSort] = useState('Recent')
   const [feedState, setFeedState] = useState(emptyDemoFeedState)
+  const [socialPosts, setSocialPosts] = useState([])
+  const [likingPostIds, setLikingPostIds] = useState([])
   const [feedError, setFeedError] = useState('')
   const [notice, setNotice] = useState('')
   const [undoPostId, setUndoPostId] = useState('')
@@ -105,6 +108,18 @@ export default function FeedPage() {
     }
   }, [])
 
+  useEffect(() => {
+    let active = true
+    getSocialPosts({ followingOnly: filter === 'Following' })
+      .then((posts) => {
+        if (active) setSocialPosts(posts)
+      })
+      .catch((error) => {
+        if (active) setFeedError(error instanceof Error ? error.message : 'Could not load published posts.')
+      })
+    return () => { active = false }
+  }, [filter])
+
   function updateState(nextState) {
     try {
       writeDemoFeedState(nextState)
@@ -117,6 +132,20 @@ export default function FeedPage() {
 
   function announce(message) {
     setNotice(message)
+  }
+
+  async function toggleSocialLike(post) {
+    if (likingPostIds.includes(post.id)) return
+    setLikingPostIds((current) => [...current, post.id])
+    try {
+      const updatedPost = await setSocialPostLike(post.id, !post.likedByMe)
+      setSocialPosts((current) => current.map((item) => item.id === post.id ? updatedPost : item))
+      setFeedError('')
+    } catch (error) {
+      setFeedError(error instanceof Error ? error.message : 'Could not update this like.')
+    } finally {
+      setLikingPostIds((current) => current.filter((id) => id !== post.id))
+    }
   }
 
   async function sharePost(post) {
@@ -153,7 +182,7 @@ export default function FeedPage() {
   const previousStory = useCallback(() => setStoryIndex((current) => (current + storyPeople.length - 1) % storyPeople.length), [])
   const nextStory = useCallback(() => setStoryIndex((current) => (current + 1) % storyPeople.length), [])
 
-  const allPosts = [...feedState.posts, ...demoPosts]
+  const allPosts = [...socialPosts, ...feedState.posts, ...demoPosts]
   const visiblePosts = allPosts
     .filter((post) => !feedState.hiddenPostIds.includes(post.id))
     .filter((post) => {
@@ -163,8 +192,14 @@ export default function FeedPage() {
       return true
     })
     .sort((left, right) => sort === 'Most liked'
-      ? (right.likes + Number(feedState.likedPostIds.includes(right.id))) - (left.likes + Number(feedState.likedPostIds.includes(left.id)))
-      : (feedState.posts.some((post) => post.id === right.id) ? 1 : 0) - (feedState.posts.some((post) => post.id === left.id) ? 1 : 0))
+      ? (right.likes + Number(right.isPersistent ? right.likedByMe : feedState.likedPostIds.includes(right.id))) - (left.likes + Number(left.isPersistent ? left.likedByMe : feedState.likedPostIds.includes(left.id)))
+      : left.isPersistent && right.isPersistent
+        ? new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime()
+        : left.isPersistent
+          ? -1
+          : right.isPersistent
+            ? 1
+            : (feedState.posts.some((post) => post.id === right.id) ? 1 : 0) - (feedState.posts.some((post) => post.id === left.id) ? 1 : 0))
 
   return (
     <div className="app-content-width">
@@ -179,7 +214,7 @@ export default function FeedPage() {
       </section>
       <div className="feed-layout-grid">
         <section className="feed-main-column">
-          <Link to="/app/create" className="quick-compose">
+          <Link to="/app/social" className="quick-compose">
             <Avatar person={viewer} />
             <span>What would you like to share?</span>
             <span className="compose-add"><PenLine size={16} /> Write a post</span>
@@ -188,11 +223,11 @@ export default function FeedPage() {
             <div className="feed-filters" role="tablist" aria-label="Feed filter">{filters.map((item) => <button type="button" role="tab" aria-selected={filter === item} className={filter === item ? 'feed-filter-active' : ''} onClick={() => setFilter(item)} key={item}>{item}</button>)}</div>
             <button type="button" className="feed-sort" onClick={() => setSort((current) => current === 'Recent' ? 'Most liked' : 'Recent')} aria-label={`Sort by ${sort === 'Recent' ? 'most liked' : 'recent'}`}><TrendingUp size={15} /> {sort}</button>
           </div>
-          <div className="demo-feed-note"><span className="demo-indicator" /> Preview feed · Posts and profiles are illustrative</div>
+          <div className="demo-feed-note"><span className="demo-indicator" /> Published text updates are saved to your account · Other feed content is illustrative</div>
           {feedError && <p className="feed-interaction-notice feed-error" role="alert">{feedError}</p>}
           {notice && <p className="feed-interaction-notice" role="status">{notice}{undoPostId && <button type="button" onClick={undoHide}>Undo</button>}</p>}
           {visiblePosts.length
-            ? visiblePosts.map((post) => <FeedPost key={post.id} post={post} state={feedState} updateState={updateState} announce={announce} sharePost={sharePost} hidePost={hidePost} />)
+            ? visiblePosts.map((post) => <FeedPost key={post.id} post={post} state={feedState} updateState={updateState} announce={announce} sharePost={sharePost} hidePost={hidePost} onLike={toggleSocialLike} liking={likingPostIds.includes(post.id)} />)
             : <section className="feed-empty-state"><h2>{filter === 'Following' ? 'Your circle is just getting started.' : 'No posts in this view yet.'}</h2><p>{filter === 'Following' ? 'Follow people in Connect and their posts will show up here.' : 'Try another feed or discover more communities.'}</p><button type="button" className="app-primary-button" onClick={() => filter === 'Following' ? navigate('/app/connect') : setFilter('For you')}>{filter === 'Following' ? 'Find people' : 'Show all posts'}</button></section>}
         </section>
         <aside className="feed-right-column">
@@ -209,7 +244,7 @@ export default function FeedPage() {
             <Link to="/app/connect" className="mini-community"><span className="mini-community-icon mini-peach">♫</span><span><strong>Currently on repeat</strong><small>What are you listening to?</small></span><span className="mini-arrow">↗</span></Link>
             <Link to="/app/connect" className="widget-footer-link">Explore all communities <span>→</span></Link>
           </section>
-          <div className="side-preview-note">iConnect is a concept preview.<br />No accounts are connected.</div>
+          <div className="side-preview-note">Text posts and likes are connected to your account.<br />Other social features remain a preview.</div>
         </aside>
       </div>
       <div className="mobile-compose-button"><Link to="/app/create"><Image size={17} /> Share a moment</Link></div>

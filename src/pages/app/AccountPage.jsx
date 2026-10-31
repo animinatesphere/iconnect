@@ -21,6 +21,8 @@ export default function AccountPage() {
   const [selected, setSelected] = useState(profile?.interests.length ? profile.interests : ['Design', 'Music', 'Reading'])
   const [preferences, setPreferences] = useState(defaultPreferences)
   const [savingProfile, setSavingProfile] = useState(false)
+  const [privacyLoading, setPrivacyLoading] = useState(true)
+  const [privacySaving, setPrivacySaving] = useState(false)
   const photoInput = useRef(null)
   const navigate = useNavigate()
 
@@ -30,6 +32,16 @@ export default function AccountPage() {
     } catch (error) {
       setNotice(error instanceof Error ? error.message : 'Could not load your local preferences.')
     }
+    apiRequest('/api/auth/me')
+      .then(({ user: account }) => {
+        setPreferences((current) => ({
+          ...current,
+          profileVisible: account.profileVisible,
+          discoverable: account.discoverable,
+        }))
+      })
+      .catch((error) => setNotice(error instanceof Error ? error.message : 'Could not load your account privacy settings.'))
+      .finally(() => setPrivacyLoading(false))
   }, [])
 
   function toggleInterest(interest) {
@@ -94,21 +106,36 @@ export default function AccountPage() {
     reader.readAsDataURL(file)
   }
 
-  function updatePreferences(key) {
+  async function updatePreferences(key) {
     const next = { ...preferences, [key]: !preferences[key] }
+    const isPrivacyPreference = key !== 'notifications'
+    if (isPrivacyPreference) setPrivacySaving(true)
     try {
+      if (isPrivacyPreference) {
+        const result = await apiRequest('/api/auth/preferences', {
+          method: 'PUT',
+          body: JSON.stringify({
+            profile_visible: next.profileVisible,
+            discoverable: next.discoverable,
+          }),
+        })
+        next.profileVisible = result.preferences.profileVisible
+        next.discoverable = result.preferences.discoverable
+      }
       saveDemoPreferences(next)
       setPreferences(next)
-      setNotice('Preference saved in this browser.')
+      setNotice(key === 'notifications' ? 'Notification preference saved in this browser.' : 'Privacy preference saved to your account.')
     } catch (error) {
-      setNotice(error instanceof Error ? error.message : 'This browser could not save that preference.')
+      setNotice(error instanceof Error ? error.message : 'Could not save that preference.')
+    } finally {
+      if (isPrivacyPreference) setPrivacySaving(false)
     }
   }
 
   return (
     <div className="app-content-width">
-      <AppPageHeader eyebrow="YOUR SPACE, YOUR SETTINGS" title="Profile & settings" description="Manage your iConnect profile and local preferences." />
-      <div className="account-demo-banner"><Shield size={16} /> Your profile details are saved to your account. Preferences and photo preview remain on this device.</div>
+      <AppPageHeader eyebrow="YOUR SPACE, YOUR SETTINGS" title="Profile & settings" description="Manage your iConnect profile, privacy, and local preferences." />
+      <div className="account-demo-banner"><Shield size={16} /> Profile details and privacy settings are saved to your account. Notifications and photo preview remain on this device.</div>
       <div className="account-layout">
         <nav className="account-tabs" aria-label="Profile settings">
           {['Profile', 'Preferences', 'Privacy'].map((tab) => <button type="button" key={tab} onClick={() => { setActiveTab(tab); setNotice('') }} className={activeTab === tab ? 'account-tab-active' : ''}>{tab}<ChevronRight size={15} /></button>)}
@@ -138,10 +165,10 @@ export default function AccountPage() {
             <div className="account-settings-list-item"><span className="account-setting-icon"><Link2 size={17} /></span><span><strong>Connected accounts</strong><small>External services are not connected in this preview.</small></span></div>
           </div>}
           {activeTab === 'Privacy' && <div className="account-settings-list">
-            <button type="button" onClick={() => updatePreferences('profileVisible')}><span className="account-setting-icon"><Eye size={17} /></span><span><strong>Show my profile in Connect</strong><small>{preferences.profileVisible ? 'Your demo profile appears in local discovery' : 'Your demo profile is hidden from local discovery'}</small></span><span className={preferences.profileVisible ? 'preference-toggle is-on' : 'preference-toggle'} aria-label={preferences.profileVisible ? 'On' : 'Off'} /></button>
-            <button type="button" onClick={() => updatePreferences('discoverable')}><span className="account-setting-icon"><UserRound size={17} /></span><span><strong>Include me in people search</strong><small>{preferences.discoverable ? 'Your demo profile matches local searches' : 'Your demo profile is excluded from local searches'}</small></span><span className={preferences.discoverable ? 'preference-toggle is-on' : 'preference-toggle'} aria-label={preferences.discoverable ? 'On' : 'Off'} /></button>
+            <button type="button" onClick={() => updatePreferences('profileVisible')} disabled={privacyLoading || privacySaving}><span className="account-setting-icon"><Eye size={17} /></span><span><strong>Show my profile in Connect</strong><small>{preferences.profileVisible ? 'Your account profile appears in Connect' : 'Your account profile is hidden in Connect'}</small></span><span className={preferences.profileVisible ? 'preference-toggle is-on' : 'preference-toggle'} aria-label={preferences.profileVisible ? 'On' : 'Off'} /></button>
+            <button type="button" onClick={() => updatePreferences('discoverable')} disabled={privacyLoading || privacySaving}><span className="account-setting-icon"><UserRound size={17} /></span><span><strong>Include me in people search</strong><small>{preferences.discoverable ? 'Your account can appear in people search' : 'Your account is excluded from people search'}</small></span><span className={preferences.discoverable ? 'preference-toggle is-on' : 'preference-toggle'} aria-label={preferences.discoverable ? 'On' : 'Off'} /></button>
             <div className="account-settings-list-item"><span className="account-setting-icon"><KeyRound size={17} /></span><span><strong>Password & security</strong><small>Demo passwords are never saved or verified.</small></span></div>
-            <div className="privacy-callout"><LockKeyhole size={17} /><p>These controls affect this browser demo only; they do not change a public or server-side account.</p></div>
+            <div className="privacy-callout"><LockKeyhole size={17} /><p>These account settings control whether your verified profile appears in iConnect discovery.</p></div>
           </div>}
           {notice && <p className="account-save-notice" role="status">{notice}</p>}
         </section>

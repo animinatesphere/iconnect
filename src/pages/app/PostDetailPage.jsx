@@ -6,6 +6,7 @@ import PageMeta from '../../components/PageMeta.jsx'
 import { demoPosts } from '../../data/demoContent.js'
 import { demoAvatar, getDemoProfile } from '../../utils/demoAccount.js'
 import { emptyDemoFeedState, readDemoFeedState, writeDemoFeedState } from '../../utils/demoFeed.js'
+import { createSocialComment, getSocialComments, getSocialPost, setSocialPostLike } from '../../utils/socialApi.js'
 
 const repliesByPost = {
   'jules-walk': [
@@ -25,26 +26,50 @@ const repliesByPost = {
 export default function PostDetailPage() {
   const { postId } = useParams()
   const [feedState, setFeedState] = useState(emptyDemoFeedState)
+  const [remotePost, setRemotePost] = useState(null)
+  const [remoteComments, setRemoteComments] = useState([])
   const [loaded, setLoaded] = useState(false)
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
+  const [submittingReply, setSubmittingReply] = useState(false)
+  const [likingPost, setLikingPost] = useState(false)
   const profile = getDemoProfile()
   const viewer = { name: profile?.name ?? 'Taylor Reed', image: profile?.avatar ?? demoAvatar }
   const [reply, setReply] = useState('')
   const [menuOpen, setMenuOpen] = useState(false)
   const replyInput = useRef(null)
   const navigate = useNavigate()
-  const post = [...feedState.posts, ...demoPosts].find((item) => item.id === postId)
+  const isRemotePostId = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(postId ?? '')
+  const post = remotePost ?? [...feedState.posts, ...demoPosts].find((item) => item.id === postId)
 
   useEffect(() => {
+    let active = true
     try {
       setFeedState(readDemoFeedState())
     } catch (loadError) {
       setError(loadError instanceof Error ? loadError.message : 'Could not load saved feed activity.')
-    } finally {
+    }
+
+    if (isRemotePostId) {
+      getSocialPost(postId)
+        .then((loadedPost) => {
+          if (active) setRemotePost(loadedPost)
+          return getSocialComments(postId)
+        })
+        .then((comments) => {
+          if (active) setRemoteComments(comments)
+        })
+        .catch((loadError) => {
+          if (active) setError(loadError instanceof Error ? loadError.message : 'Could not load this post.')
+        })
+        .finally(() => {
+          if (active) setLoaded(true)
+        })
+    } else {
       setLoaded(true)
     }
-  }, [])
+    return () => { active = false }
+  }, [isRemotePostId, postId])
 
   if (!loaded) return <div className="app-content-width post-detail-page" aria-live="polite">Loading post…</div>
 
@@ -53,15 +78,30 @@ export default function PostDetailPage() {
       <div className="app-content-width post-detail-page">
         <PageMeta title="Post not found" />
         <Link to="/app/home" className="app-back-link"><ArrowLeft size={15} /> Back to your home</Link>
-        <section className="post-not-found"><h1>We couldn't find that post.</h1><p>It may have moved or been removed from this preview.</p><Link to="/app/home">Return to your feed</Link></section>
+        <section className="post-not-found"><h1>We couldn't find that post.</h1><p>It may have been removed or is no longer available.</p>{error && <p role="alert">{error}</p>}<Link to="/app/home">Return to your feed</Link></section>
       </div>
     )
   }
 
-  function addReply(event) {
+  async function addReply(event) {
     event.preventDefault()
     const text = reply.trim()
     if (!text) return
+    if (post.isPersistent) {
+      setSubmittingReply(true)
+      try {
+        const newComment = await createSocialComment(post.id, text)
+        setRemoteComments((current) => [...current, newComment])
+        setRemotePost((current) => ({ ...current, comments: current.comments + 1 }))
+        setReply('')
+        setError('')
+      } catch (replyError) {
+        setError(replyError instanceof Error ? replyError.message : 'Your reply could not be published.')
+      } finally {
+        setSubmittingReply(false)
+      }
+      return
+    }
     const newReply = {
       id: `reply-${Date.now()}`,
       name: viewer.name,
@@ -89,6 +129,24 @@ export default function PostDetailPage() {
     const containsPost = feedState[key].includes(post.id)
     const values = containsPost ? feedState[key].filter((id) => id !== post.id) : [...feedState[key], post.id]
     updateState({ ...feedState, [key]: values })
+  }
+
+  async function togglePostLike() {
+    if (post.isPersistent) {
+      if (likingPost) return
+      setLikingPost(true)
+      try {
+        const updatedPost = await setSocialPostLike(post.id, !post.likedByMe)
+        setRemotePost(updatedPost)
+        setError('')
+      } catch (likeError) {
+        setError(likeError instanceof Error ? likeError.message : 'Could not update this like.')
+      } finally {
+        setLikingPost(false)
+      }
+      return
+    }
+    togglePostList('likedPostIds')
   }
 
   function toggleReplyLike(replyId) {
@@ -127,8 +185,8 @@ export default function PostDetailPage() {
   }
 
   const sampleReplies = repliesByPost[post.id] ?? []
-  const localReplies = feedState.replies[post.id] ?? []
-  const liked = feedState.likedPostIds.includes(post.id)
+  const localReplies = post.isPersistent ? remoteComments : feedState.replies[post.id] ?? []
+  const liked = post.isPersistent ? post.likedByMe : feedState.likedPostIds.includes(post.id)
   const saved = feedState.savedPostIds.includes(post.id)
 
   return (
@@ -157,29 +215,29 @@ export default function PostDetailPage() {
           {post.image && (post.mediaType === 'video'
             ? <video className="post-detail-image post-detail-video" src={post.image} controls playsInline preload="metadata" aria-label={`Video shared by ${post.name}`} />
             : <img className="post-detail-image" src={post.image.startsWith('data:') ? post.image : `https://images.unsplash.com/${post.image}?auto=format&fit=crop&w=1200&q=85`} alt={`A moment shared by ${post.name}`} />)}
-          <div className="post-detail-tag">{post.tag} <span>·</span> {post.location}</div>
+          {(post.tag || post.location) && <div className="post-detail-tag">{post.tag} {post.tag && post.location && <span>·</span>} {post.location}</div>}
           <p className="post-detail-time">{post.time === 'just now' ? 'Just now' : `${post.time} ago`} · Shared with their circle</p>
-          <div className="post-detail-stats"><span><strong>{post.likes + Number(liked)}</strong> likes</span><span><strong>{post.comments + localReplies.length}</strong> replies</span></div>
+          <div className="post-detail-stats"><span><strong>{post.likes + Number(!post.isPersistent && liked)}</strong> likes</span><span><strong>{post.comments + (!post.isPersistent ? localReplies.length : 0)}</strong> replies</span></div>
           <div className="post-detail-actions">
-            <button type="button" className={liked ? 'post-detail-action liked' : 'post-detail-action'} onClick={() => togglePostList('likedPostIds')} aria-pressed={liked}><Heart size={19} fill={liked ? 'currentColor' : 'none'} /><span>{liked ? 'Liked' : 'Like'}</span></button>
+            <button type="button" className={liked ? 'post-detail-action liked' : 'post-detail-action'} onClick={togglePostLike} disabled={post.isPersistent && likingPost} aria-pressed={liked}><Heart size={19} fill={liked ? 'currentColor' : 'none'} /><span>{liked ? 'Liked' : 'Like'}</span></button>
             <button type="button" className="post-detail-action" onClick={() => { replyInput.current?.focus(); replyInput.current?.scrollIntoView({ behavior: 'smooth', block: 'center' }) }}><MessageCircle size={19} /><span>Reply</span></button>
             <button type="button" className={saved ? 'post-detail-action saved' : 'post-detail-action'} onClick={() => togglePostList('savedPostIds')} aria-pressed={saved}><Bookmark size={18} fill={saved ? 'currentColor' : 'none'} /><span>{saved ? 'Saved' : 'Save'}</span></button>
             <button type="button" className="post-detail-action" onClick={sharePost}><Send size={18} /><span>Share</span></button>
           </div>
         </article>
         <section className="post-replies-section" aria-label="Replies">
-          <div className="post-replies-heading"><h2>Replies</h2><span>{post.comments + localReplies.length}</span></div>
+          <div className="post-replies-heading"><h2>Replies</h2><span>{post.comments + (!post.isPersistent ? localReplies.length : 0)}</span></div>
           <form id="reply-composer" className="post-reply-composer" onSubmit={addReply}>
             <Avatar person={viewer} />
             <label><span className="sr-only">Write a reply</span><textarea ref={replyInput} value={reply} onChange={(event) => setReply(event.target.value)} placeholder="Write a thoughtful reply…" rows={2} maxLength={280} /></label>
-            <button type="submit" className="app-primary-button" disabled={!reply.trim()}><Send size={15} /><span>Reply</span></button>
+            <button type="submit" className="app-primary-button" disabled={!reply.trim() || submittingReply}><Send size={15} /><span>{submittingReply ? 'Sending…' : 'Reply'}</span></button>
           </form>
           {error && <p className="feed-interaction-notice feed-error" role="alert">{error}</p>}
           {notice && <p className="feed-interaction-notice" role="status">{notice}</p>}
-          <p className="post-detail-preview-note">Preview only · Replies are saved in this browser and aren't published</p>
+          <p className="post-detail-preview-note">{post.isPersistent ? 'Replies are published to this post and saved to your account.' : 'Preview only · Replies are saved in this browser and are not published.'}</p>
           <div className="post-replies-list">
-            {localReplies.map((item) => <article className="post-reply" key={item.id}><Avatar person={{ name: item.name, image: item.avatar }} /><div className="post-reply-body"><div className="post-reply-author"><strong>{item.name}</strong><span>{item.handle} · {item.time}</span></div><p>{item.text}</p><div className="post-reply-actions"><button type="button" className={item.liked ? 'reply-liked' : ''} onClick={() => toggleReplyLike(item.id)} aria-pressed={item.liked} aria-label={item.liked ? 'Unlike your reply' : 'Like your reply'}><Heart size={15} fill={item.liked ? 'currentColor' : 'none'} /></button></div></div></article>)}
-            {sampleReplies.map((item) => {
+            {localReplies.map((item) => <article className="post-reply" key={item.id}><Avatar person={{ name: item.name, image: item.avatar }} /><div className="post-reply-body"><div className="post-reply-author"><strong>{item.name}</strong><span>{item.handle} · {item.time}</span></div><p>{item.text}</p>{!post.isPersistent && <div className="post-reply-actions"><button type="button" className={item.liked ? 'reply-liked' : ''} onClick={() => toggleReplyLike(item.id)} aria-pressed={item.liked} aria-label={item.liked ? 'Unlike your reply' : 'Like your reply'}><Heart size={15} fill={item.liked ? 'currentColor' : 'none'} /></button></div>}</div></article>)}
+            {!post.isPersistent && sampleReplies.map((item) => {
               const replyId = `${post.id}-${item.name}`
               const replyLiked = feedState.likedReplyIds.includes(replyId)
               return <article className="post-reply" key={replyId}><Avatar person={{ name: item.name, image: item.avatar }} /><div className="post-reply-body"><div className="post-reply-author"><strong>{item.name}</strong><span>{item.handle} · {item.time}</span><button type="button" aria-label={`More options for ${item.name}'s reply`} onClick={() => setNotice(`Reply from ${item.name} is sample content.`)}><MoreHorizontal size={17} /></button></div><p>{item.text}</p><div className="post-reply-actions"><button type="button" className={replyLiked ? 'reply-liked' : ''} aria-pressed={replyLiked} aria-label={replyLiked ? `Unlike ${item.name}'s reply` : `Like ${item.name}'s reply`} onClick={() => toggleSampleReplyLike(replyId)}><Heart size={15} fill={replyLiked ? 'currentColor' : 'none'} /></button><button type="button" aria-label={`Reply to ${item.name}'s comment`} onClick={() => replyTo(item.name)}><MessageCircle size={15} /></button></div></div></article>

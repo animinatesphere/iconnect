@@ -10,8 +10,9 @@ from collections import defaultdict, deque
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Callable, Deque, Dict, List, Optional
-from fastapi import Depends, FastAPI, Request, Response
+from typing import Any, Callable, Deque, Dict, List, Literal, Optional
+from uuid import UUID
+from fastapi import Depends, FastAPI, Query, Request, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -36,6 +37,10 @@ USERNAME_PATTERN = re.compile(r"^[a-zA-Z0-9._]{3,30}$")
 MAX_REQUEST_BYTES = 16 * 1024
 AUTH_WINDOW_SECONDS = 15 * 60
 AUTH_REQUEST_LIMIT = 10
+SOCIAL_WINDOW_SECONDS = 15 * 60
+SOCIAL_REQUEST_LIMIT = 60
+MESSAGE_WINDOW_SECONDS = 15 * 60
+MESSAGE_REQUEST_LIMIT = 120
 MIGRATION_PATH = Path(__file__).resolve().parents[1] / "migrations" / "001_initial.sql"
 
 
@@ -147,6 +152,102 @@ class ProfileInput(StrictModel):
         return cleaned
 
 
+class SocialPostInput(StrictModel):
+    text: str = Field(min_length=1, max_length=500)
+
+    @field_validator("text")
+    @classmethod
+    def clean_text(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("Post text is required.")
+        return value
+
+
+class SocialCommentInput(StrictModel):
+    text: str = Field(min_length=1, max_length=280)
+
+    @field_validator("text")
+    @classmethod
+    def clean_text(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("Comment text is required.")
+        return value
+
+
+class SocialLikeInput(StrictModel):
+    liked: bool
+
+
+class DirectConversationInput(StrictModel):
+    recipient_id: UUID
+
+    @field_validator("recipient_id", mode="before")
+    @classmethod
+    def parse_recipient_id(cls, value: Any) -> UUID:
+        if isinstance(value, UUID):
+            return value
+        if not isinstance(value, str):
+            raise ValueError("Recipient id is invalid.")
+        try:
+            return UUID(value)
+        except ValueError as error:
+            raise ValueError("Recipient id is invalid.") from error
+
+
+class DirectMessageInput(StrictModel):
+    text: str = Field(min_length=1, max_length=2000)
+
+    @field_validator("text")
+    @classmethod
+    def clean_text(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("Message text is required.")
+        return value
+
+
+class UserFollowInput(StrictModel):
+    following: bool
+
+
+class PrivacyPreferencesInput(StrictModel):
+    profile_visible: bool
+    discoverable: bool
+
+
+class JobListingInput(StrictModel):
+    title: str = Field(min_length=1, max_length=120)
+    company: str = Field(min_length=1, max_length=120)
+    location: str = Field(min_length=1, max_length=120)
+    employment_type: str = Field(min_length=1, max_length=40)
+    workplace_type: Literal["remote", "hybrid", "onsite"]
+    summary: str = Field(min_length=1, max_length=250)
+    description: str = Field(min_length=1, max_length=5000)
+
+    @field_validator("title", "company", "location", "employment_type", "summary", "description")
+    @classmethod
+    def clean_required_text(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("This field is required.")
+        return value
+
+
+class JobSaveInput(StrictModel):
+    saved: bool
+
+
+class JobApplicationInput(StrictModel):
+    cover_letter: str = Field(default="", max_length=2000)
+
+    @field_validator("cover_letter")
+    @classmethod
+    def clean_cover_letter(cls, value: str) -> str:
+        return value.strip()
+
+
 def public_user(user: Dict[str, Any]) -> Dict[str, Any]:
     return {
         "id": str(user["id"]),
@@ -155,6 +256,8 @@ def public_user(user: Dict[str, Any]) -> Dict[str, Any]:
         "email": user["email"],
         "bio": user["bio"],
         "interests": user["interests"],
+        "profileVisible": user.get("profile_visible", True),
+        "discoverable": user.get("discoverable", True),
     }
 
 
@@ -189,6 +292,7 @@ def _send_otp_email(
         headers={
             "Authorization": "Bearer {}".format(settings.resend_api_key),
             "Content-Type": "application/json",
+            "User-Agent": "iConnect-API/1.0",
         },
         method="POST",
     )
@@ -221,6 +325,10 @@ def create_app(
     dummy_password_hash = hash_password("not-a-real-user-password")
     rate_limit_state: Dict[str, Deque[float]] = defaultdict(deque)
     rate_limit_lock = threading.Lock()
+    social_rate_limit_state: Dict[str, Deque[float]] = defaultdict(deque)
+    social_rate_limit_lock = threading.Lock()
+    message_rate_limit_state: Dict[str, Deque[float]] = defaultdict(deque)
+    message_rate_limit_lock = threading.Lock()
     cookie_name = "__Host-iconnect.sid" if settings.production else "iconnect.sid"
 
     @asynccontextmanager
@@ -330,6 +438,137 @@ def create_app(
                 )
             attempts.append(now)
 
+    def enforce_social_rate_limit(request: Request) -> None:
+        forwarded_for = request.headers.get("x-forwarded-for", "")
+        client_ip = (
+            forwarded_for.split(",")[0].strip()
+            if settings.trust_proxy and forwarded_for
+            else request.client.host if request.client else "unknown"
+        )
+        now = time.monotonic()
+        with social_rate_limit_lock:
+            attempts = social_rate_limit_state[client_ip]
+            while attempts and now - attempts[0] >= SOCIAL_WINDOW_SECONDS:
+                attempts.popleft()
+            if len(attempts) >= SOCIAL_REQUEST_LIMIT:
+                raise ApiError(
+                    429,
+                    "rate_limited",
+                    "You are posting too quickly. Please try again later.",
+                )
+            attempts.append(now)
+
+    def enforce_message_rate_limit(request: Request) -> None:
+        forwarded_for = request.headers.get("x-forwarded-for", "")
+        client_ip = (
+            forwarded_for.split(",")[0].strip()
+            if settings.trust_proxy and forwarded_for
+            else request.client.host if request.client else "unknown"
+        )
+        now = time.monotonic()
+        with message_rate_limit_lock:
+            attempts = message_rate_limit_state[client_ip]
+            while attempts and now - attempts[0] >= MESSAGE_WINDOW_SECONDS:
+                attempts.popleft()
+            if len(attempts) >= MESSAGE_REQUEST_LIMIT:
+                raise ApiError(
+                    429,
+                    "rate_limited",
+                    "You are sending messages too quickly. Please try again later.",
+                )
+            attempts.append(now)
+
+    def social_post(connection: Any, post_id: Any, viewer_id: Any) -> Optional[Dict[str, Any]]:
+        return connection.execute(
+            """SELECT p.id, p.body, p.created_at,
+                      u.id AS author_id, u.display_name, u.username,
+                      (SELECT count(*) FROM social_post_likes l WHERE l.post_id = p.id) AS like_count,
+                      (SELECT count(*) FROM social_post_comments c WHERE c.post_id = p.id) AS comment_count,
+                      EXISTS (
+                          SELECT 1 FROM social_post_likes mine
+                          WHERE mine.post_id = p.id AND mine.user_id = %s
+                      ) AS liked_by_me
+               FROM social_posts p
+               JOIN users u ON u.id = p.user_id
+               WHERE p.id = %s""",
+            (viewer_id, post_id),
+        ).fetchone()
+
+    def public_social_post(row: Dict[str, Any]) -> Dict[str, Any]:
+        return {
+            "id": str(row["id"]),
+            "text": row["body"],
+            "createdAt": row["created_at"].isoformat(),
+            "author": {
+                "id": str(row["author_id"]),
+                "name": row["display_name"],
+                "username": row["username"],
+            },
+            "likeCount": int(row["like_count"]),
+            "commentCount": int(row["comment_count"]),
+            "likedByMe": bool(row["liked_by_me"]),
+        }
+
+    def public_social_comment(row: Dict[str, Any]) -> Dict[str, Any]:
+        return {
+            "id": str(row["id"]),
+            "text": row["body"],
+            "createdAt": row["created_at"].isoformat(),
+            "author": {
+                "id": str(row["author_id"]),
+                "name": row["display_name"],
+                "username": row["username"],
+            },
+        }
+
+    def public_direct_message(row: Dict[str, Any], viewer_id: Any) -> Dict[str, Any]:
+        return {
+            "id": str(row["id"]),
+            "text": row["body"],
+            "createdAt": row["created_at"].isoformat(),
+            "isMine": str(row["sender_id"]) == str(viewer_id),
+            "sender": {
+                "id": str(row["sender_id"]),
+                "name": row["display_name"],
+                "username": row["username"],
+            },
+        }
+
+    def public_discoverable_user(row: Dict[str, Any]) -> Dict[str, Any]:
+        return {
+            "id": str(row["id"]),
+            "name": row["display_name"],
+            "username": row["username"],
+            "bio": row["bio"],
+            "interests": row["interests"],
+            "followerCount": int(row["follower_count"]),
+            "followingCount": int(row["following_count"]),
+            "followedByMe": bool(row["followed_by_me"]),
+        }
+
+    def public_job(row: Dict[str, Any]) -> Dict[str, Any]:
+        return {
+            "id": str(row["id"]),
+            "title": row["title"],
+            "company": row["company"],
+            "location": row["location"],
+            "employmentType": row["employment_type"],
+            "workplaceType": row["workplace_type"],
+            "summary": row["summary"],
+            "description": row["description"],
+            "createdAt": row["created_at"].isoformat(),
+            "poster": {
+                "name": row["display_name"],
+                "username": row["username"],
+            },
+            "isSaved": bool(row["is_saved"]),
+            "appliedByMe": bool(row["applied_by_me"]),
+            "isOwner": bool(row["is_owner"]),
+            "applicationCount": int(row["application_count"]),
+            "applicationStatus": row["application_status"],
+            "applicationCoverLetter": row["application_cover_letter"],
+        }
+
     def issue_verification(user: Dict[str, Any]) -> bool:
         code = create_email_code()
         code_hash = hash_email_code(code, settings.otp_hash_secret)
@@ -394,7 +633,7 @@ def create_app(
         with database.connection() as connection:
             user = connection.execute(
                 """SELECT u.id, u.display_name, u.username, u.email, u.bio, u.interests,
-                          u.email_verified_at
+                       u.email_verified_at, u.profile_visible, u.discoverable
                    FROM auth_sessions s
                    JOIN users u ON u.id = s.user_id
                    WHERE s.token_hash = %s AND s.expires_at > now()
@@ -500,6 +739,7 @@ def create_app(
         with database.connection() as connection:
             user = connection.execute(
                 """SELECT id, display_name, username, email, bio, interests,
+                          profile_visible, discoverable,
                           password_hash, email_verified_at
                    FROM users WHERE email = %s""",
                 (input.email,),
@@ -519,6 +759,31 @@ def create_app(
     def get_current_user(request: Request) -> Dict[str, Any]:
         return {"user": public_user(require_user(request))}
 
+    @app.put("/api/auth/preferences")
+    def update_privacy_preferences(
+        input: PrivacyPreferencesInput,
+        request: Request,
+    ) -> Dict[str, Any]:
+        user = require_user(request)
+        with database.connection() as connection:
+            updated = connection.execute(
+                """UPDATE users
+                   SET profile_visible = %s,
+                       discoverable = %s,
+                       updated_at = now()
+                   WHERE id = %s AND email_verified_at IS NOT NULL
+                   RETURNING profile_visible, discoverable""",
+                (input.profile_visible, input.discoverable, user["id"]),
+            ).fetchone()
+        if not updated:
+            raise ApiError(401, "not_authenticated", "Sign in to continue.")
+        return {
+            "preferences": {
+                "profileVisible": updated["profile_visible"],
+                "discoverable": updated["discoverable"],
+            },
+        }
+
     @app.put("/api/auth/profile")
     def update_profile(input: ProfileInput, request: Request) -> Dict[str, Any]:
         user = require_user(request)
@@ -527,7 +792,8 @@ def create_app(
                 """UPDATE users
                    SET display_name = %s, username = %s, bio = %s, interests = %s, updated_at = now()
                    WHERE id = %s AND email_verified_at IS NOT NULL
-                   RETURNING id, display_name, username, email, bio, interests""",
+                   RETURNING id, display_name, username, email, bio, interests,
+                             profile_visible, discoverable""",
                 (input.name, input.username, input.bio, input.interests, user["id"]),
             ).fetchone()
         if not updated:
@@ -552,6 +818,780 @@ def create_app(
         )
         response.status_code = 204
         return response
+
+    @app.get("/api/social/posts")
+    def list_social_posts(
+        user: Dict[str, Any] = Depends(require_user),
+        following_only: bool = False,
+        limit: int = Query(default=50, ge=1, le=100),
+    ) -> Dict[str, Any]:
+        with database.connection() as connection:
+            rows = connection.execute(
+                """SELECT p.id, p.body, p.created_at,
+                          u.id AS author_id, u.display_name, u.username,
+                          (SELECT count(*) FROM social_post_likes l WHERE l.post_id = p.id) AS like_count,
+                          (SELECT count(*) FROM social_post_comments c WHERE c.post_id = p.id) AS comment_count,
+                          EXISTS (
+                              SELECT 1 FROM social_post_likes mine
+                              WHERE mine.post_id = p.id AND mine.user_id = %s
+                          ) AS liked_by_me
+                   FROM social_posts p
+                   JOIN users u ON u.id = p.user_id
+                   WHERE (
+                       NOT %s
+                       OR EXISTS (
+                           SELECT 1 FROM user_follows followed
+                           WHERE followed.follower_id = %s
+                             AND followed.following_id = p.user_id
+                       )
+                   )
+                   ORDER BY p.created_at DESC
+                   LIMIT %s""",
+                (user["id"], following_only, user["id"], limit),
+            ).fetchall()
+        return {"posts": [public_social_post(row) for row in rows]}
+
+    @app.post(
+        "/api/social/posts",
+        status_code=201,
+        dependencies=[Depends(enforce_social_rate_limit)],
+    )
+    def create_social_post(
+        input: SocialPostInput,
+        user: Dict[str, Any] = Depends(require_user),
+    ) -> Dict[str, Any]:
+        with database.connection() as connection:
+            inserted = connection.execute(
+                """INSERT INTO social_posts (user_id, body)
+                   VALUES (%s, %s)
+                   RETURNING id""",
+                (user["id"], input.text),
+            ).fetchone()
+            if not inserted:
+                raise ApiError(500, "internal_error", "The post could not be created.")
+            post = social_post(connection, inserted["id"], user["id"])
+        if not post:
+            raise ApiError(500, "internal_error", "The post could not be created.")
+        return {"post": public_social_post(post)}
+
+    @app.get("/api/social/posts/{post_id}")
+    def get_social_post(
+        post_id: UUID,
+        user: Dict[str, Any] = Depends(require_user),
+    ) -> Dict[str, Any]:
+        with database.connection() as connection:
+            post = social_post(connection, post_id, user["id"])
+        if not post:
+            raise ApiError(404, "post_not_found", "That post could not be found.")
+        return {"post": public_social_post(post)}
+
+    @app.put(
+        "/api/social/posts/{post_id}/like",
+        dependencies=[Depends(enforce_social_rate_limit)],
+    )
+    def set_social_post_like(
+        post_id: UUID,
+        input: SocialLikeInput,
+        user: Dict[str, Any] = Depends(require_user),
+    ) -> Dict[str, Any]:
+        with database.connection() as connection:
+            if not connection.execute(
+                "SELECT id FROM social_posts WHERE id = %s",
+                (post_id,),
+            ).fetchone():
+                raise ApiError(404, "post_not_found", "That post could not be found.")
+            if input.liked:
+                connection.execute(
+                    """INSERT INTO social_post_likes (post_id, user_id)
+                       VALUES (%s, %s)
+                       ON CONFLICT (post_id, user_id) DO NOTHING""",
+                    (post_id, user["id"]),
+                )
+            else:
+                connection.execute(
+                    "DELETE FROM social_post_likes WHERE post_id = %s AND user_id = %s",
+                    (post_id, user["id"]),
+                )
+            post = social_post(connection, post_id, user["id"])
+        if not post:
+            raise ApiError(404, "post_not_found", "That post could not be found.")
+        return {"post": public_social_post(post)}
+
+    @app.get(
+        "/api/social/posts/{post_id}/comments",
+        dependencies=[Depends(require_user)],
+    )
+    def list_social_comments(
+        post_id: UUID,
+        limit: int = Query(default=100, ge=1, le=200),
+    ) -> Dict[str, Any]:
+        with database.connection() as connection:
+            if not connection.execute(
+                "SELECT id FROM social_posts WHERE id = %s",
+                (post_id,),
+            ).fetchone():
+                raise ApiError(404, "post_not_found", "That post could not be found.")
+            rows = connection.execute(
+                """SELECT c.id, c.body, c.created_at,
+                          u.id AS author_id, u.display_name, u.username
+                   FROM social_post_comments c
+                   JOIN users u ON u.id = c.user_id
+                   WHERE c.post_id = %s
+                   ORDER BY c.created_at ASC
+                   LIMIT %s""",
+                (post_id, limit),
+            ).fetchall()
+        return {"comments": [public_social_comment(row) for row in rows]}
+
+    @app.post(
+        "/api/social/posts/{post_id}/comments",
+        status_code=201,
+        dependencies=[Depends(enforce_social_rate_limit)],
+    )
+    def create_social_comment(
+        post_id: UUID,
+        input: SocialCommentInput,
+        user: Dict[str, Any] = Depends(require_user),
+    ) -> Dict[str, Any]:
+        with database.connection() as connection:
+            inserted = connection.execute(
+                """INSERT INTO social_post_comments (post_id, user_id, body)
+                   SELECT p.id, %s, %s
+                   FROM social_posts p
+                   WHERE p.id = %s
+                   RETURNING id""",
+                (user["id"], input.text, post_id),
+            ).fetchone()
+            if not inserted:
+                raise ApiError(404, "post_not_found", "That post could not be found.")
+            row = connection.execute(
+                """SELECT c.id, c.body, c.created_at,
+                          u.id AS author_id, u.display_name, u.username
+                   FROM social_post_comments c
+                   JOIN users u ON u.id = c.user_id
+                   WHERE c.id = %s""",
+                (inserted["id"],),
+            ).fetchone()
+        if not row:
+            raise ApiError(500, "internal_error", "The reply could not be created.")
+        return {"comment": public_social_comment(row)}
+
+    @app.get("/api/messages/users")
+    def search_message_recipients(
+        request: Request,
+        query: str = Query(min_length=2, max_length=40),
+        limit: int = Query(default=20, ge=1, le=50),
+    ) -> Dict[str, Any]:
+        user = require_user(request)
+        normalized_query = query.strip().lstrip("@").lower()
+        if len(normalized_query) < 2:
+            raise ApiError(400, "invalid_input", "Enter at least two characters to search.")
+        escaped_query = (
+            normalized_query
+            .replace("\\", "\\\\")
+            .replace("%", "\\%")
+            .replace("_", "\\_")
+        )
+        pattern = escaped_query + "%"
+        with database.connection() as connection:
+            rows = connection.execute(
+                """SELECT id, display_name, username
+                   FROM users
+                   WHERE email_verified_at IS NOT NULL
+                     AND profile_visible AND discoverable
+                     AND id <> %s
+                     AND (
+                         lower(username) LIKE %s ESCAPE E'\\\\'
+                         OR lower(display_name) LIKE %s ESCAPE E'\\\\'
+                     )
+                   ORDER BY lower(username), lower(display_name)
+                   LIMIT %s""",
+                (user["id"], pattern, pattern, limit),
+            ).fetchall()
+        return {
+            "users": [
+                {
+                    "id": str(row["id"]),
+                    "name": row["display_name"],
+                    "username": row["username"],
+                }
+                for row in rows
+            ],
+        }
+
+    @app.get("/api/people")
+    def discover_people(
+        request: Request,
+        query: Optional[str] = Query(default=None, max_length=40),
+        following_only: bool = False,
+        limit: int = Query(default=50, ge=1, le=100),
+    ) -> Dict[str, Any]:
+        user = require_user(request)
+        normalized_query = (query or "").strip().lstrip("@").lower()
+        if normalized_query and len(normalized_query) < 2:
+            raise ApiError(400, "invalid_input", "Enter at least two characters to search.")
+        escaped_query = (
+            normalized_query
+            .replace("\\", "\\\\")
+            .replace("%", "\\%")
+            .replace("_", "\\_")
+        )
+        pattern = escaped_query + "%" if escaped_query else None
+        with database.connection() as connection:
+            rows = connection.execute(
+                """SELECT person.id, person.display_name, person.username, person.bio,
+                          person.interests,
+                          (SELECT count(*)
+                           FROM user_follows followers
+                           WHERE followers.following_id = person.id) AS follower_count,
+                          (SELECT count(*)
+                           FROM user_follows following
+                           WHERE following.follower_id = person.id) AS following_count,
+                          EXISTS (
+                              SELECT 1
+                              FROM user_follows mine
+                              WHERE mine.follower_id = %s
+                                AND mine.following_id = person.id
+                          ) AS followed_by_me
+                   FROM users person
+                   WHERE person.email_verified_at IS NOT NULL
+                     AND person.profile_visible
+                     AND person.discoverable
+                     AND person.id <> %s
+                     AND (
+                         %s::text IS NULL
+                         OR lower(person.username) LIKE %s ESCAPE E'\\\\'
+                         OR lower(person.display_name) LIKE %s ESCAPE E'\\\\'
+                         OR EXISTS (
+                             SELECT 1
+                             FROM unnest(person.interests) AS interest(value)
+                             WHERE lower(interest.value) LIKE %s ESCAPE E'\\\\'
+                         )
+                     )
+                     AND (
+                         NOT %s
+                         OR EXISTS (
+                             SELECT 1
+                             FROM user_follows following_filter
+                             WHERE following_filter.follower_id = %s
+                               AND following_filter.following_id = person.id
+                         )
+                     )
+                   ORDER BY lower(person.display_name), lower(person.username)
+                   LIMIT %s""",
+                (
+                    user["id"],
+                    user["id"],
+                    pattern,
+                    pattern,
+                    pattern,
+                    pattern,
+                    following_only,
+                    user["id"],
+                    limit,
+                ),
+            ).fetchall()
+        return {"people": [public_discoverable_user(row) for row in rows]}
+
+    @app.put(
+        "/api/people/{person_id}/follow",
+        dependencies=[Depends(enforce_social_rate_limit)],
+    )
+    def set_person_follow(
+        person_id: UUID,
+        input: UserFollowInput,
+        request: Request,
+    ) -> Dict[str, Any]:
+        user = require_user(request)
+        if str(person_id) == str(user["id"]):
+            raise ApiError(400, "invalid_follow", "You cannot follow your own account.")
+        with database.connection() as connection:
+            person = connection.execute(
+                """SELECT id
+                   FROM users
+                   WHERE id = %s AND email_verified_at IS NOT NULL
+                     AND profile_visible AND discoverable""",
+                (person_id,),
+            ).fetchone()
+            if not person:
+                raise ApiError(404, "person_not_found", "That account could not be found.")
+            if input.following:
+                connection.execute(
+                    """INSERT INTO user_follows (follower_id, following_id)
+                       VALUES (%s, %s)
+                       ON CONFLICT (follower_id, following_id) DO NOTHING""",
+                    (user["id"], person_id),
+                )
+            else:
+                connection.execute(
+                    """DELETE FROM user_follows
+                       WHERE follower_id = %s AND following_id = %s""",
+                    (user["id"], person_id),
+                )
+            counts = connection.execute(
+                """SELECT
+                       (SELECT count(*) FROM user_follows
+                        WHERE following_id = %s) AS follower_count,
+                       (SELECT count(*) FROM user_follows
+                        WHERE follower_id = %s) AS following_count""",
+                (person_id, person_id),
+            ).fetchone()
+        if not counts:
+            raise ApiError(500, "internal_error", "The follow status could not be updated.")
+        return {
+            "following": input.following,
+            "followerCount": int(counts["follower_count"]),
+            "followingCount": int(counts["following_count"]),
+        }
+
+    def job_record(connection: Any, job_id: UUID, viewer_id: Any) -> Optional[Dict[str, Any]]:
+        return connection.execute(
+            """SELECT j.id, j.title, j.company, j.location, j.employment_type,
+                      j.workplace_type, j.summary, j.description, j.created_at,
+                      author.display_name, author.username,
+                      EXISTS (
+                          SELECT 1 FROM job_bookmarks bookmark
+                          WHERE bookmark.job_id = j.id AND bookmark.user_id = %s
+                      ) AS is_saved,
+                      EXISTS (
+                          SELECT 1 FROM job_applications mine
+                          WHERE mine.job_id = j.id AND mine.applicant_id = %s
+                      ) AS applied_by_me,
+                      j.user_id = %s AS is_owner,
+                      (SELECT count(*) FROM job_applications applications
+                       WHERE applications.job_id = j.id) AS application_count,
+                      (SELECT mine.status FROM job_applications mine
+                       WHERE mine.job_id = j.id AND mine.applicant_id = %s) AS application_status,
+                      (SELECT mine.cover_letter FROM job_applications mine
+                       WHERE mine.job_id = j.id AND mine.applicant_id = %s) AS application_cover_letter
+               FROM job_listings j
+               JOIN users author ON author.id = j.user_id
+               WHERE j.id = %s""",
+            (viewer_id, viewer_id, viewer_id, viewer_id, viewer_id, job_id),
+        ).fetchone()
+
+    @app.get("/api/jobs")
+    def list_jobs(
+        request: Request,
+        query: Optional[str] = Query(default=None, max_length=80),
+        location: Optional[str] = Query(default=None, max_length=80),
+        workplace_type: Optional[Literal["remote", "hybrid", "onsite"]] = None,
+        view: Literal["all", "saved", "applied", "mine"] = "all",
+        limit: int = Query(default=50, ge=1, le=100),
+    ) -> Dict[str, Any]:
+        user = require_user(request)
+        normalized_query = (query or "").strip().lower()
+        normalized_location = (location or "").strip().lower()
+        if normalized_query and len(normalized_query) < 2:
+            raise ApiError(400, "invalid_input", "Enter at least two characters to search.")
+        filters = []
+        parameters: List[Any] = [user["id"], user["id"], user["id"], user["id"], user["id"]]
+        if view == "saved":
+            filters.append(
+                "EXISTS (SELECT 1 FROM job_bookmarks filter_bookmark "
+                "WHERE filter_bookmark.job_id = j.id AND filter_bookmark.user_id = %s)"
+            )
+            parameters.append(user["id"])
+        elif view == "applied":
+            filters.append(
+                "EXISTS (SELECT 1 FROM job_applications filter_application "
+                "WHERE filter_application.job_id = j.id AND filter_application.applicant_id = %s)"
+            )
+            parameters.append(user["id"])
+        elif view == "mine":
+            filters.append("j.user_id = %s")
+            parameters.append(user["id"])
+
+        if normalized_query:
+            escaped_query = (
+                normalized_query
+                .replace("\\", "\\\\")
+                .replace("%", "\\%")
+                .replace("_", "\\_")
+            )
+            pattern = "%" + escaped_query + "%"
+            filters.append(
+                "(lower(j.title) LIKE %s ESCAPE E'\\\\' "
+                "OR lower(j.company) LIKE %s ESCAPE E'\\\\' "
+                "OR lower(j.summary) LIKE %s ESCAPE E'\\\\' "
+                "OR lower(j.description) LIKE %s ESCAPE E'\\\\')"
+            )
+            parameters.extend([pattern] * 4)
+        if normalized_location:
+            escaped_location = (
+                normalized_location
+                .replace("\\", "\\\\")
+                .replace("%", "\\%")
+                .replace("_", "\\_")
+            )
+            pattern = "%" + escaped_location + "%"
+            filters.append("lower(j.location) LIKE %s ESCAPE E'\\\\'")
+            parameters.append(pattern)
+        if workplace_type:
+            filters.append("j.workplace_type = %s")
+            parameters.append(workplace_type)
+        parameters.append(limit)
+
+        with database.connection() as connection:
+            rows = connection.execute(
+                """SELECT j.id, j.title, j.company, j.location, j.employment_type,
+                          j.workplace_type, j.summary, j.description, j.created_at,
+                          author.display_name, author.username,
+                          EXISTS (
+                              SELECT 1 FROM job_bookmarks bookmark
+                              WHERE bookmark.job_id = j.id AND bookmark.user_id = %s
+                          ) AS is_saved,
+                          EXISTS (
+                              SELECT 1 FROM job_applications mine
+                              WHERE mine.job_id = j.id AND mine.applicant_id = %s
+                          ) AS applied_by_me,
+                          j.user_id = %s AS is_owner,
+                          (SELECT count(*) FROM job_applications applications
+                           WHERE applications.job_id = j.id) AS application_count,
+                          (SELECT mine.status FROM job_applications mine
+                           WHERE mine.job_id = j.id AND mine.applicant_id = %s) AS application_status,
+                          (SELECT mine.cover_letter FROM job_applications mine
+                           WHERE mine.job_id = j.id AND mine.applicant_id = %s) AS application_cover_letter
+                   FROM job_listings j
+                   JOIN users author ON author.id = j.user_id
+                   WHERE {}
+                   ORDER BY j.created_at DESC, j.id DESC
+                   LIMIT %s""".format(" AND ".join(filters) if filters else "TRUE"),
+                tuple(parameters),
+            ).fetchall()
+        return {"jobs": [public_job(row) for row in rows]}
+
+    @app.post(
+        "/api/jobs",
+        status_code=201,
+        dependencies=[Depends(enforce_social_rate_limit)],
+    )
+    def create_job(
+        input: JobListingInput,
+        request: Request,
+    ) -> Dict[str, Any]:
+        user = require_user(request)
+        with database.connection() as connection:
+            inserted = connection.execute(
+                """INSERT INTO job_listings
+                       (user_id, title, company, location, employment_type,
+                        workplace_type, summary, description)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                   RETURNING id""",
+                (
+                    user["id"],
+                    input.title,
+                    input.company,
+                    input.location,
+                    input.employment_type,
+                    input.workplace_type,
+                    input.summary,
+                    input.description,
+                ),
+            ).fetchone()
+            if not inserted:
+                raise ApiError(500, "internal_error", "The job listing could not be created.")
+            row = job_record(connection, inserted["id"], user["id"])
+        if not row:
+            raise ApiError(500, "internal_error", "The job listing could not be created.")
+        return {"job": public_job(row)}
+
+    @app.put(
+        "/api/jobs/{job_id}/save",
+        dependencies=[Depends(enforce_social_rate_limit)],
+    )
+    def set_job_saved(
+        job_id: UUID,
+        input: JobSaveInput,
+        request: Request,
+    ) -> Dict[str, Any]:
+        user = require_user(request)
+        with database.connection() as connection:
+            listing = connection.execute(
+                "SELECT id FROM job_listings WHERE id = %s",
+                (job_id,),
+            ).fetchone()
+            if not listing:
+                raise ApiError(404, "job_not_found", "That job listing could not be found.")
+            if input.saved:
+                connection.execute(
+                    """INSERT INTO job_bookmarks (user_id, job_id)
+                       VALUES (%s, %s)
+                       ON CONFLICT (user_id, job_id) DO NOTHING""",
+                    (user["id"], job_id),
+                )
+            else:
+                connection.execute(
+                    "DELETE FROM job_bookmarks WHERE user_id = %s AND job_id = %s",
+                    (user["id"], job_id),
+                )
+        return {"saved": input.saved}
+
+    @app.post(
+        "/api/jobs/{job_id}/applications",
+        status_code=201,
+        dependencies=[Depends(enforce_social_rate_limit)],
+    )
+    def apply_to_job(
+        job_id: UUID,
+        input: JobApplicationInput,
+        request: Request,
+    ) -> Dict[str, Any]:
+        user = require_user(request)
+        with database.connection() as connection:
+            listing = connection.execute(
+                "SELECT id, user_id FROM job_listings WHERE id = %s",
+                (job_id,),
+            ).fetchone()
+            if not listing:
+                raise ApiError(404, "job_not_found", "That job listing could not be found.")
+            if str(listing["user_id"]) == str(user["id"]):
+                raise ApiError(400, "invalid_application", "You cannot apply to your own job listing.")
+            inserted = connection.execute(
+                """INSERT INTO job_applications (job_id, applicant_id, cover_letter)
+                   VALUES (%s, %s, %s)
+                   ON CONFLICT (job_id, applicant_id) DO NOTHING
+                   RETURNING id""",
+                (job_id, user["id"], input.cover_letter),
+            ).fetchone()
+            application = connection.execute(
+                """SELECT id, job_id, cover_letter, status, created_at
+                   FROM job_applications
+                   WHERE job_id = %s AND applicant_id = %s""",
+                (job_id, user["id"]),
+            ).fetchone()
+        if not application:
+            raise ApiError(500, "internal_error", "Your application could not be saved.")
+        return {
+            "application": {
+                "id": str(application["id"]),
+                "jobId": str(application["job_id"]),
+                "coverLetter": application["cover_letter"],
+                "status": application["status"],
+                "createdAt": application["created_at"].isoformat(),
+            },
+            "alreadyApplied": inserted is None,
+        }
+
+    @app.get("/api/jobs/{job_id}/applications")
+    def list_job_applications(
+        job_id: UUID,
+        request: Request,
+        limit: int = Query(default=100, ge=1, le=200),
+    ) -> Dict[str, Any]:
+        user = require_user(request)
+        with database.connection() as connection:
+            listing = connection.execute(
+                "SELECT id, user_id FROM job_listings WHERE id = %s",
+                (job_id,),
+            ).fetchone()
+            if not listing or str(listing["user_id"]) != str(user["id"]):
+                raise ApiError(404, "job_not_found", "That job listing could not be found.")
+            rows = connection.execute(
+                """SELECT application.id, application.cover_letter, application.status,
+                          application.created_at, applicant.display_name, applicant.username
+                   FROM job_applications application
+                   JOIN users applicant ON applicant.id = application.applicant_id
+                   WHERE application.job_id = %s
+                   ORDER BY application.created_at DESC
+                   LIMIT %s""",
+                (job_id, limit),
+            ).fetchall()
+        return {
+            "applications": [
+                {
+                    "id": str(row["id"]),
+                    "coverLetter": row["cover_letter"],
+                    "status": row["status"],
+                    "createdAt": row["created_at"].isoformat(),
+                    "applicant": {
+                        "name": row["display_name"],
+                        "username": row["username"],
+                    },
+                }
+                for row in rows
+            ],
+        }
+
+    @app.get("/api/messages/conversations")
+    def list_direct_conversations(request: Request) -> Dict[str, Any]:
+        user = require_user(request)
+        with database.connection() as connection:
+            rows = connection.execute(
+                """SELECT c.id, c.created_at,
+                          other.id AS recipient_id,
+                          other.display_name AS recipient_name,
+                          other.username AS recipient_username,
+                          latest.body AS last_message,
+                          latest.created_at AS last_message_at,
+                          (SELECT count(*)
+                           FROM direct_messages unread
+                           WHERE unread.conversation_id = c.id
+                             AND unread.recipient_id = %s
+                             AND unread.read_at IS NULL) AS unread_count
+                   FROM direct_conversations c
+                   JOIN users other
+                     ON other.id = CASE
+                         WHEN c.participant_one_id = %s THEN c.participant_two_id
+                         ELSE c.participant_one_id
+                     END
+                   LEFT JOIN LATERAL (
+                       SELECT body, created_at
+                       FROM direct_messages
+                       WHERE conversation_id = c.id
+                       ORDER BY created_at DESC, id DESC
+                       LIMIT 1
+                   ) latest ON TRUE
+                   WHERE c.participant_one_id = %s OR c.participant_two_id = %s
+                   ORDER BY COALESCE(latest.created_at, c.created_at) DESC""",
+                (user["id"], user["id"], user["id"], user["id"]),
+            ).fetchall()
+        return {
+            "conversations": [
+                {
+                    "id": str(row["id"]),
+                    "recipient": {
+                        "id": str(row["recipient_id"]),
+                        "name": row["recipient_name"],
+                        "username": row["recipient_username"],
+                    },
+                    "lastMessage": row["last_message"] or "",
+                    "lastMessageAt": (
+                        row["last_message_at"] or row["created_at"]
+                    ).isoformat(),
+                    "unreadCount": int(row["unread_count"]),
+                }
+                for row in rows
+            ],
+        }
+
+    @app.post(
+        "/api/messages/conversations",
+        status_code=201,
+        dependencies=[Depends(enforce_message_rate_limit)],
+    )
+    def create_direct_conversation(
+        input: DirectConversationInput,
+        request: Request,
+    ) -> Dict[str, Any]:
+        user = require_user(request)
+        if str(input.recipient_id) == str(user["id"]):
+            raise ApiError(400, "invalid_recipient", "You cannot start a conversation with yourself.")
+        with database.connection() as connection:
+            recipient = connection.execute(
+                """SELECT id
+                   FROM users
+                   WHERE id = %s AND email_verified_at IS NOT NULL
+                     AND profile_visible AND discoverable""",
+                (input.recipient_id,),
+            ).fetchone()
+            if not recipient:
+                raise ApiError(404, "user_not_found", "That account could not be found.")
+            conversation = connection.execute(
+                """INSERT INTO direct_conversations (participant_one_id, participant_two_id)
+                   VALUES (LEAST(%s, %s), GREATEST(%s, %s))
+                   ON CONFLICT (participant_one_id, participant_two_id)
+                   DO UPDATE SET created_at = direct_conversations.created_at
+                   RETURNING id""",
+                (user["id"], input.recipient_id, user["id"], input.recipient_id),
+            ).fetchone()
+        if not conversation:
+            raise ApiError(500, "internal_error", "The conversation could not be opened.")
+        return {"conversationId": str(conversation["id"])}
+
+    @app.get("/api/messages/conversations/{conversation_id}/messages")
+    def list_direct_messages(
+        conversation_id: UUID,
+        request: Request,
+        limit: int = Query(default=100, ge=1, le=200),
+    ) -> Dict[str, Any]:
+        user = require_user(request)
+        with database.connection() as connection:
+            conversation = connection.execute(
+                """SELECT id
+                   FROM direct_conversations
+                   WHERE id = %s
+                     AND (participant_one_id = %s OR participant_two_id = %s)""",
+                (conversation_id, user["id"], user["id"]),
+            ).fetchone()
+            if not conversation:
+                raise ApiError(404, "conversation_not_found", "That conversation could not be found.")
+            connection.execute(
+                """UPDATE direct_messages
+                   SET read_at = now()
+                   WHERE conversation_id = %s
+                     AND recipient_id = %s
+                     AND read_at IS NULL""",
+                (conversation_id, user["id"]),
+            )
+            rows = connection.execute(
+                """SELECT message.id, message.body, message.created_at, message.sender_id,
+                          sender.display_name, sender.username
+                   FROM (
+                       SELECT id, body, created_at, sender_id
+                       FROM direct_messages
+                       WHERE conversation_id = %s
+                       ORDER BY created_at DESC, id DESC
+                       LIMIT %s
+                   ) message
+                   JOIN users sender ON sender.id = message.sender_id
+                   ORDER BY message.created_at ASC, message.id ASC""",
+                (conversation_id, limit),
+            ).fetchall()
+        return {
+            "messages": [
+                public_direct_message(row, user["id"])
+                for row in rows
+            ],
+        }
+
+    @app.post(
+        "/api/messages/conversations/{conversation_id}/messages",
+        status_code=201,
+        dependencies=[Depends(enforce_message_rate_limit)],
+    )
+    def create_direct_message(
+        conversation_id: UUID,
+        input: DirectMessageInput,
+        request: Request,
+    ) -> Dict[str, Any]:
+        user = require_user(request)
+        with database.connection() as connection:
+            inserted = connection.execute(
+                """INSERT INTO direct_messages
+                       (conversation_id, sender_id, recipient_id, body)
+                   SELECT c.id, %s,
+                          CASE
+                              WHEN c.participant_one_id = %s THEN c.participant_two_id
+                              ELSE c.participant_one_id
+                          END,
+                          %s
+                   FROM direct_conversations c
+                   WHERE c.id = %s
+                     AND (c.participant_one_id = %s OR c.participant_two_id = %s)
+                   RETURNING id""",
+                (
+                    user["id"],
+                    user["id"],
+                    input.text,
+                    conversation_id,
+                    user["id"],
+                    user["id"],
+                ),
+            ).fetchone()
+            if not inserted:
+                raise ApiError(404, "conversation_not_found", "That conversation could not be found.")
+            row = connection.execute(
+                """SELECT message.id, message.body, message.created_at, message.sender_id,
+                          sender.display_name, sender.username
+                   FROM direct_messages message
+                   JOIN users sender ON sender.id = message.sender_id
+                   WHERE message.id = %s""",
+                (inserted["id"],),
+            ).fetchone()
+        if not row:
+            raise ApiError(500, "internal_error", "The message could not be sent.")
+        return {"message": public_direct_message(row, user["id"])}
 
     return app
 
