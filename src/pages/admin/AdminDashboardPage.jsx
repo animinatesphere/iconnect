@@ -50,6 +50,10 @@ function formatDate(value) {
   return new Date(value).toLocaleString()
 }
 
+function formatCount(value) {
+  return Number.isFinite(value) ? value.toLocaleString() : '—'
+}
+
 function formatRecord(key, item) {
   switch (key) {
     case 'posts':
@@ -317,11 +321,11 @@ export default function AdminDashboardPage() {
           {notice && <p className="feed-interaction-notice" role="status">{notice}</p>}
           {loading && <p className="admin-detail-loading">Loading administrator data…</p>}
           {!loading && section === 'Overview' && overview && <>
-            <div className="admin-metric-grid">{overviewItems.map(([key, label]) => <article className={`admin-metric-card ${key.endsWith('7d') ? 'admin-metric-recent' : ''}`} key={key}><span>{label}</span><strong>{overview[key].toLocaleString()}</strong><small>{key.endsWith('7d') ? 'Recent growth' : 'Live database total'}</small></article>)}</div>
+            <div className="admin-metric-grid">{overviewItems.map(([key, label]) => <article className={`admin-metric-card ${key.endsWith('7d') ? 'admin-metric-recent' : ''}`} key={key}><span>{label}</span><strong>{formatCount(overview[key])}</strong><small>{key.endsWith('7d') ? 'Recent growth' : 'Live database total'}</small></article>)}</div>
             <section className="admin-panel admin-queue-panel"><div className="admin-panel-heading"><div><span className="app-page-eyebrow">ADMIN ACCESS</span><h2>Recent audit events</h2></div><button type="button" className="admin-row-action" onClick={() => chooseSection('Audit log')}>View all</button></div>{auditEvents.length ? auditEvents.slice(0, 8).map((event) => <div className="admin-audit-entry" key={event.id}><span /><div><strong>{auditDescription(event)}</strong><small>{event.subject ? `${event.subject.name} · ${event.subject.email} · ` : ''}{event.details?.id ? `${event.details.id} · ` : ''}{formatDate(event.createdAt)}</small></div></div>) : <div className="admin-content-empty"><Activity size={18} /><p>No administrator detail access recorded yet.</p></div>}</section>
           </>}
           {!loading && section === 'Users' && <section className="admin-panel admin-users-panel">
-            <div className="admin-panel-heading"><div><span className="app-page-eyebrow">REGISTERED ACCOUNTS</span><h2>{userTotal.toLocaleString()} users</h2></div></div>
+            <div className="admin-panel-heading"><div><span className="app-page-eyebrow">REGISTERED ACCOUNTS</span><h2>{formatCount(userTotal)} users</h2></div></div>
             {loadingUsers && <p className="admin-detail-loading">Loading accounts…</p>}
             {!loadingUsers && <div className="admin-live-user-list">{users.map((user) => <button type="button" className="admin-live-user-row" key={user.id} onClick={() => openUser(user)}>
               <span className="admin-live-user-avatar">{user.name.slice(0, 1)}</span>
