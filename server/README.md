@@ -107,18 +107,24 @@ The app does not currently have provider-backed APIs for travel bookings, wallet
 
 ## Admin API
 
-Admin access is restricted on the server to verified accounts whose email addresses are listed in the comma-separated `ADMIN_EMAILS` environment variable. For example, set `ADMIN_EMAILS=admin@example.com` on the API server after registering and verifying that account through the normal signup flow. Multiple addresses can be separated with commas. An empty value disables admin access. Never expose this setting through a `VITE_*` variable.
+Super-admin access is restricted on the server to verified accounts whose email addresses are listed in the comma-separated `ADMIN_EMAILS` environment variable. For example, set `ADMIN_EMAILS=admin@example.com` on the API server after registering and verifying that account through the normal signup flow. Multiple addresses can be separated with commas. An empty value disables super-admin access. Never expose this setting through a `VITE_*` variable.
 
-The admin portal uses the same secure session cookie as the rest of the API:
+Super-admins can grant or revoke database-managed sub-admin access for existing, email-verified accounts. Sub-admins can inspect and suspend normal user accounts, manage posts/comments/listings/jobs/communities, and manage iBuy products. They cannot view private message contents, assign administrator roles, or suspend administrator accounts. Super-admins retain the server allowlist as their source of authority and can view private messages; user-detail reads are audited for both roles.
 
-- `POST /api/admin/login` verifies the account password, email verification, and allowlist membership.
+The admin portal at `/admin/login` uses the same secure session cookie as the rest of the API:
+
+- `POST /api/admin/login` verifies the account password, email verification, and super-admin allowlist or sub-admin role.
 - `GET /api/admin/me` confirms the current session has admin access.
-- `GET /api/admin/overview` returns platform totals.
+- `GET /api/admin/overview` returns platform totals and seven-day new-account, post, product, and job counts.
 - `GET /api/admin/users?query=alex&limit=50&offset=0` searches account names, usernames, and email addresses. Limits are 1–100.
-- `GET /api/admin/users/{user_id}?limit=100&offset=0` returns account details and paginated posts, comments, likes, saved posts, messages, marketplace listings, job activity, communities, and follow activity. Limits are 1–200. This includes private message contents; every successful user-detail read is written to the admin audit log.
-- `GET /api/admin/audit-log?limit=100` lists recent admin user-detail reads. Limits are 1–200.
+- `POST /api/admin/users/{user_id}/suspension` suspends or restores a normal account. Suspending revokes its active sessions; administrator accounts and the current admin cannot be suspended through this endpoint.
+- `GET /api/admin/users/{user_id}?limit=100&offset=0` returns account details and paginated posts, comments, likes, saved posts, marketplace listings, job activity, communities, and follow activity. Only super-admins receive private message contents. Limits are 1–200.
+- `GET /api/admin/content?type=posts|comments|products|local_listings|jobs|communities` searches live user content. `DELETE /api/admin/content/{type}/{id}` removes a selected record and writes an audit event.
+- `PUT /api/admin/products/{product_id}` edits an iBuy product, its photo gallery, and its published state. Product creation uses the authenticated marketplace endpoint and the normal authenticated image-upload endpoint.
+- `GET /api/admin/subadmins`, `POST /api/admin/subadmins`, and `DELETE /api/admin/subadmins/{user_id}` manage sub-admins and are restricted to super-admins.
+- `GET /api/admin/audit-log?limit=100` lists recent user-detail reads and administrative changes. Limits are 1–200.
 
-All admin endpoints independently enforce the server-side allowlist. The `admin_audit_log` table is created by the database migration; run `npm run db:migrate` before starting the updated API.
+All admin endpoints independently enforce the server-side role checks. The `admin_roles` and `admin_audit_log` tables and account suspension field are created by the idempotent database migration; run `npm run db:migrate` before starting the updated API.
 
 ## Production domains
 

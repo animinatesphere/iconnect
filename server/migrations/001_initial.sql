@@ -9,12 +9,14 @@ CREATE TABLE IF NOT EXISTS users (
   profile_visible boolean NOT NULL DEFAULT true,
   discoverable boolean NOT NULL DEFAULT true,
   email_verified_at timestamptz,
+  suspended_at timestamptz,
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now()
 );
 
 ALTER TABLE users ADD COLUMN IF NOT EXISTS profile_visible boolean NOT NULL DEFAULT true;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS discoverable boolean NOT NULL DEFAULT true;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS suspended_at timestamptz;
 
 CREATE TABLE IF NOT EXISTS email_verification_codes (
   user_id uuid PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
@@ -41,14 +43,27 @@ CREATE TABLE IF NOT EXISTS admin_audit_log (
   admin_user_id uuid NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
   subject_user_id uuid REFERENCES users(id) ON DELETE SET NULL,
   action varchar(40) NOT NULL,
+  details jsonb NOT NULL DEFAULT '{}'::jsonb,
   created_at timestamptz NOT NULL DEFAULT now()
 );
+
+ALTER TABLE admin_audit_log
+  ADD COLUMN IF NOT EXISTS details jsonb NOT NULL DEFAULT '{}'::jsonb;
 
 CREATE INDEX IF NOT EXISTS admin_audit_log_created_at_idx
   ON admin_audit_log(created_at DESC, id DESC);
 
 CREATE INDEX IF NOT EXISTS admin_audit_log_subject_created_at_idx
   ON admin_audit_log(subject_user_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS admin_roles (
+  user_id uuid PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+  created_by uuid NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS admin_roles_created_at_idx
+  ON admin_roles(created_at DESC);
 
 CREATE TABLE IF NOT EXISTS social_posts (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),

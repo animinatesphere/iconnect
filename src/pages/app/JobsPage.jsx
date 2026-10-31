@@ -178,7 +178,7 @@ export default function JobsPage() {
           <Plus size={15} /> Post a role
         </button>
       </AppPageHeader>
-      <div className="jobs-demo-banner"><BriefcaseBusiness size={16} /><span><strong>Community job listings</strong> · Listings, saved roles, and applications are tied to your iConnect account. Verify details with the poster before sharing sensitive information.</span></div>
+      <div className="jobs-account-banner"><BriefcaseBusiness size={16} /><span><strong>Community job listings</strong> · Listings, saved roles, and applications are tied to your iConnect account. Verify details with the poster before sharing sensitive information.</span></div>
       {error && <p className="feed-interaction-notice feed-error" role="alert">{error}</p>}
       {notice && <p className="feed-interaction-notice" role="status">{notice}</p>}
 

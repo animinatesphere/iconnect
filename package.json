@@ -13,7 +13,6 @@
     "test:server": "server/.venv/bin/python -m unittest discover -s server/test -p 'test_*.py'"
   },
   "dependencies": {
-    "lightweight-charts": "^5.2.1",
     "lucide-react": "^0.468.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",

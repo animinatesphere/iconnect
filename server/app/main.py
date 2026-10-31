@@ -236,6 +236,26 @@ class MarketplaceProductInput(StrictModel):
         return validate_image_urls(values)
 
 
+class AdminMarketplaceProductInput(MarketplaceProductInput):
+    published: bool = True
+
+
+class AdminSubadminInput(StrictModel):
+    email: str = Field(min_length=3, max_length=254)
+
+    @field_validator("email")
+    @classmethod
+    def clean_email(cls, value: str) -> str:
+        value = value.strip().lower()
+        if not EMAIL_PATTERN.fullmatch(value):
+            raise ValueError("Email is invalid.")
+        return value
+
+
+class AdminUserStatusInput(StrictModel):
+    suspended: bool
+
+
 def validate_image_urls(values: List[str]) -> List[str]:
     if len(values) > MAX_IMAGES_PER_RECORD:
         raise ValueError("Choose no more than five images.")
@@ -895,11 +915,12 @@ def create_app(
         with database.connection() as connection:
             user = connection.execute(
                 """SELECT u.id, u.display_name, u.username, u.email, u.bio, u.interests,
-                       u.email_verified_at, u.profile_visible, u.discoverable
+                       u.email_verified_at, u.profile_visible, u.discoverable, u.suspended_at
                    FROM auth_sessions s
                    JOIN users u ON u.id = s.user_id
                    WHERE s.token_hash = %s AND s.expires_at > now()
-                     AND u.email_verified_at IS NOT NULL""",
+                     AND u.email_verified_at IS NOT NULL
+                     AND u.suspended_at IS NULL""",
                 (hash_session_token(token, settings.session_secret),),
             ).fetchone()
             return user
@@ -912,9 +933,22 @@ def create_app(
 
     def require_admin(request: Request) -> Dict[str, Any]:
         user = require_user(request)
-        if user["email"].strip().lower() not in settings.admin_emails:
+        if user["email"].strip().lower() in settings.admin_emails:
+            return {**user, "role": "super_admin"}
+        with database.connection() as connection:
+            role = connection.execute(
+                "SELECT user_id FROM admin_roles WHERE user_id = %s",
+                (user["id"],),
+            ).fetchone()
+        if not role:
             raise ApiError(403, "admin_required", "This account is not authorized to access admin tools.")
-        return user
+        return {**user, "role": "sub_admin"}
+
+    def require_super_admin(request: Request) -> Dict[str, Any]:
+        admin = require_admin(request)
+        if admin["role"] != "super_admin":
+            raise ApiError(403, "super_admin_required", "Only a super administrator can manage administrator roles.")
+        return admin
 
     @app.post("/api/media/images", status_code=201)
     async def upload_image(
@@ -1084,7 +1118,7 @@ def create_app(
             user = connection.execute(
                 """SELECT id, display_name, username, email, bio, interests,
                           profile_visible, discoverable,
-                          password_hash, email_verified_at
+                          password_hash, email_verified_at, suspended_at
                    FROM users WHERE email = %s""",
                 (input.email,),
             ).fetchone()
@@ -1096,6 +1130,8 @@ def create_app(
             raise ApiError(401, "invalid_credentials", "Email or password is incorrect.")
         if not user["email_verified_at"]:
             raise ApiError(403, "email_not_verified", "Verify your email address before signing in.")
+        if user["suspended_at"] is not None:
+            raise ApiError(403, "account_suspended", "This account is currently suspended.")
         create_session(user["id"], request, response)
         return {"user": public_user(user)}
 
@@ -1105,7 +1141,7 @@ def create_app(
             user = connection.execute(
                 """SELECT id, display_name, username, email, bio, interests,
                           profile_visible, discoverable,
-                          password_hash, email_verified_at
+                          password_hash, email_verified_at, suspended_at
                    FROM users WHERE email = %s""",
                 (input.email,),
             ).fetchone()
@@ -1117,14 +1153,29 @@ def create_app(
             raise ApiError(401, "invalid_credentials", "Email or password is incorrect.")
         if not user["email_verified_at"]:
             raise ApiError(403, "email_not_verified", "Verify your email address before signing in.")
+        if user["suspended_at"] is not None:
+            raise ApiError(403, "account_suspended", "This account is currently suspended.")
+        role = None
         if user["email"].strip().lower() not in settings.admin_emails:
+            with database.connection() as connection:
+                role = connection.execute(
+                    "SELECT user_id FROM admin_roles WHERE user_id = %s",
+                    (user["id"],),
+                ).fetchone()
+        if user["email"].strip().lower() not in settings.admin_emails and not role:
             raise ApiError(403, "admin_required", "This account is not authorized to access admin tools.")
+        admin_role = (
+            "super_admin"
+            if user["email"].strip().lower() in settings.admin_emails
+            else "sub_admin"
+        )
         create_session(user["id"], request, response)
         return {
             "admin": {
                 "id": str(user["id"]),
                 "name": user["display_name"],
                 "email": user["email"],
+                "role": admin_role,
             },
         }
 
@@ -1199,8 +1250,270 @@ def create_app(
                 "id": str(admin["id"]),
                 "name": admin["display_name"],
                 "email": admin["email"],
+                "role": admin["role"],
             },
         }
+
+    @app.get("/api/admin/subadmins")
+    def list_admin_subadmins(
+        _admin: Dict[str, Any] = Depends(require_super_admin),
+    ) -> Dict[str, Any]:
+        with database.connection() as connection:
+            rows = connection.execute(
+                """SELECT u.id, u.display_name, u.email, roles.created_at,
+                          creator.display_name AS created_by_name
+                   FROM admin_roles roles
+                   JOIN users u ON u.id = roles.user_id
+                   JOIN users creator ON creator.id = roles.created_by
+                   ORDER BY roles.created_at DESC, u.id""",
+            ).fetchall()
+        return {
+            "superAdmins": sorted(settings.admin_emails),
+            "subAdmins": [
+                {
+                    "id": str(row["id"]),
+                    "name": row["display_name"],
+                    "email": row["email"],
+                    "createdAt": row["created_at"].isoformat(),
+                    "createdBy": row["created_by_name"],
+                }
+                for row in rows
+            ],
+        }
+
+    @app.post("/api/admin/subadmins", status_code=201)
+    def create_admin_subadmin(
+        input: AdminSubadminInput,
+        admin: Dict[str, Any] = Depends(require_super_admin),
+    ) -> Dict[str, Any]:
+        if input.email in settings.admin_emails:
+            raise ApiError(409, "admin_already_exists", "This account is already a super administrator.")
+        with database.connection() as connection:
+            user = connection.execute(
+                """SELECT id, display_name, email, email_verified_at
+                   FROM users WHERE lower(email) = %s""",
+                (input.email,),
+            ).fetchone()
+            if not user:
+                raise ApiError(404, "user_not_found", "Register and verify this account before granting admin access.")
+            if not user["email_verified_at"]:
+                raise ApiError(409, "email_not_verified", "Verify this account’s email before granting admin access.")
+            existing = connection.execute(
+                "SELECT user_id FROM admin_roles WHERE user_id = %s",
+                (user["id"],),
+            ).fetchone()
+            if existing:
+                raise ApiError(409, "admin_already_exists", "This account is already a sub-admin.")
+            connection.execute(
+                "INSERT INTO admin_roles (user_id, created_by) VALUES (%s, %s)",
+                (user["id"], admin["id"]),
+            )
+            connection.execute(
+                """INSERT INTO admin_audit_log (admin_user_id, subject_user_id, action, details)
+                   VALUES (%s, %s, 'grant_subadmin', %s::jsonb)""",
+                (admin["id"], user["id"], json.dumps({"email": user["email"]})),
+            )
+        return {
+            "subAdmin": {
+                "id": str(user["id"]),
+                "name": user["display_name"],
+                "email": user["email"],
+            },
+        }
+
+    @app.delete("/api/admin/subadmins/{user_id}", status_code=204)
+    def delete_admin_subadmin(
+        user_id: UUID,
+        admin: Dict[str, Any] = Depends(require_super_admin),
+    ) -> Response:
+        with database.connection() as connection:
+            removed = connection.execute(
+                """DELETE FROM admin_roles roles
+                   USING users u
+                   WHERE roles.user_id = %s AND u.id = roles.user_id
+                     AND lower(u.email) <> ALL(%s)
+                   RETURNING roles.user_id, u.email""",
+                (user_id, list(settings.admin_emails)),
+            ).fetchone()
+            if not removed:
+                raise ApiError(404, "subadmin_not_found", "That sub-admin could not be found.")
+            connection.execute(
+                """INSERT INTO admin_audit_log (admin_user_id, subject_user_id, action, details)
+                   VALUES (%s, %s, 'revoke_subadmin', %s::jsonb)""",
+                (admin["id"], user_id, json.dumps({"email": removed["email"]})),
+            )
+        return Response(status_code=204)
+
+    @app.get("/api/admin/content")
+    def list_admin_content(
+        content_type: Literal["posts", "comments", "products", "local_listings", "jobs", "communities"] = Query(alias="type"),
+        query: Optional[str] = Query(default=None, max_length=80),
+        limit: int = Query(default=50, ge=1, le=100),
+        offset: int = Query(default=0, ge=0),
+        _admin: Dict[str, Any] = Depends(require_admin),
+    ) -> Dict[str, Any]:
+        normalized_query = (query or "").strip().lower()
+        if normalized_query and len(normalized_query) < 2:
+            raise ApiError(400, "invalid_input", "Enter at least two characters to search.")
+        escaped_query = (
+            normalized_query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        )
+        pattern = "%" + escaped_query + "%" if escaped_query else None
+        definitions = {
+            "posts": (
+                "social_posts p JOIN users u ON u.id = p.user_id",
+                "p.id, p.body AS title, u.display_name AS owner, p.created_at, p.image_urls AS image_urls, TRUE AS published",
+                "lower(p.body) LIKE %s ESCAPE E'\\\\' OR lower(u.display_name) LIKE %s ESCAPE E'\\\\'",
+                "social_posts",
+            ),
+            "comments": (
+                "social_post_comments c JOIN users u ON u.id = c.user_id JOIN social_posts p ON p.id = c.post_id",
+                "c.id, c.body AS title, u.display_name AS owner, c.created_at, '{}'::text[] AS image_urls, TRUE AS published",
+                "lower(c.body) LIKE %s ESCAPE E'\\\\' OR lower(u.display_name) LIKE %s ESCAPE E'\\\\'",
+                "social_post_comments",
+            ),
+            "products": (
+                "marketplace_products p JOIN users u ON u.id = p.seller_id",
+                "p.id, p.name AS title, p.description, p.category, p.price, p.stock, p.image_url, u.display_name AS owner, p.created_at, COALESCE(NULLIF(p.image_urls, '{}'::text[]), CASE WHEN p.image_url IS NOT NULL THEN ARRAY[p.image_url]::text[] ELSE '{}'::text[] END) AS image_urls, p.published",
+                "lower(p.name) LIKE %s ESCAPE E'\\\\' OR lower(p.description) LIKE %s ESCAPE E'\\\\' OR lower(u.display_name) LIKE %s ESCAPE E'\\\\'",
+                "marketplace_products",
+            ),
+            "local_listings": (
+                "local_marketplace_listings p JOIN users u ON u.id = p.seller_id",
+                "p.id, p.title, concat(p.category, ' · ', p.location, ' · ', p.price, ' · ', p.description) AS description, u.display_name AS owner, p.created_at, ARRAY[]::text[] AS image_urls, p.published",
+                "lower(p.title) LIKE %s ESCAPE E'\\\\' OR lower(p.description) LIKE %s ESCAPE E'\\\\' OR lower(u.display_name) LIKE %s ESCAPE E'\\\\'",
+                "local_marketplace_listings",
+            ),
+            "jobs": (
+                "job_listings p JOIN users u ON u.id = p.user_id",
+                "p.id, p.title, concat(p.company, ' · ', p.location, ' · ', p.description) AS description, u.display_name AS owner, p.created_at, ARRAY[]::text[] AS image_urls, TRUE AS published",
+                "lower(p.title) LIKE %s ESCAPE E'\\\\' OR lower(p.company) LIKE %s ESCAPE E'\\\\' OR lower(u.display_name) LIKE %s ESCAPE E'\\\\'",
+                "job_listings",
+            ),
+            "communities": (
+                "communities p JOIN users u ON u.id = p.owner_id",
+                "p.id, p.name AS title, p.description, u.display_name AS owner, p.created_at, ARRAY[]::text[] AS image_urls, TRUE AS published",
+                "lower(p.name) LIKE %s ESCAPE E'\\\\' OR lower(p.description) LIKE %s ESCAPE E'\\\\' OR lower(u.display_name) LIKE %s ESCAPE E'\\\\'",
+                "communities",
+            ),
+        }
+        source, fields, search_clause, _ = definitions[content_type]
+        sort_alias = {
+            "posts": "p",
+            "comments": "c",
+            "products": "p",
+            "local_listings": "p",
+            "jobs": "p",
+            "communities": "p",
+        }[content_type]
+        where_clause = "WHERE %s::text IS NULL OR (" + search_clause + ")"
+        parameters = (pattern, *([pattern] * search_clause.count("%s")))
+        with database.connection() as connection:
+            total = connection.execute(
+                "SELECT count(*) AS total FROM {} {}".format(source, where_clause),
+                parameters,
+            ).fetchone()
+            rows = connection.execute(
+                "SELECT {} FROM {} {} ORDER BY {}.created_at DESC, {}.id DESC LIMIT %s OFFSET %s".format(
+                    fields, source, where_clause, sort_alias, sort_alias
+                ),
+                (*parameters, limit, offset),
+            ).fetchall()
+        return {
+            "items": [
+                {
+                    "id": str(row["id"]),
+                    "title": row["title"],
+                    "description": row.get("description", ""),
+                    "owner": row["owner"],
+                    "createdAt": row["created_at"].isoformat(),
+                    "imageUrls": row.get("image_urls") or [],
+                    "published": bool(row["published"]),
+                    **(
+                        {
+                            "category": row["category"],
+                            "price": int(row["price"]),
+                            "stock": int(row["stock"]),
+                            "imageUrl": row["image_url"],
+                        }
+                        if content_type == "products"
+                        else {}
+                    ),
+                }
+                for row in rows
+            ],
+            "total": int(total["total"]) if total else 0,
+            "limit": limit,
+            "offset": offset,
+        }
+
+    @app.delete("/api/admin/content/{content_type}/{content_id}", status_code=204)
+    def delete_admin_content(
+        content_type: Literal["posts", "comments", "products", "local_listings", "jobs", "communities"],
+        content_id: UUID,
+        admin: Dict[str, Any] = Depends(require_admin),
+    ) -> Response:
+        tables = {
+            "posts": ("social_posts", "user_id"),
+            "comments": ("social_post_comments", "user_id"),
+            "products": ("marketplace_products", "seller_id"),
+            "local_listings": ("local_marketplace_listings", "seller_id"),
+            "jobs": ("job_listings", "user_id"),
+            "communities": ("communities", "owner_id"),
+        }
+        table, owner_column = tables[content_type]
+        with database.connection() as connection:
+            removed = connection.execute(
+                "DELETE FROM {} WHERE id = %s RETURNING {}, id".format(table, owner_column),
+                (content_id,),
+            ).fetchone()
+            if not removed:
+                raise ApiError(404, "content_not_found", "That content could not be found.")
+            connection.execute(
+                """INSERT INTO admin_audit_log (admin_user_id, subject_user_id, action, details)
+                   VALUES (%s, %s, 'delete_content', %s::jsonb)""",
+                (
+                    admin["id"],
+                    removed[owner_column],
+                    json.dumps({"type": content_type, "id": str(removed["id"])}),
+                ),
+            )
+        return Response(status_code=204)
+
+    @app.put("/api/admin/products/{product_id}")
+    def update_admin_product(
+        product_id: UUID,
+        input: AdminMarketplaceProductInput,
+        admin: Dict[str, Any] = Depends(require_admin),
+    ) -> Dict[str, Any]:
+        image_urls = input.image_urls or ([input.image_url] if input.image_url else [])
+        with database.connection() as connection:
+            updated = connection.execute(
+                """UPDATE marketplace_products
+                   SET name = %s, category = %s, price = %s, stock = %s,
+                       description = %s, image_url = %s, image_urls = %s, published = %s
+                   WHERE id = %s
+                   RETURNING id""",
+                (
+                    input.name,
+                    input.category,
+                    input.price,
+                    input.stock,
+                    input.description,
+                    input.image_url or (image_urls[0] if image_urls else None),
+                    image_urls,
+                    input.published,
+                    product_id,
+                ),
+            ).fetchone()
+            if not updated:
+                raise ApiError(404, "product_not_found", "That product could not be found.")
+            connection.execute(
+                """INSERT INTO admin_audit_log (admin_user_id, action, details)
+                   VALUES (%s, 'update_product', %s::jsonb)""",
+                (admin["id"], json.dumps({"productId": str(product_id), "published": input.published})),
+            )
+        return {"productId": str(product_id), "published": input.published}
 
     @app.get("/api/admin/overview")
     def get_admin_overview(
@@ -1221,7 +1534,11 @@ def create_app(
                        (SELECT count(*) FROM job_listings) AS jobs,
                        (SELECT count(*) FROM job_applications) AS applications,
                        (SELECT count(*) FROM communities) AS communities,
-                       (SELECT count(*) FROM community_memberships) AS memberships"""
+                       (SELECT count(*) FROM community_memberships) AS memberships,
+                       (SELECT count(*) FROM users WHERE created_at >= now() - interval '7 days') AS new_users_7d,
+                       (SELECT count(*) FROM social_posts WHERE created_at >= now() - interval '7 days') AS new_posts_7d,
+                       (SELECT count(*) FROM marketplace_products WHERE created_at >= now() - interval '7 days') AS new_products_7d,
+                       (SELECT count(*) FROM job_listings WHERE created_at >= now() - interval '7 days') AS new_jobs_7d"""
             ).fetchone()
         if not row:
             raise ApiError(500, "internal_error", "Admin overview could not be loaded.")
@@ -1240,6 +1557,10 @@ def create_app(
                 "applications": int(row["applications"]),
                 "communities": int(row["communities"]),
                 "memberships": int(row["memberships"]),
+                "newUsers7d": int(row["new_users_7d"]),
+                "newPosts7d": int(row["new_posts_7d"]),
+                "newProducts7d": int(row["new_products_7d"]),
+                "newJobs7d": int(row["new_jobs_7d"]),
             },
         }
 
@@ -1273,7 +1594,7 @@ def create_app(
             rows = connection.execute(
                 """SELECT u.id, u.display_name, u.username, u.email, u.bio,
                           u.interests, u.profile_visible, u.discoverable,
-                          u.email_verified_at, u.created_at, u.updated_at,
+                          u.email_verified_at, u.suspended_at, u.created_at, u.updated_at,
                           (SELECT count(*) FROM social_posts p WHERE p.user_id = u.id) AS posts,
                           (SELECT count(*) FROM social_post_comments c WHERE c.user_id = u.id) AS comments,
                           (SELECT count(*) FROM direct_messages m
@@ -1302,6 +1623,7 @@ def create_app(
                 "profileVisible": bool(user["profile_visible"]),
                 "discoverable": bool(user["discoverable"]),
                 "emailVerified": user["email_verified_at"] is not None,
+                "suspended": user["suspended_at"] is not None,
                 "createdAt": user["created_at"].isoformat(),
                 "updatedAt": user["updated_at"].isoformat(),
                 "counts": {
@@ -1323,6 +1645,47 @@ def create_app(
             "offset": offset,
         }
 
+    @app.post("/api/admin/users/{user_id}/suspension")
+    def set_admin_user_suspension(
+        user_id: UUID,
+        input: AdminUserStatusInput,
+        admin: Dict[str, Any] = Depends(require_admin),
+    ) -> Dict[str, bool]:
+        if str(admin["id"]) == str(user_id):
+            raise ApiError(409, "cannot_suspend_self", "You cannot suspend your own administrator account.")
+        with database.connection() as connection:
+            target = connection.execute(
+                "SELECT id, email FROM users WHERE id = %s",
+                (user_id,),
+            ).fetchone()
+            if not target:
+                raise ApiError(404, "user_not_found", "That account could not be found.")
+            if target["email"].strip().lower() in settings.admin_emails:
+                raise ApiError(409, "cannot_suspend_admin", "Super-admin accounts cannot be suspended here.")
+            target_admin = connection.execute(
+                "SELECT user_id FROM admin_roles WHERE user_id = %s",
+                (user_id,),
+            ).fetchone()
+            if target_admin:
+                raise ApiError(409, "cannot_suspend_admin", "Administrator accounts cannot be suspended here.")
+            if input.suspended:
+                connection.execute(
+                    "UPDATE users SET suspended_at = now(), updated_at = now() WHERE id = %s",
+                    (user_id,),
+                )
+                connection.execute("DELETE FROM auth_sessions WHERE user_id = %s", (user_id,))
+            else:
+                connection.execute(
+                    "UPDATE users SET suspended_at = NULL, updated_at = now() WHERE id = %s",
+                    (user_id,),
+                )
+            connection.execute(
+                """INSERT INTO admin_audit_log (admin_user_id, subject_user_id, action, details)
+                   VALUES (%s, %s, 'update_user_status', %s::jsonb)""",
+                (admin["id"], user_id, json.dumps({"suspended": input.suspended})),
+            )
+        return {"suspended": input.suspended}
+
     @app.get("/api/admin/users/{user_id}")
     def get_admin_user_details(
         user_id: UUID,
@@ -1333,7 +1696,7 @@ def create_app(
         with database.connection() as connection:
             user = connection.execute(
                 """SELECT id, display_name, username, email, bio, interests,
-                          profile_visible, discoverable, email_verified_at,
+                          profile_visible, discoverable, email_verified_at, suspended_at,
                           created_at, updated_at
                    FROM users
                    WHERE id = %s""",
@@ -1341,6 +1704,12 @@ def create_app(
             ).fetchone()
             if not user:
                 raise ApiError(404, "user_not_found", "That account could not be found.")
+            target_is_admin = user["email"].strip().lower() in settings.admin_emails
+            if not target_is_admin:
+                target_is_admin = connection.execute(
+                    "SELECT user_id FROM admin_roles WHERE user_id = %s",
+                    (user_id,),
+                ).fetchone() is not None
 
             connection.execute(
                 """INSERT INTO admin_audit_log (admin_user_id, subject_user_id, action)
@@ -1463,21 +1832,23 @@ def create_app(
                    ORDER BY f.created_at DESC, follower.id LIMIT %s OFFSET %s""",
                 (user_id, limit, offset),
             ).fetchall()
-            messages = connection.execute(
-                """SELECT m.id, m.conversation_id, m.body, m.created_at, m.read_at,
-                          sender.id AS sender_id, sender.display_name AS sender_name,
-                          sender.username AS sender_username,
-                          recipient.id AS recipient_id, recipient.display_name AS recipient_name,
-                          recipient.username AS recipient_username
-                   FROM direct_messages m
-                   JOIN direct_conversations conversation ON conversation.id = m.conversation_id
-                   JOIN users sender ON sender.id = m.sender_id
-                   JOIN users recipient ON recipient.id = m.recipient_id
-                   WHERE conversation.participant_one_id = %s
-                      OR conversation.participant_two_id = %s
-                   ORDER BY m.created_at DESC, m.id DESC LIMIT %s OFFSET %s""",
-                (user_id, user_id, limit, offset),
-            ).fetchall()
+            messages = []
+            if admin["role"] == "super_admin":
+                messages = connection.execute(
+                    """SELECT m.id, m.conversation_id, m.body, m.created_at, m.read_at,
+                              sender.id AS sender_id, sender.display_name AS sender_name,
+                              sender.username AS sender_username,
+                              recipient.id AS recipient_id, recipient.display_name AS recipient_name,
+                              recipient.username AS recipient_username
+                       FROM direct_messages m
+                       JOIN direct_conversations conversation ON conversation.id = m.conversation_id
+                       JOIN users sender ON sender.id = m.sender_id
+                       JOIN users recipient ON recipient.id = m.recipient_id
+                       WHERE conversation.participant_one_id = %s
+                          OR conversation.participant_two_id = %s
+                       ORDER BY m.created_at DESC, m.id DESC LIMIT %s OFFSET %s""",
+                    (user_id, user_id, limit, offset),
+                ).fetchall()
 
         def timestamp(row: Dict[str, Any], key: str) -> Optional[str]:
             value = row[key]
@@ -1488,11 +1859,14 @@ def create_app(
             "name": user["display_name"],
             "username": user["username"],
             "email": user["email"],
+            "role": admin["role"],
+            "isAdmin": target_is_admin,
             "bio": user["bio"],
             "interests": user["interests"],
             "profileVisible": bool(user["profile_visible"]),
             "discoverable": bool(user["discoverable"]),
             "emailVerified": user["email_verified_at"] is not None,
+            "suspended": user["suspended_at"] is not None,
             "emailVerifiedAt": timestamp(user, "email_verified_at"),
             "createdAt": timestamp(user, "created_at"),
             "updatedAt": timestamp(user, "updated_at"),
@@ -1584,7 +1958,7 @@ def create_app(
     ) -> Dict[str, Any]:
         with database.connection() as connection:
             rows = connection.execute(
-                """SELECT log.id, log.action, log.created_at,
+                """SELECT log.id, log.action, log.details, log.created_at,
                           admin.id AS admin_id, admin.display_name AS admin_name,
                           admin.email AS admin_email,
                           subject.id AS subject_id, subject.display_name AS subject_name,
@@ -1601,6 +1975,7 @@ def create_app(
                 {
                     "id": str(row["id"]),
                     "action": row["action"],
+                    "details": row["details"] or {},
                     "createdAt": row["created_at"].isoformat(),
                     "admin": {"id": str(row["admin_id"]), "name": row["admin_name"], "email": row["admin_email"]},
                     "subject": None if row["subject_id"] is None else {

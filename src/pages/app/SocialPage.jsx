@@ -3,13 +3,13 @@ import { ArrowUpRight, Heart, MessageCircle, PenLine, Send } from 'lucide-react'
 import { Link, useNavigate } from 'react-router-dom'
 import AppPageHeader from '../../components/AppPageHeader.jsx'
 import Avatar from '../../components/Avatar.jsx'
-import { getDemoProfile } from '../../utils/demoAccount.js'
+import { apiRequest } from '../../utils/api.js'
 import { openConversation } from '../../utils/messageApi.js'
 import { createSocialPost, getSocialPosts, resolveFeedImageUrl, setSocialPostLike } from '../../utils/socialApi.js'
 
 export default function SocialPage() {
-  const profile = getDemoProfile()
-  const author = { name: profile?.name ?? 'You', image: profile?.avatar ?? '' }
+  const [currentUser, setCurrentUser] = useState(null)
+  const author = { name: currentUser?.name ?? 'You' }
   const [socialPosts, setSocialPosts] = useState([])
   const [loadingPosts, setLoadingPosts] = useState(true)
   const [loadError, setLoadError] = useState('')
@@ -21,6 +21,14 @@ export default function SocialPage() {
   const [likingPostIds, setLikingPostIds] = useState([])
   const [messagingAuthorIds, setMessagingAuthorIds] = useState([])
   const navigate = useNavigate()
+
+  useEffect(() => {
+    let active = true
+    apiRequest('/api/auth/me')
+      .then(({ user }) => { if (active) setCurrentUser(user) })
+      .catch(() => { if (active) setCurrentUser(null) })
+    return () => { active = false }
+  }, [])
 
   useEffect(() => {
     let active = true
@@ -111,7 +119,7 @@ export default function SocialPage() {
     }
   }
 
-  const isOwnPost = (post) => post.handle === `@${profile?.username}`
+  const isOwnPost = (post) => post.authorId === currentUser?.id
 
   return (
     <div className="app-content-width social-page">

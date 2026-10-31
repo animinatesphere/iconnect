@@ -1,8 +1,11 @@
 import React, { useEffect, useState } from 'react'
-import { Activity, ChevronLeft, ChevronRight, LogOut, Search, ShieldAlert, Users, X } from 'lucide-react'
+import { Activity, ChevronLeft, ChevronRight, FileText, LogOut, Package, Search, ShieldAlert, Users, UserCog, X } from 'lucide-react'
 import { Link, useNavigate } from 'react-router-dom'
 import PageMeta from '../../components/PageMeta.jsx'
-import { adminLogout, getAdminAuditLog, getAdminOverview, getAdminSession, getAdminUserDetails, getAdminUsers } from '../../utils/adminApi.js'
+import { adminLogout, getAdminAuditLog, getAdminOverview, getAdminSession, getAdminUserDetails, getAdminUsers, setAdminUserSuspended } from '../../utils/adminApi.js'
+import AdminContentPanel from './AdminContentPanel.jsx'
+import AdminProductsPanel from './AdminProductsPanel.jsx'
+import AdminSubadminsPanel from './AdminSubadminsPanel.jsx'
 
 const pageSize = 100
 
@@ -18,6 +21,10 @@ const overviewItems = [
   ['applications', 'Applications'],
   ['communities', 'Communities'],
   ['memberships', 'Memberships'],
+  ['newUsers7d', 'New accounts · 7 days'],
+  ['newPosts7d', 'New posts · 7 days'],
+  ['newProducts7d', 'New products · 7 days'],
+  ['newJobs7d', 'New jobs · 7 days'],
   ['likes', 'Likes'],
   ['bookmarks', 'Bookmarks'],
 ]
@@ -76,8 +83,20 @@ function formatRecord(key, item) {
   }
 }
 
-function UserDetails({ user, loading, error, onClose, onLoadOlder, loadingOlder, hasMore }) {
+function auditDescription(event) {
+  const { action, details = {}, admin } = event
+  if (action === 'view_user_details') return `${admin.name} opened account details`
+  if (action === 'delete_content') return `${admin.name} removed ${details.type ?? 'content'}`
+  if (action === 'grant_subadmin') return `${admin.name} granted sub-admin access`
+  if (action === 'revoke_subadmin') return `${admin.name} revoked sub-admin access`
+  if (action === 'update_user_status') return `${admin.name} ${details.suspended ? 'suspended' : 'restored'} an account`
+  if (action === 'update_product') return `${admin.name} updated an iBuy product`
+  return `${admin.name} performed ${action.replaceAll('_', ' ')}`
+}
+
+function UserDetails({ user, loading, error, onClose, onLoadOlder, loadingOlder, hasMore, onToggleSuspension, updatingStatus }) {
   if (!user) return null
+  const visibleActivityLabels = activityLabels.filter(([key]) => key !== 'messages' || user.role === 'super_admin')
   return (
     <div className="admin-detail-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose() }}>
       <section className="admin-detail-panel" role="dialog" aria-modal="true" aria-labelledby="admin-user-detail-title">
@@ -89,16 +108,17 @@ function UserDetails({ user, loading, error, onClose, onLoadOlder, loadingOlder,
         <div className="admin-detail-profile">
           <p>{user.bio || 'No bio provided.'}</p>
           <div><span>{user.emailVerified ? 'Email verified' : 'Email not verified'}</span><span>{user.profileVisible ? 'Profile visible' : 'Profile hidden'}</span><span>{user.discoverable ? 'Discoverable' : 'Not discoverable'}</span></div>
+          <div className="admin-account-status"><span className={user.isAdmin ? 'admin-role-chip' : user.suspended ? 'admin-hidden-status' : 'admin-visible-status'}>{user.isAdmin ? 'Administrator account' : user.suspended ? 'Suspended account' : 'Account active'}</span>{user.isAdmin ? <small>Administrator access is managed through role controls.</small> : <button type="button" className={`admin-row-action ${user.suspended ? '' : 'admin-danger-action'}`} onClick={onToggleSuspension} disabled={updatingStatus}>{updatingStatus ? 'Updating…' : user.suspended ? 'Restore account' : 'Suspend account'}</button>}</div>
           <p>Joined {formatDate(user.createdAt)} · Last profile update {formatDate(user.updatedAt)}</p>
           {!!user.interests?.length && <p>Interests: {user.interests.join(', ')}</p>}
         </div>
         <section className="admin-detail-counts" aria-label="Account activity totals">
           {activityLabels.map(([key, label]) => <div key={key}><strong>{user.counts[key] ?? 0}</strong><span>{label}</span></div>)}
         </section>
-        <div className="admin-detail-privacy-note"><ShieldAlert size={16} /><p>Private conversation contents are included at your direction. Each time an admin opens these user details, access is recorded in the audit log.</p></div>
+        <div className="admin-detail-privacy-note"><ShieldAlert size={16} /><p>{user.role === 'super_admin' ? 'Private conversations are visible to super admins. Each user-detail view is recorded in the audit log.' : 'Sub-admins can review account activity but cannot view private conversation contents. Each user-detail view is recorded in the audit log.'}</p></div>
         {loading && <p className="admin-detail-loading">Loading all account activity…</p>}
         {!loading && user.activity && <div className="admin-detail-activity">
-          {activityLabels.map(([key, label]) => {
+          {visibleActivityLabels.map(([key, label]) => {
             const records = user.activity[key] ?? []
             if (!records.length) return null
             return <section key={key}><h3>{label} <span>{user.counts[key] ?? records.length}</span></h3><div>{records.map((item, index) => <article key={item.id ?? item.postId ?? `${key}-${index}`}><p>{formatRecord(key, item)}</p>{item.imageUrls?.length > 0 && <div className="admin-activity-images">{item.imageUrls.map((image, imageIndex) => <img key={`${image}-${imageIndex}`} src={image} alt={`User activity photo ${imageIndex + 1}`} loading="lazy" />)}</div>}<time>{formatDate(item.createdAt ?? item.joinedAt)}</time></article>)}</div></section>
@@ -125,6 +145,7 @@ export default function AdminDashboardPage() {
   const [loadingUsers, setLoadingUsers] = useState(false)
   const [loadingAudit, setLoadingAudit] = useState(false)
   const [loadingOlder, setLoadingOlder] = useState(false)
+  const [updatingUserStatus, setUpdatingUserStatus] = useState(false)
   const [detailError, setDetailError] = useState('')
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
@@ -239,6 +260,23 @@ export default function AdminDashboardPage() {
     setDetailError('')
   }
 
+  async function toggleSelectedUserSuspension() {
+    if (!selectedUser || updatingUserStatus) return
+    const suspended = !selectedUser.suspended
+    setUpdatingUserStatus(true)
+    setDetailError('')
+    try {
+      await setAdminUserSuspended(selectedUser.id, suspended)
+      setSelectedUser((current) => ({ ...current, suspended }))
+      setUsers((current) => current.map((user) => user.id === selectedUser.id ? { ...user, suspended } : user))
+      setNotice(suspended ? 'Account suspended and existing sessions revoked.' : 'Account restored.')
+    } catch (statusError) {
+      setDetailError(statusError instanceof Error ? statusError.message : 'Could not update this account.')
+    } finally {
+      setUpdatingUserStatus(false)
+    }
+  }
+
   function chooseSection(nextSection) {
     setSection(nextSection)
     setError('')
@@ -247,7 +285,9 @@ export default function AdminDashboardPage() {
   }
 
   const olderOffset = selectedUser?.page ? selectedUser.page.offset + selectedUser.page.limit : 0
-  const hasMore = Boolean(selectedUser?.counts && activityLabels.some(([key]) => (selectedUser.activity?.[key]?.length ?? 0) < selectedUser.counts[key]))
+  const hasMore = Boolean(selectedUser?.counts && activityLabels
+    .filter(([key]) => key !== 'messages' || selectedUser.role === 'super_admin')
+    .some(([key]) => (selectedUser.activity?.[key]?.length ?? 0) < selectedUser.counts[key]))
 
   return (
     <div className="admin-portal">
@@ -257,21 +297,28 @@ export default function AdminDashboardPage() {
         <div className="admin-portal-account"><span className="admin-portal-avatar">{admin?.name?.slice(0, 1) ?? 'A'}</span><span><strong>{admin?.name ?? 'Administrator'}</strong><small>{admin?.email}</small></span><i /></div>
         <span className="admin-portal-nav-label">WORKSPACE</span>
         <nav className="admin-portal-nav" aria-label="Admin dashboard navigation">
-          {[['Overview', Activity], ['Users', Users], ['Audit log', ShieldAlert]].map(([label, Icon]) => <button key={label} type="button" className={section === label ? 'admin-portal-nav-active' : ''} onClick={() => chooseSection(label)}><Icon size={16} /><span>{label}</span></button>)}
+          {[
+            ['Overview', Activity],
+            ['Users', Users],
+            ['Content', FileText],
+            ['Products', Package],
+            ...(admin?.role === 'super_admin' ? [['Admins', UserCog]] : []),
+            ['Audit log', ShieldAlert],
+          ].map(([label, Icon]) => <button key={label} type="button" className={section === label ? 'admin-portal-nav-active' : ''} onClick={() => chooseSection(label)}><Icon size={16} /><span>{label}</span></button>)}
         </nav>
-        <div className="admin-portal-sidebar-footer"><div className="admin-portal-local-note"><ShieldAlert size={15} /><span>Admin access is server-authorized and audited.</span></div><Link to="/app/ibuy">Open iBuy to list a product</Link><button type="button" onClick={signOut}><LogOut size={15} /> Sign out</button><Link to="/">Return to public site</Link></div>
+        <div className="admin-portal-sidebar-footer"><div className="admin-portal-local-note"><ShieldAlert size={15} /><span>{admin?.role === 'super_admin' ? 'Super admin · full management and role control.' : 'Sub-admin · content and account management.'}</span></div><button type="button" onClick={signOut}><LogOut size={15} /> Sign out</button><Link to="/">Return to public site</Link></div>
       </aside>
       <div className="admin-portal-main">
-        <header className="admin-portal-topbar"><div><span>iConnect admin</span><b>/</b><strong>{section}</strong></div><div className="admin-portal-topbar-actions"><span className="admin-preview-chip"><i /> SECURE ADMIN</span><button type="button" onClick={signOut}><LogOut size={14} /> Sign out</button></div></header>
+        <header className="admin-portal-topbar"><div><span>iConnect admin</span><b>/</b><strong>{section}</strong></div><div className="admin-portal-topbar-actions"><span className="admin-preview-chip"><i /> {admin?.role === 'super_admin' ? 'SUPER ADMIN' : 'SUB-ADMIN'}</span><button type="button" onClick={signOut}><LogOut size={14} /> Sign out</button></div></header>
         <main className="admin-portal-content">
-          <div className="admin-portal-page-heading"><div><span className="app-page-eyebrow">WEBSITE OPERATIONS</span><h1>{section === 'Overview' ? 'Dashboard overview' : section}</h1><p>{section === 'Users' ? 'Search accounts and open a user to review their complete account activity.' : section === 'Audit log' ? 'Review recorded administrator access to user details and private conversations.' : 'Live counts and user activity loaded from the iConnect database.'}</p></div>{section === 'Users' && <label className="admin-user-search"><Search size={15} /><input value={search} onChange={(event) => { setSearch(event.target.value); setUserOffset(0) }} placeholder="Search name, username, or email" aria-label="Search users" /></label>}</div>
-          <div className="admin-safety-banner"><ShieldAlert size={18} /><span><strong>Restricted administrator data.</strong> User profile details and private conversations are visible to allowlisted admins. User-detail access is recorded in the audit log.</span></div>
+          <div className="admin-portal-page-heading"><div><span className="app-page-eyebrow">WEBSITE OPERATIONS</span><h1>{section === 'Overview' ? 'Dashboard overview' : section}</h1><p>{section === 'Users' ? 'Search accounts and review activity. Private message contents are restricted to super admins.' : section === 'Audit log' ? 'Review administrator access and recorded management actions.' : section === 'Content' ? 'Review and remove posts, comments, listings, jobs, and communities from user pages.' : section === 'Products' ? 'Create, edit, publish, hide, or remove iBuy products with photos.' : section === 'Admins' ? 'Super-admins can grant and revoke sub-admin access.' : 'Live platform totals and recent growth from the iConnect database.'}</p></div>{section === 'Users' && <label className="admin-user-search"><Search size={15} /><input value={search} onChange={(event) => { setSearch(event.target.value); setUserOffset(0) }} placeholder="Search name, username, or email" aria-label="Search users" /></label>}</div>
+          {section === 'Users' && <div className="admin-safety-banner"><ShieldAlert size={18} /><span><strong>Private data access is audited.</strong> Only super admins can see private message contents. Opening a user’s details is recorded in the audit log.</span></div>}
           {error && <p className="feed-interaction-notice feed-error" role="alert">{error}</p>}
           {notice && <p className="feed-interaction-notice" role="status">{notice}</p>}
           {loading && <p className="admin-detail-loading">Loading administrator data…</p>}
           {!loading && section === 'Overview' && overview && <>
-            <div className="admin-metric-grid">{overviewItems.map(([key, label]) => <article className="admin-metric-card" key={key}><span>{label}</span><strong>{overview[key].toLocaleString()}</strong><small>Live database total</small></article>)}</div>
-            <section className="admin-panel admin-queue-panel"><div className="admin-panel-heading"><div><span className="app-page-eyebrow">ADMIN ACCESS</span><h2>Recent audit events</h2></div><button type="button" className="admin-row-action" onClick={() => chooseSection('Audit log')}>View all</button></div>{auditEvents.length ? auditEvents.slice(0, 8).map((event) => <div className="admin-audit-entry" key={event.id}><span /><div><strong>{event.admin.name} accessed {event.action.replaceAll('_', ' ')}</strong><small>{event.subject ? `${event.subject.name} · ${event.subject.email} · ` : ''}{formatDate(event.createdAt)}</small></div></div>) : <div className="admin-content-empty"><Activity size={18} /><p>No administrator detail access recorded yet.</p></div>}</section>
+            <div className="admin-metric-grid">{overviewItems.map(([key, label]) => <article className={`admin-metric-card ${key.endsWith('7d') ? 'admin-metric-recent' : ''}`} key={key}><span>{label}</span><strong>{overview[key].toLocaleString()}</strong><small>{key.endsWith('7d') ? 'Recent growth' : 'Live database total'}</small></article>)}</div>
+            <section className="admin-panel admin-queue-panel"><div className="admin-panel-heading"><div><span className="app-page-eyebrow">ADMIN ACCESS</span><h2>Recent audit events</h2></div><button type="button" className="admin-row-action" onClick={() => chooseSection('Audit log')}>View all</button></div>{auditEvents.length ? auditEvents.slice(0, 8).map((event) => <div className="admin-audit-entry" key={event.id}><span /><div><strong>{auditDescription(event)}</strong><small>{event.subject ? `${event.subject.name} · ${event.subject.email} · ` : ''}{event.details?.id ? `${event.details.id} · ` : ''}{formatDate(event.createdAt)}</small></div></div>) : <div className="admin-content-empty"><Activity size={18} /><p>No administrator detail access recorded yet.</p></div>}</section>
           </>}
           {!loading && section === 'Users' && <section className="admin-panel admin-users-panel">
             <div className="admin-panel-heading"><div><span className="app-page-eyebrow">REGISTERED ACCOUNTS</span><h2>{userTotal.toLocaleString()} users</h2></div></div>
@@ -279,13 +326,16 @@ export default function AdminDashboardPage() {
             {!loadingUsers && <div className="admin-live-user-list">{users.map((user) => <button type="button" className="admin-live-user-row" key={user.id} onClick={() => openUser(user)}>
               <span className="admin-live-user-avatar">{user.name.slice(0, 1)}</span>
               <span className="admin-live-user-identity"><strong>{user.name}</strong><small>@{user.username} · {user.email}</small></span>
-              <span className={`admin-user-status ${user.emailVerified ? '' : 'status-review'}`}>{user.emailVerified ? 'Verified' : 'Unverified'}</span>
+              <span className={`admin-user-status ${user.suspended ? 'status-suspended' : user.emailVerified ? '' : 'status-review'}`}>{user.suspended ? 'Suspended' : user.emailVerified ? 'Verified' : 'Unverified'}</span>
               <span className="admin-live-user-counts">{user.counts.posts} posts · {user.counts.messages} messages</span><ChevronRight size={16} />
             </button>)}
             {!users.length && <p className="admin-no-users">No accounts match your search.</p>}</div>}
             <div className="admin-users-pagination"><span>Showing {userTotal ? userOffset + 1 : 0}–{Math.min(userOffset + 50, userTotal)} of {userTotal}</span><div><button type="button" aria-label="Previous users" disabled={userOffset === 0 || loadingUsers} onClick={() => setUserOffset((offset) => Math.max(0, offset - 50))}><ChevronLeft size={15} /></button><button type="button" aria-label="Next users" disabled={userOffset + 50 >= userTotal || loadingUsers} onClick={() => setUserOffset((offset) => offset + 50)}><ChevronRight size={15} /></button></div></div>
           </section>}
-          {!loading && section === 'Audit log' && <section className="admin-panel admin-queue-panel"><div className="admin-panel-heading"><div><span className="app-page-eyebrow">RECORDED ADMIN ACCESS</span><h2>Latest 100 events</h2></div><button type="button" className="admin-row-action" onClick={refreshAudit} disabled={loadingAudit}>{loadingAudit ? 'Loading…' : 'Refresh'}</button></div>{auditEvents.map((event) => <div className="admin-audit-entry" key={event.id}><span /><div><strong>{event.admin.name} ({event.admin.email}) · {event.action.replaceAll('_', ' ')}</strong><small>{event.subject ? `User: ${event.subject.name} (${event.subject.email}) · ` : ''}{formatDate(event.createdAt)}</small></div></div>)}{!auditEvents.length && <div className="admin-content-empty"><Activity size={18} /><p>No audit events recorded.</p></div>}</section>}
+          {!loading && section === 'Content' && <AdminContentPanel />}
+          {!loading && section === 'Products' && <AdminProductsPanel />}
+          {!loading && section === 'Admins' && admin?.role === 'super_admin' && <AdminSubadminsPanel />}
+          {!loading && section === 'Audit log' && <section className="admin-panel admin-queue-panel"><div className="admin-panel-heading"><div><span className="app-page-eyebrow">RECORDED ADMIN ACTIVITY</span><h2>Latest 100 events</h2></div><button type="button" className="admin-row-action" onClick={refreshAudit} disabled={loadingAudit}>{loadingAudit ? 'Loading…' : 'Refresh'}</button></div>{auditEvents.map((event) => <div className="admin-audit-entry" key={event.id}><span /><div><strong>{auditDescription(event)} · {event.admin.email}</strong><small>{event.subject ? `Account: ${event.subject.name} (${event.subject.email}) · ` : ''}{event.details && Object.keys(event.details).length > 0 ? `${JSON.stringify(event.details)} · ` : ''}{formatDate(event.createdAt)}</small></div></div>)}{!auditEvents.length && <div className="admin-content-empty"><Activity size={18} /><p>No audit events recorded.</p></div>}</section>}
         </main>
       </div>
       {selectedUser && <UserDetails
@@ -296,6 +346,8 @@ export default function AdminDashboardPage() {
         onLoadOlder={loadOlderActivity}
         loadingOlder={loadingOlder}
         hasMore={hasMore && olderOffset > 0}
+        onToggleSuspension={toggleSelectedUserSuspension}
+        updatingStatus={updatingUserStatus}
       />}
     </div>
   )
