@@ -5,7 +5,6 @@ import { uploadImage } from '../../utils/mediaApi.js'
 import { deleteAdminContent, getAdminContent, updateAdminProduct } from '../../utils/adminApi.js'
 
 const categories = ['Style', 'Tech', 'Home', 'Other']
-const maxImageBytes = 4 * 1024 * 1024
 const emptyProduct = { name: '', category: 'Home', price: '', stock: '1', description: '', published: true }
 
 function formatPrice(value) {
@@ -73,9 +72,9 @@ export default function AdminProductsPanel() {
       setError('Choose up to five photos for one product.')
       return
     }
-    const invalid = selected.find((file) => !['image/jpeg', 'image/png', 'image/webp'].includes(file.type) || file.size > maxImageBytes)
+    const invalid = selected.find((file) => !['image/jpeg', 'image/png', 'image/webp'].includes(file.type))
     if (invalid) {
-      setError('Use JPEG, PNG, or WebP photos no larger than 4 MB each.')
+      setError('Use JPEG, PNG, or WebP photos.')
       return
     }
     setImages((current) => [...current, ...selected])
@@ -182,7 +181,7 @@ export default function AdminProductsPanel() {
             <label>Stock<input type="number" min="0" max="1000000" value={product.stock} onChange={(event) => setProduct((current) => ({ ...current, stock: event.target.value }))} required /></label>
           </div>
           <label>Description<textarea value={product.description} onChange={(event) => setProduct((current) => ({ ...current, description: event.target.value }))} maxLength={2000} rows={4} required /></label>
-          <label className="admin-product-upload"><ImageIcon size={16} /><span>Add up to five product photos (JPEG, PNG or WebP; 4 MB each)</span><input type="file" accept="image/jpeg,image/png,image/webp" multiple onChange={chooseImages} disabled={saving} /></label>
+          <label className="admin-product-upload"><ImageIcon size={16} /><span>Add up to five product photos (JPEG, PNG or WebP; optimized on upload)</span><input type="file" accept="image/jpeg,image/png,image/webp" multiple onChange={chooseImages} disabled={saving} /></label>
           {(imageUrls.length > 0 || previews.length > 0) && <div className="admin-product-photo-list">
             {imageUrls.map((url, index) => <div key={`${url}-${index}`}><img src={url} alt={`Product photo ${index + 1}`} /><button type="button" onClick={() => setImageUrls((current) => current.filter((_, itemIndex) => itemIndex !== index))} aria-label={`Remove product photo ${index + 1}`}><X size={13} /></button></div>)}
             {previews.map((url, index) => <div key={url}><img src={url} alt={`New product photo ${index + 1}`} /><button type="button" onClick={() => setImages((current) => current.filter((_, itemIndex) => itemIndex !== index))} aria-label={`Remove new product photo ${index + 1}`}><X size={13} /></button></div>)}

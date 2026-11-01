@@ -20,10 +20,13 @@ export function toConversation(conversation) {
     name: conversation.recipient.name,
     username: conversation.recipient.username,
     handle: `@${conversation.recipient.username}`,
-    avatar: '',
+    avatar: conversation.recipient.avatar ?? '',
     message: conversation.lastMessage,
     time: formatRelativeTime(conversation.lastMessageAt),
     unreadCount: conversation.unreadCount,
+    isBlockedByMe: conversation.isBlockedByMe,
+    isMuted: conversation.isMuted,
+    isArchived: conversation.isArchived,
     isPersistent: true,
   }
 }
@@ -33,6 +36,7 @@ export function toDirectMessage(message) {
     id: message.id,
     from: message.isMine ? 'me' : 'them',
     text: message.text,
+    imageUrl: message.imageUrl ?? '',
     time: formatTime(message.createdAt),
     relativeTime: formatRelativeTime(message.createdAt),
     createdAt: message.createdAt,
@@ -59,15 +63,40 @@ export async function openConversation(recipientId) {
   return payload.conversationId
 }
 
-export async function getDirectMessages(conversationId) {
-  const payload = await apiRequest(`/api/messages/conversations/${encodeURIComponent(conversationId)}/messages`)
+export async function getDirectMessages(conversationId, query = '') {
+  const params = new URLSearchParams()
+  if (query.trim()) params.set('query', query.trim())
+  const queryString = params.toString()
+  const payload = await apiRequest(`/api/messages/conversations/${encodeURIComponent(conversationId)}/messages${queryString ? `?${queryString}` : ''}`)
   return payload.messages.map(toDirectMessage)
 }
 
-export async function sendDirectMessage(conversationId, text) {
+export async function sendDirectMessage(conversationId, text, imageUrl = null) {
   const payload = await apiRequest(`/api/messages/conversations/${encodeURIComponent(conversationId)}/messages`, {
     method: 'POST',
-    body: JSON.stringify({ text }),
+    body: JSON.stringify({ text, image_url: imageUrl }),
   })
   return toDirectMessage(payload.message)
+}
+
+export async function setConversationBlocked(conversationId, blocked) {
+  const payload = await apiRequest(`/api/messages/conversations/${encodeURIComponent(conversationId)}/block`, {
+    method: 'PUT',
+    body: JSON.stringify({ blocked }),
+  })
+  return payload.isBlockedByMe
+}
+
+export async function updateConversationPreferences(conversationId, preferences) {
+  const payload = await apiRequest(`/api/messages/conversations/${encodeURIComponent(conversationId)}/preferences`, {
+    method: 'PUT',
+    body: JSON.stringify({
+      is_muted: preferences.isMuted,
+      is_archived: preferences.isArchived,
+    }),
+  })
+  return {
+    isMuted: payload.isMuted,
+    isArchived: payload.isArchived,
+  }
 }

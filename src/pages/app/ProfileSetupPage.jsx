@@ -1,10 +1,11 @@
 import React, { useEffect, useState } from 'react'
-import { ArrowLeft, ArrowRight, Check, ChevronRight } from 'lucide-react'
+import { ArrowLeft, ArrowRight, Camera, Check, ChevronRight } from 'lucide-react'
 import { Link, useNavigate } from 'react-router-dom'
 import Avatar from '../../components/Avatar.jsx'
 import PageMeta from '../../components/PageMeta.jsx'
 import { interestOptions } from '../../data/profileOptions.js'
 import { apiRequest } from '../../utils/api.js'
+import { uploadImage } from '../../utils/mediaApi.js'
 
 export default function ProfileSetupPage() {
   const [account, setAccount] = useState(null)
@@ -13,6 +14,7 @@ export default function ProfileSetupPage() {
   const [bio, setBio] = useState('')
   const [selected, setSelected] = useState([])
   const [error, setError] = useState('')
+  const [uploadingPhoto, setUploadingPhoto] = useState(false)
   const navigate = useNavigate()
 
   useEffect(() => {
@@ -36,6 +38,32 @@ export default function ProfileSetupPage() {
     setSelected((current) => current.includes(interest)
       ? current.filter((item) => item !== interest)
       : [...current, interest])
+  }
+
+  async function chooseProfilePhoto(event) {
+    const file = event.target.files?.[0]
+    event.target.value = ''
+    if (!file) return
+    if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type)) {
+      setError('Choose a JPEG, PNG, or WebP photo.')
+      return
+    }
+
+    setUploadingPhoto(true)
+    setError('')
+    try {
+      const imageUrl = await uploadImage(file)
+      const result = await apiRequest('/api/auth/profile/photo', {
+        method: 'PUT',
+        body: JSON.stringify({ image_url: imageUrl }),
+      })
+      setAccount(result.user)
+      window.dispatchEvent(new CustomEvent('iconnect:profile-updated', { detail: result.user }))
+    } catch (uploadError) {
+      setError(uploadError instanceof Error ? uploadError.message : 'Could not save your profile photo.')
+    } finally {
+      setUploadingPhoto(false)
+    }
   }
 
   async function finishSetup(event) {
@@ -72,9 +100,10 @@ export default function ProfileSetupPage() {
           <section className="setup-form-panel">
             <div className="setup-step-label"><span>STEP 02</span><i /><span>YOUR PROFILE</span></div>
             <h1>Make it<br /><em>feel like you.</em></h1>
-            <p className="setup-intro">Add a few details so your iConnect profile feels like you. Your name, bio, and interests are saved to your account.</p>
+            <p className="setup-intro">Add a few details and a photo so your iConnect profile feels like you. Your profile is saved to your account.</p>
             {accountLoading && <p className="connect-empty-state">Loading your account…</p>}
             <form onSubmit={finishSetup}>
+              <label className="setup-photo-picker"><Avatar person={{ name: name || 'Your profile', image: account?.image }} /><span><strong>{uploadingPhoto ? 'Saving photo…' : account?.image ? 'Change profile photo' : 'Add a profile photo'}</strong><small>JPEG, PNG or WebP · optimized automatically</small></span><Camera size={16} /><input type="file" accept="image/jpeg,image/png,image/webp" onChange={chooseProfilePhoto} disabled={uploadingPhoto || accountLoading} /></label>
               <label className="setup-field"><span>DISPLAY NAME</span><input value={name} onChange={(event) => setName(event.target.value)} placeholder="How should we call you?" maxLength={80} disabled={accountLoading} /></label>
               <label className="setup-field"><span>A LITTLE ABOUT YOU <small>OPTIONAL</small></span><textarea value={bio} onChange={(event) => setBio(event.target.value)} placeholder="A line, a thought, a tiny introduction..." maxLength={120} rows={3} /><small>{bio.length}/120</small></label>
               <div className="interest-field">
@@ -87,13 +116,13 @@ export default function ProfileSetupPage() {
               {error && <p className="auth-error" role="alert">{error}</p>}
               <button type="submit" className="app-primary-button setup-submit" disabled={accountLoading || !account}>Go to my home <ArrowRight size={17} /></button>
             </form>
-            <p className="setup-account-note">Profile details are saved to your iConnect account. Profile photos are not available yet.</p>
+            <p className="setup-account-note">Your profile details and photo are saved to your iConnect account.</p>
           </section>
           <aside className="setup-preview-panel">
             <div className="setup-preview-top"><span className="app-page-eyebrow">YOUR SPACE IS TAKING SHAPE</span>            <span className="preview-status"><i /> PROFILE PREVIEW</span></div>
             <div className="profile-preview-card">
               <div className="profile-preview-cover" />
-              <Avatar person={{ name: name || 'Your profile' }} className="profile-preview-avatar" />
+              <Avatar person={{ name: name || 'Your profile', image: account?.image }} className="profile-preview-avatar" />
               <h2>{name.trim() || 'Your name'}</h2>
               <span className="profile-preview-handle">{account?.email || 'Your email stays private'}</span>
               <p>{bio || 'Your little introduction will live here.'}</p>

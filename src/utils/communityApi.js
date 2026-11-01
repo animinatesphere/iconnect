@@ -7,10 +7,10 @@ export async function getCommunities({ query = '', limit = 50 } = {}) {
   return payload.communities
 }
 
-export async function createCommunity({ name, description }) {
+export async function createCommunity({ name, description, imageUrl = null }) {
   const payload = await apiRequest('/api/communities', {
     method: 'POST',
-    body: JSON.stringify({ name, description }),
+    body: JSON.stringify({ name, description, image_url: imageUrl }),
   })
   return payload.community
 }

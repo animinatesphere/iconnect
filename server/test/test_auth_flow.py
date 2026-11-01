@@ -255,6 +255,7 @@ class FakeConnection:
                 "owner_id": str(parameters[0]),
                 "name": parameters[1],
                 "description": parameters[2],
+                "image_url": parameters[3],
                 "created_at": datetime.now(timezone.utc),
             }
             self.state["communities"].append(community)
@@ -444,6 +445,7 @@ class FakeConnection:
                 "password_hash": parameters[3],
                 "bio": "",
                 "interests": [],
+                "profile_image_url": None,
                 "profile_visible": True,
                 "discoverable": True,
                 "email_verified_at": None,
@@ -527,6 +529,12 @@ class FakeConnection:
                 "profile_visible": user["profile_visible"],
                 "discoverable": user["discoverable"],
             })
+        if sql.startswith("update users set profile_image_url"):
+            user = self.state["user"]
+            if not user or user["id"] != parameters[1] or not user["email_verified_at"]:
+                return FakeResult()
+            user["profile_image_url"] = parameters[0]
+            return FakeResult(user.copy())
         if sql.startswith("insert into auth_sessions"):
             self.state["sessions"][parameters[0]] = {
                 "user_id": parameters[1],
@@ -558,6 +566,7 @@ class FakeConnection:
             "author_id": user["id"],
             "display_name": user["display_name"],
             "username": user["username"],
+            "author_image_url": user.get("profile_image_url"),
             "like_count": sum(like[0] == post["id"] for like in self.state["likes"]),
             "comment_count": sum(comment["post_id"] == post["id"] for comment in self.state["comments"]),
             "liked_by_me": (post["id"], viewer_id) in self.state["likes"],
@@ -609,6 +618,7 @@ class FakeConnection:
                 for membership in self.state["community_memberships"]
             ),
             "joined_by_me": (community["id"], str(viewer_id)) in self.state["community_memberships"],
+            "image_url": community.get("image_url"),
         }
 
     def _admin_user_row(self):
@@ -645,6 +655,7 @@ class FakeConnection:
             "author_id": user["id"],
             "display_name": user["display_name"],
             "username": user["username"],
+            "author_image_url": user.get("profile_image_url"),
         }
 
 
@@ -864,6 +875,13 @@ class AuthFlowTests(unittest.TestCase):
         self.assertEqual(served_image.status_code, 200)
         self.assertEqual(served_image.headers["content-type"], "image/webp")
         self.assertEqual(Image.open(BytesIO(served_image.content)).format, "WEBP")
+        saved_photo = self.client.put(
+            "/api/auth/profile/photo",
+            json={"image_url": first_upload.json()["url"]},
+        )
+        self.assertEqual(saved_photo.status_code, 200, saved_photo.text)
+        self.assertEqual(saved_photo.json()["user"]["image"], first_upload.json()["url"])
+        self.assertEqual(self.client.get("/api/auth/me").json()["user"]["image"], first_upload.json()["url"])
 
         post = self.client.post(
             "/api/social/posts",
@@ -1239,11 +1257,13 @@ class AuthFlowTests(unittest.TestCase):
         created = self.client.post("/api/communities", json={
             "name": "  Local Makers ",
             "description": " A place for nearby designers and builders. ",
+            "image_url": "/api/media/images/{}.webp".format("a" * 32),
         })
         self.assertEqual(created.status_code, 201, created.text)
         community = created.json()["community"]
         self.assertEqual(community["name"], "Local Makers")
         self.assertEqual(community["description"], "A place for nearby designers and builders.")
+        self.assertEqual(community["imageUrl"], "/api/media/images/{}.webp".format("a" * 32))
         self.assertEqual(community["memberCount"], 1)
         self.assertTrue(community["joinedByMe"])
         self.assertNotIn("owner", community)
@@ -1303,13 +1323,14 @@ class AuthFlowTests(unittest.TestCase):
             "location": "Lagos",
             "detail": "Two bedrooms · Available now",
             "description": " A bright home near the city. ",
+            "image_url": "/api/media/images/{}.webp".format("b" * 32),
         })
         self.assertEqual(created.status_code, 201, created.text)
         listing = created.json()["listing"]
         self.assertEqual(listing["title"], "Bright apartment")
         self.assertEqual(listing["description"], "A bright home near the city.")
         self.assertEqual(listing["seller"]["name"], "Local Seller")
-        self.assertIsNone(listing["imageUrl"])
+        self.assertEqual(listing["imageUrl"], "/api/media/images/{}.webp".format("b" * 32))
 
         listed = self.client.get("/api/local-marketplace/listings?category=Homes&location=Lagos")
         self.assertEqual(listed.status_code, 200)

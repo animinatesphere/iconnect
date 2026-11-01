@@ -1,10 +1,11 @@
 import React, { useEffect, useState } from 'react'
-import { ArrowLeft, ArrowRight, Building2, MapPin, MessageCircle, Plus, Search, Sprout, Store, Wrench } from 'lucide-react'
+import { ArrowLeft, ArrowRight, Building2, ImagePlus, MapPin, MessageCircle, Plus, Search, Sprout, Store, Wrench } from 'lucide-react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import AppPageHeader from '../../components/AppPageHeader.jsx'
 import PageMeta from '../../components/PageMeta.jsx'
 import { apiRequest } from '../../utils/api.js'
 import { createLocalMarketplaceListing, getLocalMarketplaceListing, getLocalMarketplaceListings } from '../../utils/localMarketplaceApi.js'
+import { uploadImage } from '../../utils/mediaApi.js'
 import { openConversation } from '../../utils/messageApi.js'
 
 const categories = [
@@ -23,6 +24,8 @@ export default function LocalMarketplacePage() {
   const [listings, setListings] = useState([])
   const [selectedListing, setSelectedListing] = useState(null)
   const [form, setForm] = useState(emptyForm)
+  const [listingImage, setListingImage] = useState(null)
+  const [listingImagePreview, setListingImagePreview] = useState('')
   const [formOpen, setFormOpen] = useState(false)
   const [loading, setLoading] = useState(true)
   const [loadingDetail, setLoadingDetail] = useState(false)
@@ -33,6 +36,16 @@ export default function LocalMarketplacePage() {
   const [notice, setNotice] = useState('')
   const [retry, setRetry] = useState(0)
   const [currentUserId, setCurrentUserId] = useState('')
+
+  useEffect(() => {
+    if (!listingImage) {
+      setListingImagePreview('')
+      return undefined
+    }
+    const preview = URL.createObjectURL(listingImage)
+    setListingImagePreview(preview)
+    return () => URL.revokeObjectURL(preview)
+  }, [listingImage])
 
   useEffect(() => {
     let active = true
@@ -107,9 +120,11 @@ export default function LocalMarketplacePage() {
     event.preventDefault()
     setPublishing(true)
     try {
-      const created = await createLocalMarketplaceListing(form)
+      const imageUrl = listingImage ? await uploadImage(listingImage) : form.imageUrl
+      const created = await createLocalMarketplaceListing({ ...form, imageUrl })
       setListings((current) => [created, ...current.filter((item) => item.id !== created.id)])
       setForm(emptyForm)
+      setListingImage(null)
       setFormOpen(false)
       setNotice('Your listing is live in the local marketplace.')
       setError('')
@@ -168,6 +183,18 @@ export default function LocalMarketplacePage() {
         </div>
         <label>Description<textarea value={form.description} onChange={(event) => setForm((current) => ({ ...current, description: event.target.value }))} maxLength={2000} rows={4} required /></label>
         <label>Image URL (optional)<input type="url" value={form.imageUrl} onChange={(event) => setForm((current) => ({ ...current, imageUrl: event.target.value }))} placeholder="https://…" /></label>
+        <label className="media-upload-picker"><ImagePlus size={18} /><span>Add listing photo</span><small>{listingImage ? listingImage.name : 'JPEG, PNG or WebP · optimized on upload'}</small><input type="file" accept="image/jpeg,image/png,image/webp" onChange={(event) => {
+          const file = event.target.files?.[0]
+          event.target.value = ''
+          if (!file) return
+          if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type)) {
+            setError('Choose a JPEG, PNG, or WebP photo.')
+            return
+          }
+          setListingImage(file)
+          setError('')
+        }} disabled={publishing} /></label>
+        {listingImagePreview && <img className="marketplace-listing-image-preview" src={listingImagePreview} alt="Selected listing photo" />}
         <button type="submit" className="app-primary-button" disabled={publishing}>{publishing ? 'Publishing…' : 'Publish listing'}</button>
       </form>}
       <div className="marketplace-category-grid" aria-label="Marketplace categories">{categories.map(({ id, label, icon: Icon }) => <button type="button" key={id} className={`marketplace-category-card ${activeCategory === id ? 'marketplace-category-active' : ''}`} onClick={() => setActiveCategory(id)}><span className="marketplace-category-icon"><Icon size={18} /></span><span className="marketplace-category-copy"><strong>{label}</strong><small>Explore member listings</small></span></button>)}</div>

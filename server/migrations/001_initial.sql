@@ -17,6 +17,7 @@ CREATE TABLE IF NOT EXISTS users (
 ALTER TABLE users ADD COLUMN IF NOT EXISTS profile_visible boolean NOT NULL DEFAULT true;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS discoverable boolean NOT NULL DEFAULT true;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS suspended_at timestamptz;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS profile_image_url varchar(2048);
 
 CREATE TABLE IF NOT EXISTS email_verification_codes (
   user_id uuid PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
@@ -127,16 +128,36 @@ CREATE TABLE IF NOT EXISTS direct_conversations (
     UNIQUE (participant_one_id, participant_two_id)
 );
 
+CREATE TABLE IF NOT EXISTS user_blocks (
+  blocker_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  blocked_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  CONSTRAINT user_blocks_distinct_users CHECK (blocker_id <> blocked_id),
+  PRIMARY KEY (blocker_id, blocked_id)
+);
+
+CREATE TABLE IF NOT EXISTS direct_conversation_preferences (
+  conversation_id uuid NOT NULL REFERENCES direct_conversations(id) ON DELETE CASCADE,
+  user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  is_muted boolean NOT NULL DEFAULT false,
+  is_archived boolean NOT NULL DEFAULT false,
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (conversation_id, user_id)
+);
+
 CREATE TABLE IF NOT EXISTS direct_messages (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   conversation_id uuid NOT NULL REFERENCES direct_conversations(id) ON DELETE CASCADE,
   sender_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   recipient_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   body varchar(2000) NOT NULL CHECK (char_length(btrim(body)) BETWEEN 1 AND 2000),
+  image_url varchar(2048),
   created_at timestamptz NOT NULL DEFAULT now(),
   read_at timestamptz,
   CONSTRAINT direct_messages_distinct_participants CHECK (sender_id <> recipient_id)
 );
+
+ALTER TABLE direct_messages ADD COLUMN IF NOT EXISTS image_url varchar(2048);
 
 CREATE INDEX IF NOT EXISTS direct_conversations_participant_one_idx
   ON direct_conversations(participant_one_id);
@@ -176,8 +197,11 @@ CREATE TABLE IF NOT EXISTS communities (
   name varchar(80) NOT NULL,
   description varchar(500) NOT NULL
     CHECK (char_length(btrim(description)) BETWEEN 1 AND 500),
+  image_url varchar(2048),
   created_at timestamptz NOT NULL DEFAULT now()
 );
+
+ALTER TABLE communities ADD COLUMN IF NOT EXISTS image_url varchar(2048);
 
 CREATE INDEX IF NOT EXISTS communities_created_at_idx
   ON communities(created_at DESC, id DESC);
@@ -207,9 +231,12 @@ CREATE TABLE IF NOT EXISTS job_listings (
     CHECK (workplace_type IN ('remote', 'hybrid', 'onsite')),
   summary varchar(250) NOT NULL,
   description varchar(5000) NOT NULL,
+  company_image_url varchar(2048),
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now()
 );
+
+ALTER TABLE job_listings ADD COLUMN IF NOT EXISTS company_image_url varchar(2048);
 
 CREATE INDEX IF NOT EXISTS job_listings_created_at_idx
   ON job_listings(created_at DESC, id DESC);

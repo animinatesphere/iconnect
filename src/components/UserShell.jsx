@@ -85,6 +85,12 @@ export default function UserShell() {
   }, [])
 
   useEffect(() => {
+    const updateCurrentUser = (event) => setCurrentUser(event.detail)
+    window.addEventListener('iconnect:profile-updated', updateCurrentUser)
+    return () => window.removeEventListener('iconnect:profile-updated', updateCurrentUser)
+  }, [])
+
+  useEffect(() => {
     if (normalizedSearch.length < 2) {
       setSearchResults([])
       setSearchError('')
@@ -217,7 +223,7 @@ export default function UserShell() {
               <p className="app-notifications-empty">Notifications are not available yet.</p>
             </section>}
           </div>
-          <Avatar person={{ name: currentUser?.name ?? 'Your account' }} className="app-topbar-avatar" />
+          <Avatar person={{ name: currentUser?.name ?? 'Your account', image: currentUser?.image }} className="app-topbar-avatar" />
         </header>
         <main className="app-page-content"><Outlet /></main>
       </div>
