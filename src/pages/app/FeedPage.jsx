@@ -1,14 +1,16 @@
 import React, { useEffect, useState } from 'react'
-import { Bookmark, Heart, Image, MessageCircle, MoreHorizontal, PenLine, Send, TrendingUp } from 'lucide-react'
+import { Bookmark, Heart, Image, MessageCircle, MoreHorizontal, PenLine, Pencil, Send, Trash2, TrendingUp } from 'lucide-react'
 import { Link, useNavigate } from 'react-router-dom'
 import AppPageHeader from '../../components/AppPageHeader.jsx'
 import Avatar from '../../components/Avatar.jsx'
+import PostEditForm from '../../components/PostEditForm.jsx'
 import { apiRequest } from '../../utils/api.js'
 import { getPeople } from '../../utils/peopleApi.js'
-import { getSocialPosts, resolveFeedImageUrl, setSocialPostBookmark, setSocialPostLike } from '../../utils/socialApi.js'
+import { deleteSocialPost, getSocialPosts, resolveFeedImageUrl, setSocialPostBookmark, setSocialPostLike, updateSocialPost } from '../../utils/socialApi.js'
 
-function FeedPost({ post, sharePost, onLike, liking, onBookmark, bookmarking }) {
+function FeedPost({ post, sharePost, onLike, liking, onBookmark, bookmarking, onEdit, onDelete }) {
   const [menuOpen, setMenuOpen] = useState(false)
+  const [editing, setEditing] = useState(false)
   const liked = post.likedByMe
   const saved = post.bookmarkedByMe
   const images = post.images?.length ? post.images : post.image ? [post.image] : []
@@ -31,9 +33,17 @@ function FeedPost({ post, sharePost, onLike, liking, onBookmark, bookmarking }) 
       <div className="feed-post-menu-wrap">
         <button type="button" className="quiet-icon-button feed-card-more" aria-label={`More options for ${post.name}'s post`} aria-expanded={menuOpen} onClick={() => setMenuOpen((open) => !open)}><MoreHorizontal size={19} /></button>
         {menuOpen && <div className="feed-post-menu" role="menu">
+          {post.isMine && <>
+            <button type="button" role="menuitem" onClick={() => { setEditing(true); setMenuOpen(false) }}><Pencil size={15} />Edit post</button>
+            <button type="button" role="menuitem" className="feed-post-delete-action" onClick={() => { onDelete(post); setMenuOpen(false) }}><Trash2 size={15} />Delete post</button>
+          </>}
           <button type="button" role="menuitem" onClick={() => { onBookmark(post); setMenuOpen(false) }}><Bookmark size={15} />{saved ? 'Unsave post' : 'Save post'}</button>
         </div>}
       </div>
+      {editing && <PostEditForm initialText={post.text} onCancel={() => setEditing(false)} onSave={async (text) => {
+        await onEdit(post, text)
+        setEditing(false)
+      }} />}
       <div className="feed-card-actions">
         <button type="button" className={liked ? 'feed-action liked' : 'feed-action'} onClick={() => onLike(post)} disabled={liking} aria-pressed={liked} aria-label={liked ? `Unlike ${post.name}'s post` : `Like ${post.name}'s post`}><Heart size={17} fill={liked ? 'currentColor' : 'none'} /> <span>{post.likes}</span></button>
         <Link to={`/app/post/${post.id}`} className="feed-action"><MessageCircle size={17} /> <span>{post.comments} replies</span></Link>
@@ -148,6 +158,24 @@ export default function FeedPage() {
     }
   }
 
+  async function editSocialPost(post, text) {
+    const updatedPost = await updateSocialPost(post.id, text, post.images)
+    setSocialPosts((current) => current.map((item) => item.id === post.id ? updatedPost : item))
+    setNotice('Your post was updated.')
+  }
+
+  async function deleteSocialPostFromFeed(post) {
+    if (!window.confirm('Delete this post? This cannot be undone.')) return
+    try {
+      await deleteSocialPost(post.id)
+      setSocialPosts((current) => current.filter((item) => item.id !== post.id))
+      setNotice('Your post was deleted.')
+      setFeedError('')
+    } catch (deleteError) {
+      setFeedError(deleteError instanceof Error ? deleteError.message : 'Your post could not be deleted.')
+    }
+  }
+
   async function sharePost(post) {
     const url = `${window.location.origin}/app/post/${post.id}`
     try {
@@ -193,7 +221,7 @@ export default function FeedPage() {
             : feedLoadError
               ? <section className="feed-empty-state"><h2>Posts couldn’t be loaded.</h2><p>{feedLoadError}</p><button type="button" className="app-primary-button" onClick={() => setRetryFeedLoad((current) => current + 1)}>Try again</button></section>
             : visiblePosts.length
-              ? visiblePosts.map((post) => <FeedPost key={post.id} post={post} sharePost={sharePost} onLike={toggleSocialLike} liking={likingPostIds.includes(post.id)} onBookmark={toggleSocialBookmark} bookmarking={bookmarkingPostIds.includes(post.id)} />)
+              ? visiblePosts.map((post) => <FeedPost key={post.id} post={post} sharePost={sharePost} onLike={toggleSocialLike} liking={likingPostIds.includes(post.id)} onBookmark={toggleSocialBookmark} bookmarking={bookmarkingPostIds.includes(post.id)} onEdit={editSocialPost} onDelete={deleteSocialPostFromFeed} />)
               : <section className="feed-empty-state"><h2>{filter === 'Following' ? 'Your circle is just getting started.' : filter === 'Saved' ? 'No saved posts yet.' : 'No posts in your feed yet.'}</h2><p>{filter === 'Following' ? 'Follow people in Connect and their posts will show up here.' : filter === 'Saved' ? 'Save a post and it will be waiting here.' : 'When you or people you follow share a post, it will appear here.'}</p><button type="button" className="app-primary-button" onClick={() => filter === 'Following' ? navigate('/app/connect') : filter === 'Saved' ? setFilter('For you') : navigate('/app/social')}>{filter === 'Following' ? 'Find people' : filter === 'Saved' ? 'Show all posts' : 'Write a post'}</button></section>}
         </section>
         <aside className="feed-right-column">

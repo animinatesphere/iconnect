@@ -256,6 +256,7 @@ class FakeMessagingConnection:
             "id": message["id"],
             "body": message["body"],
             "created_at": message["created_at"],
+            "read_at": message["read_at"],
             "sender_id": message["sender_id"],
             "display_name": sender["display_name"],
             "username": sender["username"],
@@ -371,6 +372,7 @@ class MessagingFlowTests(unittest.TestCase):
         self.assertEqual(sent.status_code, 201)
         self.assertEqual(sent.json()["message"]["text"], "Hello, Bob!")
         self.assertTrue(sent.json()["message"]["isMine"])
+        self.assertIsNone(sent.json()["message"]["readAt"])
 
         bob_conversations = self.bob_client.get("/api/messages/conversations").json()["conversations"]
         self.assertEqual(len(bob_conversations), 1)
@@ -380,6 +382,10 @@ class MessagingFlowTests(unittest.TestCase):
         self.assertEqual(received.status_code, 200)
         self.assertEqual(received.json()["messages"][0]["text"], "Hello, Bob!")
         self.assertFalse(received.json()["messages"][0]["isMine"])
+        self.assertIsNotNone(received.json()["messages"][0]["readAt"])
+        alice_view = self.client.get(message_url)
+        self.assertTrue(alice_view.json()["messages"][0]["isMine"])
+        self.assertIsNotNone(alice_view.json()["messages"][0]["readAt"])
         self.assertEqual(
             self.bob_client.get("/api/messages/conversations").json()["conversations"][0]["unreadCount"],
             0,

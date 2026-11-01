@@ -17,6 +17,7 @@ export function toFeedPost(post) {
   return {
     id: post.id,
     authorId: post.author.id,
+    isMine: post.isMine,
     name: post.author.name,
     handle: `@${post.author.username}`,
     avatar: '',
@@ -67,6 +68,20 @@ export async function createSocialPost(text, imageUrls = []) {
     body: JSON.stringify({ text, image_urls: imageUrls }),
   })
   return toFeedPost(payload.post)
+}
+
+export async function updateSocialPost(postId, text, imageUrls = []) {
+  const payload = await apiRequest(`/api/social/posts/${encodeURIComponent(postId)}`, {
+    method: 'PUT',
+    body: JSON.stringify({ text, image_urls: imageUrls }),
+  })
+  return toFeedPost(payload.post)
+}
+
+export async function deleteSocialPost(postId) {
+  return apiRequest(`/api/social/posts/${encodeURIComponent(postId)}`, {
+    method: 'DELETE',
+  })
 }
 
 export async function setSocialPostLike(postId, liked) {

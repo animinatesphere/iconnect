@@ -26,6 +26,8 @@ All social routes require a verified, signed-in account and use the existing sec
 
 - `GET /api/social/posts?limit=50` lists the newest posts (1–100 per request).
 - `POST /api/social/posts` creates a text post with up to five `image_urls` (`{"text":"...","image_urls":["/api/media/images/<id>.webp"]}`, up to 500 characters).
+- `PUT /api/social/posts/{post_id}` updates a post's text and image URLs; only its author can edit it.
+- `DELETE /api/social/posts/{post_id}` permanently deletes a post and its dependent likes, bookmarks, and comments; only its author can delete it.
 - `GET /api/social/posts/{post_id}` returns a post with its current like and comment counts.
 - `GET /api/social/posts?bookmarked_only=true` lists the signed-in user's saved posts; each returned post includes `bookmarkedByMe`.
 - `PUT /api/social/posts/{post_id}/bookmark` sets saved state (`{"bookmarked":true|false}`); repeating the same request is safe.
@@ -99,7 +101,7 @@ All messaging routes require a verified account and return only participants' pu
 - `GET /api/messages/conversations/{conversation_id}/messages?limit=100` loads messages and marks incoming messages as read.
 - `POST /api/messages/conversations/{conversation_id}/messages` sends a text message (`{"text":"..."}`, up to 2,000 characters).
 
-Message sending is rate-limited per client IP. Every read and write verifies conversation membership. The inbox refreshes conversations and open messages periodically; attachments, message deletion, voice/video calls, and push delivery are not implemented.
+Message responses include `readAt`; senders can show a read receipt after the recipient opens that conversation. Message sending is rate-limited per client IP. Every read and write verifies conversation membership. The inbox refreshes conversations and open messages periodically; attachments, message deletion, voice/video calls, and push delivery are not implemented.
 
 ## Unconnected product areas
 

@@ -180,6 +180,43 @@ class FakeConnection:
             }
             self.state["posts"].append(post)
             return FakeResult({"id": post["id"]})
+        if sql.startswith("update social_posts set body"):
+            text, image_urls, post_id, user_id = parameters
+            post = next(
+                (
+                    item for item in self.state["posts"]
+                    if item["id"] == str(post_id) and item["user_id"] == str(user_id)
+                ),
+                None,
+            )
+            if not post:
+                return FakeResult()
+            post["body"] = text
+            post["image_urls"] = image_urls
+            return FakeResult({"id": post["id"]})
+        if sql.startswith("delete from social_posts"):
+            post_id, user_id = map(str, parameters)
+            post = next(
+                (
+                    item for item in self.state["posts"]
+                    if item["id"] == post_id and item["user_id"] == user_id
+                ),
+                None,
+            )
+            if not post:
+                return FakeResult()
+            self.state["posts"].remove(post)
+            self.state["comments"] = [
+                comment for comment in self.state["comments"]
+                if comment["post_id"] != post_id
+            ]
+            self.state["likes"] = {
+                like for like in self.state["likes"] if like[0] != post_id
+            }
+            self.state["bookmarks"] = {
+                bookmark for bookmark in self.state["bookmarks"] if bookmark[0] != post_id
+            }
+            return FakeResult({"id": post_id})
         if sql.startswith("insert into marketplace_products"):
             product = {
                 "id": str(uuid4()),
@@ -505,6 +542,7 @@ class FakeConnection:
             "body": post["body"],
             "image_urls": post["image_urls"],
             "created_at": post["created_at"],
+            "author_id": self.state["user"]["id"],
             "author_id": user["id"],
             "display_name": user["display_name"],
             "username": user["username"],
@@ -912,9 +950,25 @@ class AuthFlowTests(unittest.TestCase):
         post = created.json()["post"]
         self.assertEqual(post["text"], "A persistent update")
         self.assertEqual(post["author"]["name"], "Social User")
+        self.assertTrue(post["isMine"])
         self.assertEqual(post["likeCount"], 0)
         self.assertFalse(post["likedByMe"])
         self.assertFalse(post["bookmarkedByMe"])
+
+        updated_post = self.client.put(
+            "/api/social/posts/{}".format(post["id"]),
+            json={"text": "Updated persistent update", "image_urls": []},
+        )
+        self.assertEqual(updated_post.status_code, 200, updated_post.text)
+        self.assertEqual(updated_post.json()["post"]["text"], "Updated persistent update")
+        self.assertTrue(updated_post.json()["post"]["isMine"])
+        self.assertEqual(
+            self.client.put(
+                "/api/social/posts/00000000-0000-0000-0000-000000000002",
+                json={"text": "No such post", "image_urls": []},
+            ).status_code,
+            404,
+        )
 
         listed = self.client.get("/api/social/posts")
         self.assertEqual(listed.status_code, 200)
@@ -956,6 +1010,26 @@ class AuthFlowTests(unittest.TestCase):
         self.assertEqual(comments.json()["comments"][0]["text"], "A saved reply")
         refreshed = self.client.get("/api/social/posts/{}".format(post["id"]))
         self.assertEqual(refreshed.json()["post"]["commentCount"], 1)
+        deleted = self.client.delete("/api/social/posts/{}".format(post["id"]))
+        self.assertEqual(deleted.status_code, 204)
+        self.assertEqual(self.client.get("/api/social/posts/{}".format(post["id"])).status_code, 404)
+        self.assertEqual(self.pool.state["comments"], [])
+
+        other_user_post_id = str(uuid4())
+        self.pool.state["posts"].append({
+            "id": other_user_post_id,
+            "user_id": "00000000-0000-0000-0000-000000000099",
+            "body": "Another member's post",
+            "image_urls": [],
+            "created_at": datetime.now(timezone.utc),
+        })
+        other_user_post_url = "/api/social/posts/{}".format(other_user_post_id)
+        self.assertEqual(
+            self.client.put(other_user_post_url, json={"text": "Changed", "image_urls": []}).status_code,
+            404,
+        )
+        self.assertEqual(self.client.delete(other_user_post_url).status_code, 404)
+        self.assertEqual(len(self.pool.state["posts"]), 1)
 
     def test_admin_allowlist_user_details_private_messages_and_audit(self):
         self.assertEqual(self.client.get("/api/admin/overview").status_code, 401)

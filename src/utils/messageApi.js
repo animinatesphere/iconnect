@@ -36,6 +36,7 @@ export function toDirectMessage(message) {
     time: formatTime(message.createdAt),
     relativeTime: formatRelativeTime(message.createdAt),
     createdAt: message.createdAt,
+    readAt: message.readAt,
   }
 }
 

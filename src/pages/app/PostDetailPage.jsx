@@ -1,12 +1,14 @@
 import React, { useEffect, useRef, useState } from 'react'
-import { ArrowLeft, Bookmark, Heart, MessageCircle, MoreHorizontal, Send } from 'lucide-react'
-import { Link, useParams } from 'react-router-dom'
+import { ArrowLeft, Bookmark, Heart, MessageCircle, MoreHorizontal, Pencil, Send, Trash2 } from 'lucide-react'
+import { Link, useNavigate, useParams } from 'react-router-dom'
 import Avatar from '../../components/Avatar.jsx'
 import PageMeta from '../../components/PageMeta.jsx'
-import { createSocialComment, getSocialComments, getSocialPost, resolveFeedImageUrl, setSocialPostBookmark, setSocialPostLike } from '../../utils/socialApi.js'
+import PostEditForm from '../../components/PostEditForm.jsx'
+import { createSocialComment, deleteSocialPost, getSocialComments, getSocialPost, resolveFeedImageUrl, setSocialPostBookmark, setSocialPostLike, updateSocialPost } from '../../utils/socialApi.js'
 
 export default function PostDetailPage() {
   const { postId } = useParams()
+  const navigate = useNavigate()
   const [post, setPost] = useState(null)
   const [comments, setComments] = useState([])
   const [loaded, setLoaded] = useState(false)
@@ -14,6 +16,7 @@ export default function PostDetailPage() {
   const [notice, setNotice] = useState('')
   const [reply, setReply] = useState('')
   const [menuOpen, setMenuOpen] = useState(false)
+  const [editingPost, setEditingPost] = useState(false)
   const [submittingReply, setSubmittingReply] = useState(false)
   const [likingPost, setLikingPost] = useState(false)
   const [bookmarkingPost, setBookmarkingPost] = useState(false)
@@ -97,6 +100,25 @@ export default function PostDetailPage() {
     }
   }
 
+  async function savePostEdit(text) {
+    const updatedPost = await updateSocialPost(post.id, text, post.images)
+    setPost(updatedPost)
+    setEditingPost(false)
+    setNotice('Your post was updated.')
+  }
+
+  async function removePost() {
+    if (!window.confirm('Delete this post? This cannot be undone.')) return
+    setError('')
+    try {
+      await deleteSocialPost(post.id)
+      navigate('/app/home', { replace: true })
+    } catch (deleteError) {
+      setError(deleteError instanceof Error ? deleteError.message : 'Your post could not be deleted.')
+      setMenuOpen(false)
+    }
+  }
+
   async function sharePost() {
     const url = `${window.location.origin}/app/post/${post.id}`
     try {
@@ -123,14 +145,22 @@ export default function PostDetailPage() {
         <div className="post-detail-heading">
           <div><span className="app-page-eyebrow">POST DETAILS</span><h1>Conversation</h1></div>
           <button type="button" className="quiet-icon-button" aria-label={`More options for ${post.name}'s post`} aria-expanded={menuOpen} onClick={() => setMenuOpen((open) => !open)}><MoreHorizontal size={20} /></button>
-          {menuOpen && <div className="feed-post-menu post-detail-menu" role="menu"><button type="button" role="menuitem" onClick={() => { togglePostBookmark(); setMenuOpen(false) }}><Bookmark size={15} />{post.bookmarkedByMe ? 'Unsave post' : 'Save post'}</button></div>}
+          {menuOpen && <div className="feed-post-menu post-detail-menu" role="menu">
+            {post.isMine && <>
+              <button type="button" role="menuitem" onClick={() => { setEditingPost(true); setMenuOpen(false) }}><Pencil size={15} />Edit post</button>
+              <button type="button" role="menuitem" className="feed-post-delete-action" onClick={removePost}><Trash2 size={15} />Delete post</button>
+            </>}
+            <button type="button" role="menuitem" onClick={() => { togglePostBookmark(); setMenuOpen(false) }}><Bookmark size={15} />{post.bookmarkedByMe ? 'Unsave post' : 'Save post'}</button>
+          </div>}
         </div>
         <article className="post-detail-original">
           <div className="feed-card-header">
             <Avatar person={{ name: post.name, image: post.avatar }} />
             <div className="feed-author"><strong>{post.name}</strong><span>{post.handle}</span></div>
           </div>
-          <p className="post-detail-copy">{post.text}</p>
+          {editingPost
+            ? <PostEditForm initialText={post.text} onCancel={() => setEditingPost(false)} onSave={savePostEdit} />
+            : <p className="post-detail-copy">{post.text}</p>}
           {!!post.images?.length && <div className="post-detail-gallery">{post.images.map((image, index) => <img key={`${image}-${index}`} className="post-detail-image" src={resolveFeedImageUrl(image)} alt={`Photo ${index + 1} shared by ${post.name}`} />)}</div>}
           <p className="post-detail-time">{post.time === 'just now' ? 'Just now' : `${post.time} ago`} · Shared with their circle</p>
           <div className="post-detail-stats"><span><strong>{post.likes}</strong> likes</span><span><strong>{post.comments}</strong> replies</span></div>
