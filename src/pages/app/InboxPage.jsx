@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
-import { ArrowLeft, Search, Send, UserPlus } from 'lucide-react'
+import { ArrowLeft, Check, CheckCheck, Search, Send, UserPlus } from 'lucide-react'
 import { useLocation } from 'react-router-dom'
 import AppPageHeader from '../../components/AppPageHeader.jsx'
 import Avatar from '../../components/Avatar.jsx'
@@ -238,7 +238,7 @@ export default function InboxPage() {
               <div className="chat-header">
                 <button type="button" className="chat-back" aria-label="Back to inbox list" onClick={() => setMobileChatOpen(false)}><ArrowLeft size={17} /></button>
                 <span className="conversation-avatar"><Avatar person={activeRemote} /></span>
-                <div><strong>{activeRemote.name}</strong><small>@{activeRemote.username}</small></div>
+                <div><strong>{activeRemote.name}</strong><small>@{activeRemote.username} · Private conversation</small></div>
               </div>
               <div className="chat-history">
                 <div className="chat-date-divider"><span>PRIVATE CONVERSATION</span></div>
@@ -246,7 +246,16 @@ export default function InboxPage() {
                 {loadingMessages && <p className="inbox-empty-state">Loading messages…</p>}
                 {!loadingMessages && messagesLoadError && <p className="inbox-empty-state" role="alert">Messages couldn’t be loaded. {messagesLoadError}</p>}
                 {!loadingMessages && !messagesLoadError && !messages.length && <p className="inbox-empty-state">This conversation is ready. Send the first message.</p>}
-                {messages.map((item) => <div className={`chat-message-row ${item.from === 'me' ? 'chat-message-mine' : ''}`} key={item.id}><div className="chat-message-bubble">{item.text}</div><span className="chat-message-time">{item.from === 'me' ? 'You' : activeRemote.name.split(' ')[0]} · {item.time}</span></div>)}<div ref={messagesEnd} />
+                {messages.map((item) => <div className={`chat-message-row ${item.from === 'me' ? 'chat-message-mine' : ''}`} key={item.id}>
+                  <div className="chat-message-bubble">{item.text}</div>
+                  <div className="chat-message-meta">
+                    {item.from === 'them' && <span className="chat-message-sender">{activeRemote.name.split(' ')[0]}</span>}
+                    <time className="chat-message-time">{item.time}</time>
+                    {item.from === 'me' && <span className={`chat-message-receipt ${item.readAt ? 'chat-message-receipt-read' : ''}`} title={item.readAt ? `Read ${new Date(item.readAt).toLocaleString()}` : 'Sent'} aria-label={item.readAt ? 'Read' : 'Sent'}>
+                      {item.readAt ? <CheckCheck size={14} /> : <Check size={14} />}
+                    </span>}
+                  </div>
+                </div>)}<div ref={messagesEnd} />
               </div>
               <form className="chat-composer" onSubmit={sendMessage}><input value={message} onChange={(event) => setMessage(event.target.value)} placeholder={`Message ${activeRemote.name.split(' ')[0]}...`} aria-label="Write a message" maxLength={2000} disabled={sending || loadingMessages} /><button className="chat-send" type="submit" aria-label="Send message" disabled={!message.trim() || sending || loadingMessages}><Send size={16} /></button></form>
               <p className="chat-account-footnote">Private text message · Delivered messages are stored in your account.</p>

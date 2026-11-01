@@ -714,12 +714,13 @@ def create_app(
             (viewer_id, viewer_id, post_id),
         ).fetchone()
 
-    def public_social_post(row: Dict[str, Any]) -> Dict[str, Any]:
+    def public_social_post(row: Dict[str, Any], viewer_id: Any) -> Dict[str, Any]:
         return {
             "id": str(row["id"]),
             "text": row["body"],
             "imageUrls": row.get("image_urls") or [],
             "createdAt": row["created_at"].isoformat(),
+            "isMine": str(row["author_id"]) == str(viewer_id),
             "author": {
                 "id": str(row["author_id"]),
                 "name": row["display_name"],
@@ -808,6 +809,7 @@ def create_app(
             "id": str(row["id"]),
             "text": row["body"],
             "createdAt": row["created_at"].isoformat(),
+            "readAt": row["read_at"].isoformat() if row.get("read_at") else None,
             "isMine": str(row["sender_id"]) == str(viewer_id),
             "sender": {
                 "id": str(row["sender_id"]),
@@ -2039,7 +2041,7 @@ def create_app(
                     limit,
                 ),
             ).fetchall()
-        return {"posts": [public_social_post(row) for row in rows]}
+        return {"posts": [public_social_post(row, user["id"]) for row in rows]}
 
     @app.post(
         "/api/social/posts",
@@ -2062,7 +2064,49 @@ def create_app(
             post = social_post(connection, inserted["id"], user["id"])
         if not post:
             raise ApiError(500, "internal_error", "The post could not be created.")
-        return {"post": public_social_post(post)}
+        return {"post": public_social_post(post, user["id"])}
+
+    @app.put(
+        "/api/social/posts/{post_id}",
+        dependencies=[Depends(enforce_social_rate_limit)],
+    )
+    def update_social_post(
+        post_id: UUID,
+        input: SocialPostInput,
+        user: Dict[str, Any] = Depends(require_user),
+    ) -> Dict[str, Any]:
+        with database.connection() as connection:
+            updated = connection.execute(
+                """UPDATE social_posts
+                   SET body = %s, image_urls = %s
+                   WHERE id = %s AND user_id = %s
+                   RETURNING id""",
+                (input.text, input.image_urls, post_id, user["id"]),
+            ).fetchone()
+            if not updated:
+                raise ApiError(404, "post_not_found", "That post could not be found.")
+            post = social_post(connection, updated["id"], user["id"])
+        if not post:
+            raise ApiError(500, "internal_error", "The updated post could not be loaded.")
+        return {"post": public_social_post(post, user["id"])}
+
+    @app.delete(
+        "/api/social/posts/{post_id}",
+        status_code=204,
+        dependencies=[Depends(enforce_social_rate_limit)],
+    )
+    def delete_social_post(
+        post_id: UUID,
+        user: Dict[str, Any] = Depends(require_user),
+    ) -> Response:
+        with database.connection() as connection:
+            deleted = connection.execute(
+                "DELETE FROM social_posts WHERE id = %s AND user_id = %s RETURNING id",
+                (post_id, user["id"]),
+            ).fetchone()
+        if not deleted:
+            raise ApiError(404, "post_not_found", "That post could not be found.")
+        return Response(status_code=204)
 
     @app.put(
         "/api/social/posts/{post_id}/bookmark",
@@ -2104,7 +2148,7 @@ def create_app(
             post = social_post(connection, post_id, user["id"])
         if not post:
             raise ApiError(404, "post_not_found", "That post could not be found.")
-        return {"post": public_social_post(post)}
+        return {"post": public_social_post(post, user["id"])}
 
     @app.put(
         "/api/social/posts/{post_id}/like",
@@ -2136,7 +2180,7 @@ def create_app(
             post = social_post(connection, post_id, user["id"])
         if not post:
             raise ApiError(404, "post_not_found", "That post could not be found.")
-        return {"post": public_social_post(post)}
+        return {"post": public_social_post(post, user["id"])}
 
     @app.get(
         "/api/social/posts/{post_id}/comments",
@@ -3077,7 +3121,8 @@ def create_app(
                 (conversation_id, user["id"]),
             )
             rows = connection.execute(
-                """SELECT message.id, message.body, message.created_at, message.sender_id,
+                """SELECT message.id, message.body, message.created_at, message.read_at,
+                          message.sender_id,
                           sender.display_name, sender.username
                    FROM (
                        SELECT id, body, created_at, sender_id
@@ -3134,7 +3179,8 @@ def create_app(
             if not inserted:
                 raise ApiError(404, "conversation_not_found", "That conversation could not be found.")
             row = connection.execute(
-                """SELECT message.id, message.body, message.created_at, message.sender_id,
+                """SELECT message.id, message.body, message.created_at, message.read_at,
+                          message.sender_id,
                           sender.display_name, sender.username
                    FROM direct_messages message
                    JOIN users sender ON sender.id = message.sender_id
