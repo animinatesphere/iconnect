@@ -3125,7 +3125,7 @@ def create_app(
                           message.sender_id,
                           sender.display_name, sender.username
                    FROM (
-                       SELECT id, body, created_at, sender_id
+                       SELECT id, body, created_at, read_at, sender_id
                        FROM direct_messages
                        WHERE conversation_id = %s
                        ORDER BY created_at DESC, id DESC
