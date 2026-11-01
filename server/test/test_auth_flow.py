@@ -393,8 +393,20 @@ class FakeConnection:
         if sql.startswith("delete from social_post_bookmarks"):
             self.state["bookmarks"].discard((str(parameters[0]), str(parameters[1])))
             return FakeResult(rowcount=1)
+        if sql.startswith("select id from social_post_comments"):
+            comment_id, post_id = map(str, parameters)
+            parent = next(
+                (
+                    item for item in self.state["comments"]
+                    if item["id"] == comment_id
+                    and item["post_id"] == post_id
+                    and item.get("parent_comment_id") is None
+                ),
+                None,
+            )
+            return FakeResult({"id": parent["id"]} if parent else None)
         if sql.startswith("insert into social_post_comments"):
-            post_id = str(parameters[2])
+            post_id = str(parameters[3])
             if not any(post["id"] == post_id for post in self.state["posts"]):
                 return FakeResult()
             comment = {
@@ -402,6 +414,7 @@ class FakeConnection:
                 "post_id": post_id,
                 "user_id": str(parameters[0]),
                 "body": parameters[1],
+                "parent_comment_id": str(parameters[2]) if parameters[2] else None,
                 "created_at": datetime.now(timezone.utc),
             }
             self.state["comments"].append(comment)
@@ -542,7 +555,6 @@ class FakeConnection:
             "body": post["body"],
             "image_urls": post["image_urls"],
             "created_at": post["created_at"],
-            "author_id": self.state["user"]["id"],
             "author_id": user["id"],
             "display_name": user["display_name"],
             "username": user["username"],
@@ -629,6 +641,7 @@ class FakeConnection:
             "id": comment["id"],
             "body": comment["body"],
             "created_at": comment["created_at"],
+            "parent_comment_id": comment.get("parent_comment_id"),
             "author_id": user["id"],
             "display_name": user["display_name"],
             "username": user["username"],
@@ -1002,14 +1015,35 @@ class AuthFlowTests(unittest.TestCase):
         invalid_comment = self.client.post(comments_url, json={"text": "  "})
         self.assertEqual(invalid_comment.status_code, 400)
         created_comment = self.client.post(comments_url, json={"text": "  A saved reply  "})
-        self.assertEqual(created_comment.status_code, 201)
+        self.assertEqual(created_comment.status_code, 201, created_comment.text)
         self.assertEqual(created_comment.json()["comment"]["text"], "A saved reply")
+        parent_comment_id = created_comment.json()["comment"]["id"]
+        nested_reply = self.client.post(comments_url, json={
+            "text": "A reply to the comment",
+            "parent_comment_id": parent_comment_id,
+        })
+        self.assertEqual(nested_reply.status_code, 201, nested_reply.text)
+        self.assertEqual(nested_reply.json()["comment"]["parentCommentId"], parent_comment_id)
+        self.assertEqual(
+            self.client.post(comments_url, json={
+                "text": "A reply nested too deeply",
+                "parent_comment_id": nested_reply.json()["comment"]["id"],
+            }).status_code,
+            404,
+        )
+        self.assertEqual(
+            self.client.post(comments_url, json={
+                "text": "Reply to a missing comment",
+                "parent_comment_id": "00000000-0000-0000-0000-000000000002",
+            }).status_code,
+            404,
+        )
         comments = self.client.get(comments_url)
         self.assertEqual(comments.status_code, 200)
-        self.assertEqual(len(comments.json()["comments"]), 1)
+        self.assertEqual(len(comments.json()["comments"]), 2)
         self.assertEqual(comments.json()["comments"][0]["text"], "A saved reply")
         refreshed = self.client.get("/api/social/posts/{}".format(post["id"]))
-        self.assertEqual(refreshed.json()["post"]["commentCount"], 1)
+        self.assertEqual(refreshed.json()["post"]["commentCount"], 2)
         deleted = self.client.delete("/api/social/posts/{}".format(post["id"]))
         self.assertEqual(deleted.status_code, 204)
         self.assertEqual(self.client.get("/api/social/posts/{}".format(post["id"])).status_code, 404)

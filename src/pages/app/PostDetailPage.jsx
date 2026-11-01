@@ -4,6 +4,7 @@ import { Link, useNavigate, useParams } from 'react-router-dom'
 import Avatar from '../../components/Avatar.jsx'
 import PageMeta from '../../components/PageMeta.jsx'
 import PostEditForm from '../../components/PostEditForm.jsx'
+import { subscribeRealtime } from '../../utils/realtime.js'
 import { createSocialComment, deleteSocialPost, getSocialComments, getSocialPost, resolveFeedImageUrl, setSocialPostBookmark, setSocialPostLike, updateSocialPost } from '../../utils/socialApi.js'
 
 export default function PostDetailPage() {
@@ -15,9 +16,12 @@ export default function PostDetailPage() {
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
   const [reply, setReply] = useState('')
+  const [commentReply, setCommentReply] = useState('')
+  const [replyingTo, setReplyingTo] = useState('')
   const [menuOpen, setMenuOpen] = useState(false)
   const [editingPost, setEditingPost] = useState(false)
   const [submittingReply, setSubmittingReply] = useState(false)
+  const [submittingCommentReply, setSubmittingCommentReply] = useState(false)
   const [likingPost, setLikingPost] = useState(false)
   const [bookmarkingPost, setBookmarkingPost] = useState(false)
   const replyInput = useRef(null)
@@ -40,6 +44,30 @@ export default function PostDetailPage() {
       .finally(() => { if (active) setLoaded(true) })
     return () => { active = false }
   }, [postId])
+
+  useEffect(() => subscribeRealtime((event) => {
+    if (
+      event.type === 'sync'
+      || (event.type.startsWith('post.') && event.postId === postId)
+      || (event.type === 'comment.created' && event.postId === postId)
+    ) {
+      if (event.type === 'post.deleted' && event.postId === postId) {
+        setPost(null)
+        setLoaded(true)
+        setError('This post was deleted.')
+        return
+      }
+      Promise.all([getSocialPost(postId), getSocialComments(postId)])
+        .then(([updatedPost, updatedComments]) => {
+          setPost(updatedPost)
+          setComments(updatedComments)
+          setError('')
+        })
+        .catch((loadError) => {
+          setError(loadError instanceof Error ? loadError.message : 'Could not refresh this conversation.')
+        })
+    }
+  }), [postId])
 
   if (!loaded) return <div className="app-content-width post-detail-page" aria-live="polite">Loading post…</div>
 
@@ -68,6 +96,25 @@ export default function PostDetailPage() {
       setError(replyError instanceof Error ? replyError.message : 'Your reply could not be published.')
     } finally {
       setSubmittingReply(false)
+    }
+  }
+
+  async function addCommentReply(event, parentComment) {
+    event.preventDefault()
+    const text = commentReply.trim()
+    if (!text || submittingCommentReply) return
+    setSubmittingCommentReply(true)
+    setError('')
+    try {
+      const newComment = await createSocialComment(post.id, text, parentComment.id)
+      setComments((current) => [...current, newComment])
+      setPost((current) => ({ ...current, comments: current.comments + 1 }))
+      setCommentReply('')
+      setReplyingTo('')
+    } catch (replyError) {
+      setError(replyError instanceof Error ? replyError.message : 'Your reply could not be published.')
+    } finally {
+      setSubmittingCommentReply(false)
     }
   }
 
@@ -182,7 +229,24 @@ export default function PostDetailPage() {
           {notice && <p className="feed-interaction-notice" role="status">{notice}</p>}
           <p className="post-detail-preview-note">Replies, likes, and saved posts are connected to your account.</p>
           <div className="post-replies-list">
-            {comments.map((comment) => <article className="post-reply" key={comment.id}><Avatar person={{ name: comment.name, image: comment.avatar }} /><div className="post-reply-body"><div className="post-reply-author"><strong>{comment.name}</strong><span>{comment.handle} · {comment.time}</span></div><p>{comment.text}</p></div></article>)}
+            {comments.filter((comment) => !comment.parentCommentId).map((comment) => <article className="post-reply-thread" key={comment.id}>
+              <div className="post-reply">
+                <Avatar person={{ name: comment.name, image: comment.avatar }} />
+                <div className="post-reply-body">
+                  <div className="post-reply-author"><strong>{comment.name}</strong><span>{comment.handle} · {comment.time}</span></div>
+                  <p>{comment.text}</p>
+                  <button type="button" className="post-comment-reply-button" onClick={() => { setReplyingTo((current) => current === comment.id ? '' : comment.id); setCommentReply('') }}>Reply</button>
+                </div>
+              </div>
+              {comments.filter((replyComment) => replyComment.parentCommentId === comment.id).map((replyComment) => <div className="post-reply post-comment-child" key={replyComment.id}>
+                <Avatar person={{ name: replyComment.name, image: replyComment.avatar }} />
+                <div className="post-reply-body"><div className="post-reply-author"><strong>{replyComment.name}</strong><span>{replyComment.handle} · {replyComment.time}</span></div><p>{replyComment.text}</p></div>
+              </div>)}
+              {replyingTo === comment.id && <form className="post-comment-reply-form" onSubmit={(event) => addCommentReply(event, comment)}>
+                <label><span className="sr-only">Reply to {comment.name}</span><textarea value={commentReply} onChange={(event) => setCommentReply(event.target.value)} placeholder={`Reply to ${comment.name}…`} rows={2} maxLength={280} autoFocus /></label>
+                <div><button type="button" onClick={() => setReplyingTo('')} disabled={submittingCommentReply}>Cancel</button><button type="submit" className="app-primary-button" disabled={!commentReply.trim() || submittingCommentReply}>{submittingCommentReply ? 'Sending…' : 'Reply'}</button></div>
+              </form>}
+            </article>)}
             {!comments.length && <p className="inbox-empty-state">No replies yet. Start the conversation.</p>}
           </div>
         </section>

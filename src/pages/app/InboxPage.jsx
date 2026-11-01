@@ -4,6 +4,24 @@ import { useLocation } from 'react-router-dom'
 import AppPageHeader from '../../components/AppPageHeader.jsx'
 import Avatar from '../../components/Avatar.jsx'
 import { getConversations, getDirectMessages, openConversation as openDirectConversation, searchMessageUsers, sendDirectMessage } from '../../utils/messageApi.js'
+import { subscribeRealtime } from '../../utils/realtime.js'
+
+function playIncomingMessageSound(audioContext) {
+  if (!audioContext || audioContext.state !== 'running') return
+  const oscillator = audioContext.createOscillator()
+  const volume = audioContext.createGain()
+  const now = audioContext.currentTime
+  oscillator.type = 'sine'
+  oscillator.frequency.setValueAtTime(740, now)
+  oscillator.frequency.setValueAtTime(880, now + 0.1)
+  volume.gain.setValueAtTime(0.0001, now)
+  volume.gain.exponentialRampToValueAtTime(0.12, now + 0.025)
+  volume.gain.exponentialRampToValueAtTime(0.0001, now + 0.28)
+  oscillator.connect(volume)
+  volume.connect(audioContext.destination)
+  oscillator.start(now)
+  oscillator.stop(now + 0.29)
+}
 
 export default function InboxPage() {
   const location = useLocation()
@@ -27,6 +45,7 @@ export default function InboxPage() {
   const [loadingConversations, setLoadingConversations] = useState(true)
   const [loadingMessages, setLoadingMessages] = useState(false)
   const messagesEnd = useRef(null)
+  const audioContext = useRef(null)
   const requestedConversationId = useRef(location.state?.conversationId ?? '')
   const activeRemote = conversations.find((conversation) => conversation.id === activeId)
   const messages = remoteMessageState.conversationId === activeId ? remoteMessageState.messages : []
@@ -63,7 +82,7 @@ export default function InboxPage() {
       }
     }
     refreshConversations()
-    const refreshTimer = window.setInterval(refreshConversations, 10000)
+    const refreshTimer = window.setInterval(refreshConversations, 60000)
     return () => {
       active = false
       window.clearInterval(refreshTimer)
@@ -116,11 +135,63 @@ export default function InboxPage() {
         })
     }
     refreshMessages()
-    const refreshTimer = window.setInterval(refreshMessages, 10000)
+    const refreshTimer = window.setInterval(refreshMessages, 60000)
     return () => {
       activeRequest = false
       window.clearInterval(refreshTimer)
     }
+  }, [activeId])
+
+  useEffect(() => {
+    const unlockAudio = () => {
+      if (!audioContext.current && window.AudioContext) {
+        audioContext.current = new window.AudioContext()
+      }
+    }
+    window.addEventListener('pointerdown', unlockAudio, { once: true })
+    window.addEventListener('keydown', unlockAudio, { once: true })
+    return () => {
+      window.removeEventListener('pointerdown', unlockAudio)
+      window.removeEventListener('keydown', unlockAudio)
+    }
+  }, [])
+
+  useEffect(() => {
+    function refreshConversationList() {
+      getConversations()
+        .then(setConversations)
+        .catch((loadError) => setError(loadError instanceof Error ? loadError.message : 'Could not refresh your conversations.'))
+    }
+
+    function refreshActiveConversation(conversationId, errorMessage) {
+      getDirectMessages(conversationId)
+        .then((loadedMessages) => {
+          setRemoteMessageState({ conversationId, messages: loadedMessages })
+          setConversations((current) => current.map((conversation) => (
+            conversation.id === conversationId
+              ? { ...conversation, unreadCount: 0 }
+              : conversation
+          )))
+        })
+        .catch((loadError) => setError(loadError instanceof Error ? loadError.message : errorMessage))
+    }
+
+    return subscribeRealtime((event) => {
+      if (event.type === 'message.created') {
+        playIncomingMessageSound(audioContext.current)
+        refreshConversationList()
+        if (event.conversationId === activeId) {
+          refreshActiveConversation(activeId, 'Could not refresh this conversation.')
+        }
+      } else if (event.type === 'message.read' && event.conversationId === activeId) {
+        refreshActiveConversation(activeId, 'Could not refresh read receipts.')
+      } else if (event.type === 'sync' || event.type === 'connected') {
+        refreshConversationList()
+        if (activeId) {
+          refreshActiveConversation(activeId, 'Could not refresh this conversation.')
+        }
+      }
+    })
   }, [activeId])
 
   useEffect(() => {

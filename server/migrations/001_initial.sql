@@ -100,12 +100,21 @@ CREATE TABLE IF NOT EXISTS social_post_comments (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   post_id uuid NOT NULL REFERENCES social_posts(id) ON DELETE CASCADE,
   user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  parent_comment_id uuid REFERENCES social_post_comments(id) ON DELETE CASCADE,
   body varchar(280) NOT NULL CHECK (char_length(btrim(body)) BETWEEN 1 AND 280),
   created_at timestamptz NOT NULL DEFAULT now()
 );
 
+ALTER TABLE social_post_comments
+  ADD COLUMN IF NOT EXISTS parent_comment_id uuid
+  REFERENCES social_post_comments(id) ON DELETE CASCADE;
+
 CREATE INDEX IF NOT EXISTS social_post_comments_created_at_idx
   ON social_post_comments(post_id, created_at);
+
+CREATE INDEX IF NOT EXISTS social_post_comments_parent_idx
+  ON social_post_comments(parent_comment_id, created_at)
+  WHERE parent_comment_id IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS direct_conversations (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),

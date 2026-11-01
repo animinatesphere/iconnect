@@ -6,6 +6,7 @@ import Avatar from '../../components/Avatar.jsx'
 import PostEditForm from '../../components/PostEditForm.jsx'
 import { apiRequest } from '../../utils/api.js'
 import { getPeople } from '../../utils/peopleApi.js'
+import { subscribeRealtime } from '../../utils/realtime.js'
 import { deleteSocialPost, getSocialPosts, resolveFeedImageUrl, setSocialPostBookmark, setSocialPostLike, updateSocialPost } from '../../utils/socialApi.js'
 
 function FeedPost({ post, sharePost, onLike, liking, onBookmark, bookmarking, onEdit, onDelete }) {
@@ -107,6 +108,12 @@ export default function FeedPage() {
       })
     return () => { active = false }
   }, [filter, retryFeedLoad])
+
+  useEffect(() => subscribeRealtime((event) => {
+    if (event.type === 'sync' || event.type.startsWith('post.') || event.type === 'comment.created') {
+      setRetryFeedLoad((current) => current + 1)
+    }
+  }), [])
 
   useEffect(() => {
     let active = true

@@ -33,7 +33,7 @@ All social routes require a verified, signed-in account and use the existing sec
 - `PUT /api/social/posts/{post_id}/bookmark` sets saved state (`{"bookmarked":true|false}`); repeating the same request is safe.
 - `PUT /api/social/posts/{post_id}/like` sets the signed-in user's like state (`{"liked":true|false}`); repeating the same request is safe.
 - `GET /api/social/posts/{post_id}/comments?limit=100` lists comments (1–200 per request).
-- `POST /api/social/posts/{post_id}/comments` creates a comment (`{"text":"..."}`, up to 280 characters).
+- `POST /api/social/posts/{post_id}/comments` creates a comment (`{"text":"..."}`, up to 280 characters); an optional `parent_comment_id` replies to a top-level comment on that post. Replies are limited to one level.
 
 `POST /api/media/images` uploads one authenticated JPEG, PNG, or WebP image (maximum 4 MB and 20 megapixels); uploaded files are validated, resized, and stored as WebP. Images are served to signed-in members at the returned URL. The Create page lets members add up to five photos to a post. Post creation, likes, comments, bookmarks, and image uploads are rate-limited per client IP. `GET /api/social/posts?following_only=true` limits results to authors the current user follows. Stories and video uploads are not implemented.
 
@@ -101,7 +101,13 @@ All messaging routes require a verified account and return only participants' pu
 - `GET /api/messages/conversations/{conversation_id}/messages?limit=100` loads messages and marks incoming messages as read.
 - `POST /api/messages/conversations/{conversation_id}/messages` sends a text message (`{"text":"..."}`, up to 2,000 characters).
 
-Message responses include `readAt`; senders can show a read receipt after the recipient opens that conversation. Message sending is rate-limited per client IP. Every read and write verifies conversation membership. The inbox refreshes conversations and open messages periodically; attachments, message deletion, voice/video calls, and push delivery are not implemented.
+Message responses include `readAt`; senders can show a read receipt after the recipient opens that conversation. Message sending is rate-limited per client IP. Every read and write verifies conversation membership. Attachments, message deletion, voice/video calls, and push delivery are not implemented.
+
+## Live updates
+
+The authenticated WebSocket endpoint at `/api/realtime` streams message-created and read-receipt events to the conversation participants, and post/comment changes to connected members. Events contain identifiers and metadata, not message or comment text. The web app reconnects automatically, refreshes on reconnect, and keeps a 60-second polling fallback for inbox recovery.
+
+The API currently fans out events in process memory, so deploy it as a single Uvicorn worker/instance. Multiple workers or API instances require a shared event broker before deployment. Nginx must proxy `/api/realtime` using HTTP/1.1 and forward the `Upgrade` and `Connection` headers; keep its read timeout longer than the API's 25-second WebSocket heartbeat interval. Without WebSocket upgrade proxying, inbox updates fall back to polling, while feed and comment changes will not arrive live.
 
 ## Unconnected product areas
 
@@ -140,4 +146,4 @@ The Vercel rewrite must only be deployed after the API hostname has DNS, a worki
 
 Set `NODE_ENV=production`, `API_HOST=127.0.0.1`, `API_PORT=10000`, `APP_ORIGIN=https://www.iconnectdworld.com`, `DATABASE_URL`, `SESSION_SECRET`, `OTP_HASH_SECRET`, `RESEND_API_KEY`, `EMAIL_FROM`, `SESSION_MAX_AGE_DAYS=7`, `TRUST_PROXY=1`, the intended server-only `ADMIN_EMAILS`, and `ICONNECT_MEDIA_DIR=/var/lib/iconnect/uploads` in the VPS environment. Create the media directory and make it writable by the API service account before starting the API. Keep secrets out of source control and never put them in `VITE_*` variables.
 
-On the VPS, create the environment with `python3 -m venv server/.venv`, install runtime packages with `server/.venv/bin/pip install -r server/requirements.txt`, and run `npm run db:migrate`. Configure the Nginx API virtual host with `client_max_body_size 5m;` so image uploads under the API's 4 MB limit are accepted, then test and reload Nginx. Run the API with `server/.venv/bin/uvicorn server.app.main:app --host 127.0.0.1 --port 10000`. The migration creates the account, verification-code, session, admin audit, social feed/bookmark, messaging, follow, community, job, iBuy product/gallery, and local marketplace listing tables idempotently. Back up the media directory alongside PostgreSQL. The API does not configure PostgreSQL, DNS, Nginx, TLS, backups, or a process supervisor.
+On the VPS, create the environment with `python3 -m venv server/.venv`, install runtime packages with `server/.venv/bin/pip install -r server/requirements.txt`, and run `npm run db:migrate`. Configure the Nginx API virtual host with `client_max_body_size 5m;` so image uploads under the API's 4 MB limit are accepted, and proxy WebSocket upgrades for `/api/realtime` as described above; then test and reload Nginx. Run the API with `server/.venv/bin/uvicorn server.app.main:app --host 127.0.0.1 --port 10000`. The migration creates the account, verification-code, session, admin audit, social feed/bookmark, messaging, follow, community, job, iBuy product/gallery, and local marketplace listing tables idempotently. Back up the media directory alongside PostgreSQL. The API does not configure PostgreSQL, DNS, Nginx, TLS, backups, or a process supervisor.

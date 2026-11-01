@@ -44,6 +44,7 @@ export function toFeedComment(comment) {
     avatar: '',
     time: relativeTime(comment.createdAt),
     text: comment.text,
+    parentCommentId: comment.parentCommentId ?? null,
     isPersistent: true,
   }
 }
@@ -104,10 +105,13 @@ export async function getSocialComments(postId) {
   return payload.comments.map(toFeedComment)
 }
 
-export async function createSocialComment(postId, text) {
+export async function createSocialComment(postId, text, parentCommentId = null) {
   const payload = await apiRequest(`/api/social/posts/${encodeURIComponent(postId)}/comments`, {
     method: 'POST',
-    body: JSON.stringify({ text }),
+    body: JSON.stringify({
+      text,
+      ...(parentCommentId ? { parent_comment_id: parentCommentId } : {}),
+    }),
   })
   return toFeedComment(payload.comment)
 }
