@@ -238,6 +238,8 @@ class FakeMessagingConnection:
             message = self.state["messages"].get(str(parameters[0]))
             return FakeResult(self._message_row(message) if message else None)
         if sql.startswith("select message.id") and "from (" in sql:
+            if "select id, body, created_at, read_at, sender_id from direct_messages" not in sql:
+                raise AssertionError("Message query must expose read_at from its subquery.")
             conversation_id, limit = str(parameters[0]), parameters[1]
             messages = [
                 item
