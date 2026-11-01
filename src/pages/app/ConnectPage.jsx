@@ -1,11 +1,12 @@
 import React, { useEffect, useState } from 'react'
-import { ArrowUpRight, Compass, Heart, MessageCircle, Plus, Search, Users } from 'lucide-react'
+import { ArrowUpRight, Camera, Compass, Heart, MessageCircle, Plus, Search, Users } from 'lucide-react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import AppPageHeader from '../../components/AppPageHeader.jsx'
 import Avatar from '../../components/Avatar.jsx'
 import { createCommunity, getCommunities, setCommunityJoined } from '../../utils/communityApi.js'
 import { getPeople, setPersonFollow } from '../../utils/peopleApi.js'
 import { openConversation } from '../../utils/messageApi.js'
+import { uploadImage } from '../../utils/mediaApi.js'
 
 export default function ConnectPage() {
   const location = useLocation()
@@ -20,6 +21,8 @@ export default function ConnectPage() {
   const [loadingCommunities, setLoadingCommunities] = useState(true)
   const [communityError, setCommunityError] = useState('')
   const [communityDraft, setCommunityDraft] = useState({ name: '', description: '' })
+  const [communityImage, setCommunityImage] = useState(null)
+  const [communityImagePreview, setCommunityImagePreview] = useState('')
   const [communityFormOpen, setCommunityFormOpen] = useState(false)
   const [creatingCommunity, setCreatingCommunity] = useState(false)
   const [pendingCommunityIds, setPendingCommunityIds] = useState([])
@@ -27,6 +30,16 @@ export default function ConnectPage() {
   const [pendingMessages, setPendingMessages] = useState([])
   const tabs = ['For you', 'People', 'Communities']
   const normalizedSearch = search.trim().toLowerCase()
+
+  useEffect(() => {
+    if (!communityImage) {
+      setCommunityImagePreview('')
+      return undefined
+    }
+    const preview = URL.createObjectURL(communityImage)
+    setCommunityImagePreview(preview)
+    return () => URL.revokeObjectURL(preview)
+  }, [communityImage])
 
   useEffect(() => {
     if (location.state?.activeTab) setActiveTab(location.state.activeTab)
@@ -137,9 +150,11 @@ export default function ConnectPage() {
     setCreatingCommunity(true)
     setError('')
     try {
-      const community = await createCommunity(communityDraft)
+      const imageUrl = communityImage ? await uploadImage(communityImage) : null
+      const community = await createCommunity({ ...communityDraft, imageUrl })
       setCommunities((current) => [community, ...current.filter((item) => item.id !== community.id)])
       setCommunityDraft({ name: '', description: '' })
+      setCommunityImage(null)
       setCommunityFormOpen(false)
       setNotice(`You created ${community.name} and joined its membership.`)
     } catch (createError) {
@@ -184,10 +199,20 @@ export default function ConnectPage() {
       </section>}
       {(activeTab === 'For you' || activeTab === 'Communities') && <section className="connect-communities-section">
         <div className="connect-section-heading"><div><span className="app-page-eyebrow">FIND YOUR CORNER</span><h2>Communities</h2></div><button type="button" className="connect-create-community" onClick={() => setCommunityFormOpen((open) => !open)}><Plus size={14} /> {communityFormOpen ? 'Close form' : 'Create community'}</button></div>
-        {communityFormOpen && <form className="connect-community-form" onSubmit={submitCommunity}><label>Community name<input value={communityDraft.name} onChange={(event) => setCommunityDraft((current) => ({ ...current, name: event.target.value }))} maxLength={80} required /></label><label>Description<textarea value={communityDraft.description} onChange={(event) => setCommunityDraft((current) => ({ ...current, description: event.target.value }))} maxLength={500} rows={3} required /></label><button type="submit" className="app-primary-button" disabled={creatingCommunity}>{creatingCommunity ? 'Creating…' : 'Create community'}</button></form>}
+        {communityFormOpen && <form className="connect-community-form" onSubmit={submitCommunity}><label>Community name<input value={communityDraft.name} onChange={(event) => setCommunityDraft((current) => ({ ...current, name: event.target.value }))} maxLength={80} required /></label><label>Description<textarea value={communityDraft.description} onChange={(event) => setCommunityDraft((current) => ({ ...current, description: event.target.value }))} maxLength={500} rows={3} required /></label><label className="media-upload-picker"><Camera size={16} /><span>Add community cover photo</span><small>{communityImage ? communityImage.name : 'JPEG, PNG or WebP · optimized on upload'}</small><input type="file" accept="image/jpeg,image/png,image/webp" onChange={(event) => {
+          const file = event.target.files?.[0]
+          event.target.value = ''
+          if (!file) return
+          if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type)) {
+            setError('Choose a JPEG, PNG, or WebP photo.')
+            return
+          }
+          setCommunityImage(file)
+          setError('')
+        }} disabled={creatingCommunity} /></label>{communityImagePreview && <img className="community-cover-preview" src={communityImagePreview} alt="Selected community cover" />}<button type="submit" className="app-primary-button" disabled={creatingCommunity}>{creatingCommunity ? 'Creating…' : 'Create community'}</button></form>}
         {communityError && <p className="feed-interaction-notice feed-error" role="alert">{communityError}</p>}
         {loadingCommunities && <p className="connect-empty-state">Loading communities…</p>}
-        {!loadingCommunities && !communityError && communities.length > 0 && <div className="connect-community-list">{communities.map((community) => <article key={community.id}><span className="connect-community-icon"><Compass size={18} /></span><div><h3>{community.name}</h3><p>{community.description}</p><small>{community.memberCount} {community.memberCount === 1 ? 'member' : 'members'} · Created {new Date(community.createdAt).toLocaleDateString()}</small></div><button type="button" className={community.joinedByMe ? 'joined-community-button' : 'connect-community-join'} onClick={() => toggleCommunity(community)} disabled={pendingCommunityIds.includes(community.id)}>{pendingCommunityIds.includes(community.id) ? 'Saving…' : community.joinedByMe ? 'Leave' : 'Join'}</button></article>)}</div>}
+        {!loadingCommunities && !communityError && communities.length > 0 && <div className="connect-community-list">{communities.map((community) => <article key={community.id}>{community.imageUrl ? <img className="connect-community-image" src={community.imageUrl} alt="" /> : <span className="connect-community-icon"><Compass size={18} /></span>}<div><h3>{community.name}</h3><p>{community.description}</p><small>{community.memberCount} {community.memberCount === 1 ? 'member' : 'members'} · Created {new Date(community.createdAt).toLocaleDateString()}</small></div><button type="button" className={community.joinedByMe ? 'joined-community-button' : 'connect-community-join'} onClick={() => toggleCommunity(community)} disabled={pendingCommunityIds.includes(community.id)}>{pendingCommunityIds.includes(community.id) ? 'Saving…' : community.joinedByMe ? 'Leave' : 'Join'}</button></article>)}</div>}
         {!loadingCommunities && !communityError && communities.length === 0 && <p className="connect-empty-state">{search.length === 1 ? 'Enter at least two characters to search communities.' : `No communities match “${search}”. Create one to get started.`}</p>}
         {activeTab === 'For you' && <button type="button" onClick={() => setActiveTab('Communities')}>See communities <ArrowUpRight size={14} /></button>}
       </section>}

@@ -49,6 +49,7 @@ class FakeJobsConnection:
                 workplace_type,
                 summary,
                 description,
+                company_image_url,
             ) = parameters
             job_id = str(uuid4())
             self.state["jobs"][job_id] = {
@@ -61,6 +62,7 @@ class FakeJobsConnection:
                 "workplace_type": workplace_type,
                 "summary": summary,
                 "description": description,
+                "company_image_url": company_image_url,
                 "created_at": datetime.now(timezone.utc),
             }
             return FakeResult({"id": job_id})
@@ -263,6 +265,7 @@ class JobsFlowTests(unittest.TestCase):
             "workplace_type": "hybrid",
             "summary": "Design a welcoming community product.",
             "description": "Work with the team to improve the member experience.",
+            "company_image_url": "/api/media/images/{}.webp".format("c" * 32),
         }
         listing.update(overrides)
         response = self.clients[owner].post("/api/jobs", json=listing)
@@ -275,6 +278,7 @@ class JobsFlowTests(unittest.TestCase):
 
         job = self.create_listing(title="  Product Designer  ")
         self.assertEqual(job["title"], "Product Designer")
+        self.assertEqual(job["companyImageUrl"], "/api/media/images/{}.webp".format("c" * 32))
         self.assertTrue(job["isOwner"])
         self.assertNotIn("email", job["poster"])
 

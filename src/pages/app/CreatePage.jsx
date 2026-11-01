@@ -8,7 +8,6 @@ import { uploadImage } from '../../utils/mediaApi.js'
 import { createSocialPost } from '../../utils/socialApi.js'
 
 const maxImages = 5
-const maxImageBytes = 4 * 1024 * 1024
 
 export default function CreatePage() {
   const location = useLocation()
@@ -72,9 +71,9 @@ export default function CreatePage() {
       setError(`Choose up to ${maxImages} images for one post.`)
       return
     }
-    const invalid = selected.find((file) => !['image/jpeg', 'image/png', 'image/webp'].includes(file.type) || file.size > maxImageBytes)
+    const invalid = selected.find((file) => !['image/jpeg', 'image/png', 'image/webp'].includes(file.type))
     if (invalid) {
-      setError('Use JPEG, PNG, or WebP images no larger than 4 MB each.')
+      setError('Use JPEG, PNG, or WebP images.')
       return
     }
     setImages((current) => [...current, ...selected])
@@ -93,7 +92,7 @@ export default function CreatePage() {
         <section className="create-editor-card">
           <div className="create-author"><Avatar person={author} /><span><strong>{author.name}</strong><small>Posting to the iConnect feed</small></span><span className="audience-select">iConnect feed</span></div>
           <textarea value={caption} onChange={(event) => { setCaption(event.target.value); setError('') }} placeholder="What would you like to share with your people?" rows={7} maxLength={500} aria-label="Post text" required />
-          <label className="media-upload-picker"><ImageIcon size={18} /><span>Add photos</span><small>{images.length}/{maxImages} · JPEG, PNG or WebP · 4 MB each</small><input type="file" accept="image/jpeg,image/png,image/webp" multiple onChange={chooseImages} disabled={publishing || images.length >= maxImages} /></label>
+          <label className="media-upload-picker"><ImageIcon size={18} /><span>Add photos</span><small>{images.length}/{maxImages} · JPEG, PNG or WebP · optimized on upload</small><input type="file" accept="image/jpeg,image/png,image/webp" multiple onChange={chooseImages} disabled={publishing || images.length >= maxImages} /></label>
           {!!images.length && <div className="media-upload-previews">{images.map((image, index) => <div className="media-upload-preview" key={`${image.name}-${image.lastModified}-${index}`}><img src={imagePreviews[index]} alt={`Selected photo ${index + 1}`} /><button type="button" aria-label={`Remove photo ${index + 1}`} onClick={() => setImages((current) => current.filter((_, imageIndex) => imageIndex !== index))} disabled={publishing}><X size={15} /></button></div>)}</div>}
           <div className="create-editor-tools"><button type="button" onClick={suggestCaption}><MessageCircle size={18} /><span>Caption idea</span></button><span>{caption.length}/500</span></div>
           {error && <p className="create-notice feed-error" role="alert">{error}</p>}

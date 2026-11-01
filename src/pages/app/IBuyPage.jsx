@@ -12,7 +12,6 @@ import { openConversation } from '../../utils/messageApi.js'
 const categories = ['All', 'Style', 'Tech', 'Home', 'Other']
 const emptyListing = { name: '', category: 'Home', price: '', stock: '1', description: '', imageUrl: '' }
 const maxImages = 5
-const maxImageBytes = 4 * 1024 * 1024
 
 function naira(value) {
   return `₦${new Intl.NumberFormat('en-NG').format(value)}`
@@ -140,9 +139,9 @@ export default function IBuyPage() {
       setError(`Choose up to ${maxImages} images for one listing.`)
       return
     }
-    const invalid = selected.find((file) => !['image/jpeg', 'image/png', 'image/webp'].includes(file.type) || file.size > maxImageBytes)
+    const invalid = selected.find((file) => !['image/jpeg', 'image/png', 'image/webp'].includes(file.type))
     if (invalid) {
-      setError('Use JPEG, PNG, or WebP images no larger than 4 MB each.')
+      setError('Use JPEG, PNG, or WebP images.')
       return
     }
     setImages((current) => [...current, ...selected])
@@ -211,7 +210,7 @@ export default function IBuyPage() {
           <label>Quantity available<input type="number" value={listing.stock} onChange={(event) => setListing((current) => ({ ...current, stock: event.target.value }))} min="0" max="1000000" step="1" required /></label>
         </div>
         <label>Description<textarea value={listing.description} onChange={(event) => setListing((current) => ({ ...current, description: event.target.value }))} maxLength={2000} rows={4} required /></label>
-        <label className="media-upload-picker"><ImageIcon size={18} /><span>Add product photos</span><small>{images.length}/{maxImages} · JPEG, PNG or WebP · 4 MB each</small><input type="file" accept="image/jpeg,image/png,image/webp" multiple onChange={chooseImages} disabled={publishing || images.length >= maxImages} /></label>
+        <label className="media-upload-picker"><ImageIcon size={18} /><span>Add product photos</span><small>{images.length}/{maxImages} · JPEG, PNG or WebP · optimized on upload</small><input type="file" accept="image/jpeg,image/png,image/webp" multiple onChange={chooseImages} disabled={publishing || images.length >= maxImages} /></label>
         {!!images.length && <div className="media-upload-previews">{images.map((image, index) => <div className="media-upload-preview" key={`${image.name}-${image.lastModified}-${index}`}><img src={imagePreviews[index]} alt={`Selected product photo ${index + 1}`} /><button type="button" aria-label={`Remove product photo ${index + 1}`} onClick={() => setImages((current) => current.filter((_, imageIndex) => imageIndex !== index))} disabled={publishing}><X size={15} /></button></div>)}</div>}
         <button type="submit" className="app-primary-button" disabled={publishing}>{publishing ? 'Publishing…' : 'Publish listing'}</button>
       </form>}

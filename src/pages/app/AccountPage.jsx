@@ -1,9 +1,11 @@
 import React, { useEffect, useState } from 'react'
-import { Bell, ChevronRight, Eye, KeyRound, Link2, LockKeyhole, LogOut, Save, Shield, UserRound } from 'lucide-react'
+import { Bell, Camera, ChevronRight, Eye, KeyRound, Link2, LockKeyhole, LogOut, Save, Shield, Trash2 } from 'lucide-react'
 import { Link, useNavigate } from 'react-router-dom'
 import AppPageHeader from '../../components/AppPageHeader.jsx'
+import Avatar from '../../components/Avatar.jsx'
 import { interestOptions } from '../../data/profileOptions.js'
 import { apiRequest } from '../../utils/api.js'
+import { uploadImage } from '../../utils/mediaApi.js'
 
 const defaultPreferences = { profileVisible: true, discoverable: true }
 
@@ -19,6 +21,7 @@ export default function AccountPage() {
   const [preferences, setPreferences] = useState(defaultPreferences)
   const [accountLoading, setAccountLoading] = useState(true)
   const [savingProfile, setSavingProfile] = useState(false)
+  const [savingPhoto, setSavingPhoto] = useState(false)
   const [privacySaving, setPrivacySaving] = useState(false)
   const navigate = useNavigate()
 
@@ -48,6 +51,52 @@ export default function AccountPage() {
 
   function toggleInterest(interest) {
     setSelected((current) => current.includes(interest) ? current.filter((item) => item !== interest) : [...current, interest])
+  }
+
+  async function saveProfilePhoto(imageUrl) {
+    setSavingPhoto(true)
+    setNotice('')
+    setError('')
+    try {
+      const result = await apiRequest('/api/auth/profile/photo', {
+        method: 'PUT',
+        body: JSON.stringify({ image_url: imageUrl }),
+      })
+      setAccount(result.user)
+      window.dispatchEvent(new CustomEvent('iconnect:profile-updated', { detail: result.user }))
+      setNotice(imageUrl ? 'Your profile photo was saved.' : 'Your profile photo was removed.')
+    } catch (photoError) {
+      setError(photoError instanceof Error ? photoError.message : 'Could not save your profile photo.')
+    } finally {
+      setSavingPhoto(false)
+    }
+  }
+
+  async function chooseProfilePhoto(event) {
+    const file = event.target.files?.[0]
+    event.target.value = ''
+    if (!file) return
+    if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type)) {
+      setError('Choose a JPEG, PNG, or WebP photo.')
+      return
+    }
+    setSavingPhoto(true)
+    setNotice('')
+    setError('')
+    try {
+      const imageUrl = await uploadImage(file)
+      const result = await apiRequest('/api/auth/profile/photo', {
+        method: 'PUT',
+        body: JSON.stringify({ image_url: imageUrl }),
+      })
+      setAccount(result.user)
+      window.dispatchEvent(new CustomEvent('iconnect:profile-updated', { detail: result.user }))
+      setNotice('Your profile photo was saved.')
+    } catch (photoError) {
+      setError(photoError instanceof Error ? photoError.message : 'Could not save your profile photo.')
+    } finally {
+      setSavingPhoto(false)
+    }
   }
 
   async function saveProfile() {
@@ -115,7 +164,7 @@ export default function AccountPage() {
   return (
     <div className="app-content-width">
       <AppPageHeader eyebrow="YOUR SPACE, YOUR SETTINGS" title="Profile & settings" description="Manage the profile and privacy preferences saved to your iConnect account." />
-      <div className="account-status-banner"><Shield size={16} /> Profile details, privacy settings, and sign-out use your account. Photo uploads, notification delivery, and external account connections are not available.</div>
+      <div className="account-status-banner"><Shield size={16} /> Profile details and photos are saved to your account. Notification delivery and external account connections are not available.</div>
       <div className="account-layout">
         <nav className="account-tabs" aria-label="Profile settings">
           {['Profile', 'Preferences', 'Privacy'].map((tab) => <button type="button" key={tab} onClick={() => { setActiveTab(tab); setNotice(''); setError('') }} className={activeTab === tab ? 'account-tab-active' : ''}>{tab}<ChevronRight size={15} /></button>)}
@@ -130,9 +179,10 @@ export default function AccountPage() {
           {!accountLoading && !account && <p className="feed-interaction-notice feed-error" role="alert">{error || 'Your account could not be loaded.'}</p>}
           {!accountLoading && account && activeTab === 'Profile' && <>
             <div className="account-avatar-row">
-              <span className="account-profile-placeholder"><UserRound size={20} /></span>
+              <Avatar person={{ name, image: account.image }} />
               <div><strong>{name}</strong><span>{account.email} · iConnect account</span></div>
-              <span className="account-photo-unavailable">Profile photos are not connected</span>
+              <label className="account-photo-button"><Camera size={13} />{savingPhoto ? 'Saving…' : account.image ? 'Change photo' : 'Add photo'}<input type="file" accept="image/jpeg,image/png,image/webp" onChange={chooseProfilePhoto} disabled={savingPhoto} /></label>
+              {account.image && <button type="button" className="account-photo-remove" onClick={() => saveProfilePhoto(null)} disabled={savingPhoto} aria-label="Remove profile photo"><Trash2 size={13} /></button>}
             </div>
             <label className="account-field"><span>DISPLAY NAME</span><input value={name} onChange={(event) => setName(event.target.value)} maxLength={40} /></label>
             <label className="account-field"><span>USERNAME</span><input value={username} onChange={(event) => setUsername(event.target.value.replace(/^@/, ''))} maxLength={30} /></label>

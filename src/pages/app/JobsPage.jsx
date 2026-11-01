@@ -1,7 +1,8 @@
 import React, { useEffect, useState } from 'react'
-import { Bookmark, BriefcaseBusiness, ChevronDown, MapPin, Plus, Search, SlidersHorizontal, Users } from 'lucide-react'
+import { Bookmark, BriefcaseBusiness, Camera, ChevronDown, MapPin, Plus, Search, SlidersHorizontal, Users } from 'lucide-react'
 import AppPageHeader from '../../components/AppPageHeader.jsx'
 import { applyToJob, createJob, getJobApplications, getJobs, setJobSaved } from '../../utils/jobsApi.js'
+import { uploadImage } from '../../utils/mediaApi.js'
 
 const filters = ['All opportunities', 'Remote', 'Hybrid', 'On-site', 'Saved roles', 'My applications', 'My listings']
 const emptyDraft = {
@@ -12,6 +13,7 @@ const emptyDraft = {
   workplace_type: 'remote',
   summary: '',
   description: '',
+  company_image_url: null,
 }
 
 function collectionForFilter(filter) {
@@ -38,6 +40,8 @@ export default function JobsPage() {
   const [notice, setNotice] = useState('')
   const [showCreateForm, setShowCreateForm] = useState(false)
   const [draft, setDraft] = useState(emptyDraft)
+  const [companyImage, setCompanyImage] = useState(null)
+  const [companyImagePreview, setCompanyImagePreview] = useState('')
   const [creating, setCreating] = useState(false)
   const [savingJobIds, setSavingJobIds] = useState([])
   const [applyingJobId, setApplyingJobId] = useState('')
@@ -46,6 +50,16 @@ export default function JobsPage() {
   const [applicantJobId, setApplicantJobId] = useState('')
   const [applicantsByJob, setApplicantsByJob] = useState({})
   const [loadingApplicants, setLoadingApplicants] = useState(false)
+
+  useEffect(() => {
+    if (!companyImage) {
+      setCompanyImagePreview('')
+      return undefined
+    }
+    const preview = URL.createObjectURL(companyImage)
+    setCompanyImagePreview(preview)
+    return () => URL.revokeObjectURL(preview)
+  }, [companyImage])
 
   useEffect(() => {
     let active = true
@@ -129,8 +143,10 @@ export default function JobsPage() {
     event.preventDefault()
     setCreating(true)
     try {
-      const job = await createJob(draft)
+      const companyImageUrl = companyImage ? await uploadImage(companyImage) : draft.company_image_url
+      const job = await createJob({ ...draft, company_image_url: companyImageUrl })
       setDraft(emptyDraft)
+      setCompanyImage(null)
       setShowCreateForm(false)
       setFilter('My listings')
       setJobs((current) => [job, ...current.filter((item) => item.id !== job.id)])
@@ -187,12 +203,24 @@ export default function JobsPage() {
         <div className="jobs-create-fields">
           <label>Role title<input required maxLength={120} value={draft.title} onChange={(event) => setDraft({ ...draft, title: event.target.value })} /></label>
           <label>Company<input required maxLength={120} value={draft.company} onChange={(event) => setDraft({ ...draft, company: event.target.value })} /></label>
+          <label className="jobs-company-photo-picker"><Camera size={15} />{companyImage ? companyImage.name : 'Add company logo or photo'}<input type="file" accept="image/jpeg,image/png,image/webp" onChange={(event) => {
+            const file = event.target.files?.[0]
+            event.target.value = ''
+            if (!file) return
+            if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type)) {
+              setError('Choose a JPEG, PNG, or WebP company photo.')
+              return
+            }
+            setCompanyImage(file)
+            setError('')
+          }} disabled={creating} /></label>
           <label>Location<input required maxLength={120} value={draft.location} onChange={(event) => setDraft({ ...draft, location: event.target.value })} placeholder="City, country or Remote" /></label>
           <label>Employment type<select value={draft.employment_type} onChange={(event) => setDraft({ ...draft, employment_type: event.target.value })}><option>Full-time</option><option>Part-time</option><option>Contract</option><option>Internship</option><option>Temporary</option></select></label>
           <label>Work arrangement<select value={draft.workplace_type} onChange={(event) => setDraft({ ...draft, workplace_type: event.target.value })}><option value="remote">Remote</option><option value="hybrid">Hybrid</option><option value="onsite">On-site</option></select></label>
           <label className="jobs-create-wide">Short summary<input required maxLength={250} value={draft.summary} onChange={(event) => setDraft({ ...draft, summary: event.target.value })} /></label>
           <label className="jobs-create-wide">Role description<textarea required maxLength={5000} rows={5} value={draft.description} onChange={(event) => setDraft({ ...draft, description: event.target.value })} /></label>
         </div>
+        {companyImagePreview && <img className="jobs-company-photo-preview" src={companyImagePreview} alt="Selected company photo" />}
         <p className="jobs-form-note">Your listing will be visible to signed-in iConnect members. Review it carefully before publishing.</p>
         <button className="app-primary-button" type="submit" disabled={creating}>{creating ? 'Publishing…' : 'Publish role'}</button>
       </form>}
@@ -211,7 +239,7 @@ export default function JobsPage() {
       {!loading && search.trim().length !== 1 && jobs.length === 0 && <p className="jobs-empty-state">No roles found. Try another search or share an opportunity with the community.</p>}
       <div className="jobs-list">{jobs.map((job) => (
         <article className="job-card" key={job.id}>
-          <div className="job-company-mark">{job.company.slice(0, 2).toUpperCase()}</div>
+          <div className="job-company-mark">{job.companyImageUrl ? <img src={job.companyImageUrl} alt={`${job.company} logo`} /> : job.company.slice(0, 2).toUpperCase()}</div>
           <div className="job-info">
             <span className="job-match-label"><i /> {job.isOwner ? 'Your listing' : `Posted by @${job.poster.username}`}</span>
             <h3>{job.title}</h3>

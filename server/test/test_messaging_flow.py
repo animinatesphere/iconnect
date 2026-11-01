@@ -33,6 +33,30 @@ class FakeMessagingConnection:
 
     def execute(self, query, parameters=()):
         sql = re.sub(r"\s+", " ", query).strip().lower()
+        if sql.startswith("select exists") and "from user_blocks" in sql:
+            blocker_one, blocked_one, blocker_two, blocked_two = map(str, parameters)
+            is_blocked = (
+                (blocker_one, blocked_one) in self.state["blocks"]
+                or (blocker_two, blocked_two) in self.state["blocks"]
+            )
+            return FakeResult({"blocked": is_blocked})
+        if sql.startswith("select exists") and "from direct_conversations c" in sql:
+            conversation_id, viewer_id, _ = map(str, parameters)
+            conversation = self.state["conversations"].get(conversation_id)
+            is_blocked = False
+            if conversation and viewer_id in {
+                conversation["participant_one_id"],
+                conversation["participant_two_id"],
+            }:
+                participants = (
+                    conversation["participant_one_id"],
+                    conversation["participant_two_id"],
+                )
+                is_blocked = any(
+                    (blocker, blocked) in self.state["blocks"]
+                    for blocker, blocked in (participants, participants[::-1])
+                )
+            return FakeResult({"blocked": is_blocked})
         if sql.startswith("select u.id") and "from auth_sessions" in sql:
             session = self.state["sessions"].get(parameters[0])
             if not session or session["expires_at"] <= datetime.now(timezone.utc):
@@ -176,8 +200,17 @@ class FakeMessagingConnection:
                     "recipient_name": self.state["users"][other_id]["display_name"],
                     "recipient_username": self.state["users"][other_id]["username"],
                     "last_message": latest["body"] if latest else None,
-                    "last_message_at": latest["created_at"] if latest else None,
-                    "unread_count": sum(
+                        "last_image_url": latest.get("image_url") if latest else None,
+                        "recipient_avatar": self.state["users"][other_id].get("profile_image_url"),
+                        "last_message_at": latest["created_at"] if latest else None,
+                        "is_blocked_by_me": (viewer_id, other_id) in self.state["blocks"],
+                        "is_muted": self.state["preferences"].get(
+                            (conversation["id"], viewer_id), {}
+                        ).get("is_muted", False),
+                        "is_archived": self.state["preferences"].get(
+                            (conversation["id"], viewer_id), {}
+                        ).get("is_archived", False),
+                        "unread_count": sum(
                         item["conversation_id"] == conversation["id"]
                         and item["recipient_id"] == viewer_id
                         and item["read_at"] is None
@@ -186,6 +219,20 @@ class FakeMessagingConnection:
                 })
             rows.sort(key=lambda item: item["last_message_at"] or item["created_at"], reverse=True)
             return FakeResult(rows=rows)
+        if sql.startswith("select other.id as recipient_id") and "from direct_conversations c" in sql:
+            viewer_id, conversation_id, _, _ = map(str, parameters)
+            conversation = self.state["conversations"].get(conversation_id)
+            if not conversation or viewer_id not in {
+                conversation["participant_one_id"],
+                conversation["participant_two_id"],
+            }:
+                return FakeResult()
+            recipient_id = next(
+                participant
+                for participant in (conversation["participant_one_id"], conversation["participant_two_id"])
+                if participant != viewer_id
+            )
+            return FakeResult({"recipient_id": recipient_id})
         if sql.startswith("select id from direct_conversations"):
             conversation_id, viewer_id, _ = parameters
             conversation = self.state["conversations"].get(str(conversation_id))
@@ -195,6 +242,20 @@ class FakeMessagingConnection:
             }:
                 return FakeResult({"id": conversation["id"]})
             return FakeResult()
+        if sql.startswith("insert into user_blocks"):
+            self.state["blocks"].add(tuple(map(str, parameters)))
+            return FakeResult()
+        if sql.startswith("delete from user_blocks"):
+            self.state["blocks"].discard(tuple(map(str, parameters)))
+            return FakeResult()
+        if sql.startswith("insert into direct_conversation_preferences"):
+            conversation_id, user_id, is_muted, is_archived = parameters
+            preferences = {
+                "is_muted": is_muted,
+                "is_archived": is_archived,
+            }
+            self.state["preferences"][(str(conversation_id), str(user_id))] = preferences
+            return FakeResult(preferences.copy())
         if sql.startswith("update direct_messages"):
             conversation_id, recipient_id = map(str, parameters)
             now = datetime.now(timezone.utc)
@@ -210,7 +271,7 @@ class FakeMessagingConnection:
             return FakeResult(rows=updated)
         if sql.startswith("insert into direct_messages"):
             sender_id = str(parameters[0])
-            conversation_id = str(parameters[3])
+            conversation_id = str(parameters[4])
             conversation = self.state["conversations"].get(conversation_id)
             if not conversation or sender_id not in {
                 conversation["participant_one_id"],
@@ -230,7 +291,8 @@ class FakeMessagingConnection:
                 "conversation_id": conversation_id,
                 "sender_id": sender_id,
                 "recipient_id": recipient_id,
-                "body": parameters[2],
+                "body": parameters[2] or "Photo",
+                "image_url": parameters[3],
                 "created_at": datetime.now(timezone.utc),
                 "read_at": None,
             }
@@ -240,13 +302,21 @@ class FakeMessagingConnection:
             message = self.state["messages"].get(str(parameters[0]))
             return FakeResult(self._message_row(message) if message else None)
         if sql.startswith("select message.id") and "from (" in sql:
-            if "select id, body, created_at, read_at, sender_id from direct_messages" not in sql:
+            if "select id, body, image_url, created_at, read_at, sender_id from direct_messages" not in sql:
                 raise AssertionError("Message query must expose read_at from its subquery.")
-            conversation_id, limit = str(parameters[0]), parameters[1]
+            search_term = None
+            if "strpos(lower(body), lower(%s)) > 0" in sql:
+                conversation_id, search_term, limit = str(parameters[0]), parameters[1], parameters[2]
+            else:
+                conversation_id, limit = str(parameters[0]), parameters[1]
             messages = [
                 item
                 for item in self.state["messages"].values()
                 if item["conversation_id"] == conversation_id
+                and (
+                    search_term is None
+                    or search_term.casefold() in item["body"].casefold()
+                )
             ]
             messages.sort(key=lambda item: (item["created_at"], item["id"]), reverse=True)
             messages = messages[:limit]
@@ -259,6 +329,7 @@ class FakeMessagingConnection:
         return {
             "id": message["id"],
             "body": message["body"],
+            "image_url": message.get("image_url"),
             "created_at": message["created_at"],
             "read_at": message["read_at"],
             "sender_id": message["sender_id"],
@@ -275,6 +346,8 @@ class FakeMessagingPool:
             "sessions": {},
             "conversations": {},
             "messages": {},
+            "blocks": set(),
+            "preferences": {},
             "follows": set(),
         }
 
@@ -303,6 +376,7 @@ class MessagingFlowTests(unittest.TestCase):
                 "username": username,
                 "email": "{}@example.com".format(username),
                 "bio": "",
+                "profile_image_url": None,
                 "interests": [],
                 "profile_visible": True,
                 "discoverable": True,
@@ -415,6 +489,101 @@ class MessagingFlowTests(unittest.TestCase):
         forbidden_send = self.casey_client.post(message_url, json={"text": "Not a participant"})
         self.assertEqual(forbidden_read.status_code, 404)
         self.assertEqual(forbidden_send.status_code, 404)
+
+    def test_direct_messages_can_include_photo_attachments(self):
+        created = self.client.post("/api/messages/conversations", json={
+            "recipient_id": self.user_ids["bob"],
+        })
+        conversation_id = created.json()["conversationId"]
+        message_url = "/api/messages/conversations/{}/messages".format(conversation_id)
+        image_url = "/api/media/images/{}.webp".format("d" * 32)
+
+        self.assertEqual(self.client.post(message_url, json={}).status_code, 400)
+        sent = self.client.post(message_url, json={
+            "text": "",
+            "image_url": image_url,
+        })
+        self.assertEqual(sent.status_code, 201, sent.text)
+        self.assertEqual(sent.json()["message"]["text"], "")
+        self.assertEqual(sent.json()["message"]["imageUrl"], image_url)
+
+        received = self.bob_client.get(message_url)
+        self.assertEqual(received.status_code, 200)
+        self.assertEqual(received.json()["messages"][0]["imageUrl"], image_url)
+        self.assertEqual(
+            self.bob_client.get("/api/messages/conversations").json()["conversations"][0]["lastMessage"],
+            "Photo",
+        )
+
+    def test_chat_search_finds_message_history_without_marking_messages_read(self):
+        created = self.client.post("/api/messages/conversations", json={
+            "recipient_id": self.user_ids["bob"],
+        })
+        conversation_id = created.json()["conversationId"]
+        message_url = "/api/messages/conversations/{}/messages".format(conversation_id)
+        sent = self.client.post(message_url, json={"text": "Remember the green bicycle"})
+        self.assertEqual(sent.status_code, 201)
+
+        found = self.bob_client.get(message_url, params={"query": "GREEN BICYCLE"})
+        self.assertEqual(found.status_code, 200, found.text)
+        self.assertEqual([item["text"] for item in found.json()["messages"]], ["Remember the green bicycle"])
+        self.assertIsNone(found.json()["messages"][0]["readAt"])
+        self.assertEqual(
+            self.bob_client.get("/api/messages/conversations").json()["conversations"][0]["unreadCount"],
+            1,
+        )
+        self.assertEqual(
+            self.bob_client.get(message_url, params={"query": "not in chat"}).json()["messages"],
+            [],
+        )
+
+    def test_chat_preferences_and_contact_blocking(self):
+        created = self.client.post("/api/messages/conversations", json={
+            "recipient_id": self.user_ids["bob"],
+        })
+        conversation_id = created.json()["conversationId"]
+        conversation_url = "/api/messages/conversations/{}".format(conversation_id)
+        settings_url = conversation_url + "/preferences"
+        block_url = conversation_url + "/block"
+
+        saved = self.client.put(settings_url, json={
+            "is_muted": True,
+            "is_archived": True,
+        })
+        self.assertEqual(saved.status_code, 200, saved.text)
+        self.assertEqual(saved.json(), {"isMuted": True, "isArchived": True})
+        alice_conversation = self.client.get("/api/messages/conversations").json()["conversations"][0]
+        self.assertTrue(alice_conversation["isMuted"])
+        self.assertTrue(alice_conversation["isArchived"])
+        bob_conversation = self.bob_client.get("/api/messages/conversations").json()["conversations"][0]
+        self.assertFalse(bob_conversation["isMuted"])
+        self.assertFalse(bob_conversation["isArchived"])
+
+        blocked = self.client.put(block_url, json={"blocked": True})
+        self.assertEqual(blocked.status_code, 200, blocked.text)
+        self.assertTrue(blocked.json()["isBlockedByMe"])
+        self.assertTrue(
+            self.client.get("/api/messages/conversations").json()["conversations"][0]["isBlockedByMe"]
+        )
+        self.assertEqual(self.bob_client.post(conversation_url + "/messages", json={
+            "text": "A blocked message",
+        }).status_code, 403)
+        self.assertEqual(self.bob_client.post("/api/messages/conversations", json={
+            "recipient_id": self.user_ids["alice"],
+        }).status_code, 403)
+
+        unblocked = self.client.put(block_url, json={"blocked": False})
+        self.assertEqual(unblocked.status_code, 200, unblocked.text)
+        self.assertFalse(unblocked.json()["isBlockedByMe"])
+        self.assertEqual(self.bob_client.post(conversation_url + "/messages", json={
+            "text": "We can chat again",
+        }).status_code, 201)
+
+        self.assertEqual(self.casey_client.put(block_url, json={"blocked": True}).status_code, 404)
+        self.assertEqual(self.client.put(settings_url, json={
+            "is_muted": "yes",
+            "is_archived": False,
+        }).status_code, 400)
 
     def test_account_discovery_and_repeat_safe_follow_updates(self):
         anonymous = TestClient(self.client.app)

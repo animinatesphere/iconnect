@@ -11,7 +11,7 @@ export async function getPeople({ query = '', followingOnly = false } = {}) {
     name: person.name,
     username: person.username,
     handle: `@${person.username}`,
-    avatar: '',
+    avatar: person.avatar ?? '',
     note: person.bio || 'A member of the iConnect community.',
     interests: person.interests.join(' · ') || 'Finding my interests',
     followerCount: person.followerCount,

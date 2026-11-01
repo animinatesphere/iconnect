@@ -21,7 +21,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse
 from PIL import Image, ImageOps, UnidentifiedImageError
 from PIL.Image import DecompressionBombError
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from psycopg.rows import dict_row
 from psycopg_pool import ConnectionPool
 
@@ -164,6 +164,17 @@ class ProfileInput(StrictModel):
         return cleaned
 
 
+class ProfilePhotoInput(StrictModel):
+    image_url: Optional[str] = Field(default=None, max_length=2048)
+
+    @field_validator("image_url")
+    @classmethod
+    def valid_image_url(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        return validate_image_reference(value)
+
+
 class SocialPostInput(StrictModel):
     text: str = Field(min_length=1, max_length=500)
     image_urls: List[str] = Field(default_factory=list, max_length=MAX_IMAGES_PER_RECORD)
@@ -274,21 +285,25 @@ def validate_image_urls(values: List[str]) -> List[str]:
         raise ValueError("Choose no more than five images.")
     cleaned = []
     for value in values:
-        value = value.strip()
-        if not value or len(value) > 2048:
-            raise ValueError("Image URL is invalid.")
-        if value.startswith("/api/media/images/"):
-            filename = value.rsplit("/", 1)[-1]
-            if not re.fullmatch(r"[a-f0-9]{32}\.webp", filename):
-                raise ValueError("Uploaded image URL is invalid.")
-        else:
-            parsed = urlsplit(value)
-            if parsed.scheme != "https" or not parsed.netloc:
-                raise ValueError("Images must use an uploaded image or https URL.")
-        cleaned.append(value)
+        cleaned.append(validate_image_reference(value))
     if len(set(cleaned)) != len(cleaned):
         raise ValueError("Image URLs must be unique.")
     return cleaned
+
+
+def validate_image_reference(value: str) -> str:
+    value = value.strip()
+    if not value or len(value) > 2048:
+        raise ValueError("Image URL is invalid.")
+    if value.startswith("/api/media/images/"):
+        filename = value.rsplit("/", 1)[-1]
+        if not re.fullmatch(r"[a-f0-9]{32}\.webp", filename):
+            raise ValueError("Uploaded image URL is invalid.")
+    else:
+        parsed = urlsplit(value)
+        if parsed.scheme != "https" or not parsed.netloc:
+            raise ValueError("Images must use an uploaded image or https URL.")
+    return value
 
 
 class LocalMarketplaceListingInput(StrictModel):
@@ -313,16 +328,20 @@ class LocalMarketplaceListingInput(StrictModel):
     def valid_image_url(cls, value: Optional[str]) -> Optional[str]:
         if value is None or not value.strip():
             return None
-        value = value.strip()
-        parsed = urlsplit(value)
-        if parsed.scheme != "https" or not parsed.netloc:
-            raise ValueError("Listing images must use an https URL.")
-        return value
+        return validate_image_reference(value)
 
 
 class CommunityInput(StrictModel):
     name: str = Field(min_length=1, max_length=80)
     description: str = Field(min_length=1, max_length=500)
+    image_url: Optional[str] = Field(default=None, max_length=2048)
+
+    @field_validator("image_url")
+    @classmethod
+    def valid_image_url(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        return validate_image_reference(value)
 
     @field_validator("name", "description")
     @classmethod
@@ -353,16 +372,36 @@ class DirectConversationInput(StrictModel):
             raise ValueError("Recipient id is invalid.") from error
 
 
+class DirectConversationBlockInput(StrictModel):
+    blocked: bool
+
+
+class DirectConversationPreferencesInput(StrictModel):
+    is_muted: bool
+    is_archived: bool
+
+
 class DirectMessageInput(StrictModel):
-    text: str = Field(min_length=1, max_length=2000)
+    text: Optional[str] = Field(default=None, max_length=2000)
+    image_url: Optional[str] = Field(default=None, max_length=2048)
 
     @field_validator("text")
     @classmethod
-    def clean_text(cls, value: str) -> str:
-        value = value.strip()
-        if not value:
-            raise ValueError("Message text is required.")
-        return value
+    def clean_text(cls, value: Optional[str]) -> Optional[str]:
+        return value.strip() if value and value.strip() else None
+
+    @field_validator("image_url")
+    @classmethod
+    def valid_image_url(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        return validate_image_reference(value)
+
+    @model_validator(mode="after")
+    def require_message_content(self) -> "DirectMessageInput":
+        if not self.text and not self.image_url:
+            raise ValueError("Add a message or photo.")
+        return self
 
 
 class UserFollowInput(StrictModel):
@@ -382,6 +421,14 @@ class JobListingInput(StrictModel):
     workplace_type: Literal["remote", "hybrid", "onsite"]
     summary: str = Field(min_length=1, max_length=250)
     description: str = Field(min_length=1, max_length=5000)
+    company_image_url: Optional[str] = Field(default=None, max_length=2048)
+
+    @field_validator("company_image_url")
+    @classmethod
+    def valid_company_image_url(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        return validate_image_reference(value)
 
     @field_validator("title", "company", "location", "employment_type", "summary", "description")
     @classmethod
@@ -410,6 +457,7 @@ def public_user(user: Dict[str, Any]) -> Dict[str, Any]:
         "id": str(user["id"]),
         "name": user["display_name"],
         "username": user["username"],
+        "image": user.get("profile_image_url"),
         "email": user["email"],
         "bio": user["bio"],
         "interests": user["interests"],
@@ -769,6 +817,7 @@ def create_app(
         return connection.execute(
             """SELECT p.id, p.body, p.image_urls, p.created_at,
                       u.id AS author_id, u.display_name, u.username,
+                      u.profile_image_url AS author_image_url,
                       (SELECT count(*) FROM social_post_likes l WHERE l.post_id = p.id) AS like_count,
                       (SELECT count(*) FROM social_post_comments c WHERE c.post_id = p.id) AS comment_count,
                       EXISTS (
@@ -796,6 +845,7 @@ def create_app(
                 "id": str(row["author_id"]),
                 "name": row["display_name"],
                 "username": row["username"],
+                "image": row.get("author_image_url"),
             },
             "likeCount": int(row["like_count"]),
             "commentCount": int(row["comment_count"]),
@@ -817,6 +867,7 @@ def create_app(
                 "id": str(row["author_id"]),
                 "name": row["display_name"],
                 "username": row["username"],
+                "image": row.get("author_image_url"),
             },
         }
 
@@ -864,11 +915,12 @@ def create_app(
             "memberCount": int(row["member_count"]),
             "joinedByMe": bool(row["joined_by_me"]),
             "createdAt": row["created_at"].isoformat(),
+            "imageUrl": row.get("image_url"),
         }
 
     def community_record(connection: Any, community_id: UUID, viewer_id: Any) -> Optional[Dict[str, Any]]:
         return connection.execute(
-            """SELECT c.id, c.name, c.description, c.created_at,
+            """SELECT c.id, c.name, c.description, c.image_url, c.created_at,
                       (SELECT count(*) FROM community_memberships members
                        WHERE members.community_id = c.id) AS member_count,
                       EXISTS (
@@ -883,7 +935,8 @@ def create_app(
     def public_direct_message(row: Dict[str, Any], viewer_id: Any) -> Dict[str, Any]:
         return {
             "id": str(row["id"]),
-            "text": row["body"],
+            "text": "" if row.get("image_url") and row["body"] == "Photo" else row["body"],
+            "imageUrl": row.get("image_url"),
             "createdAt": row["created_at"].isoformat(),
             "readAt": row["read_at"].isoformat() if row.get("read_at") else None,
             "isMine": str(row["sender_id"]) == str(viewer_id),
@@ -901,6 +954,7 @@ def create_app(
             "username": row["username"],
             "bio": row["bio"],
             "interests": row["interests"],
+            "avatar": row.get("profile_image_url"),
             "followerCount": int(row["follower_count"]),
             "followingCount": int(row["following_count"]),
             "followedByMe": bool(row["followed_by_me"]),
@@ -911,6 +965,7 @@ def create_app(
             "id": str(row["id"]),
             "title": row["title"],
             "company": row["company"],
+            "companyImageUrl": row.get("company_image_url"),
             "location": row["location"],
             "employmentType": row["employment_type"],
             "workplaceType": row["workplace_type"],
@@ -992,6 +1047,7 @@ def create_app(
         with database.connection() as connection:
             user = connection.execute(
                 """SELECT u.id, u.display_name, u.username, u.email, u.bio, u.interests,
+                       u.profile_image_url,
                        u.email_verified_at, u.profile_visible, u.discoverable, u.suspended_at
                    FROM auth_sessions s
                    JOIN users u ON u.id = s.user_id
@@ -1240,6 +1296,7 @@ def create_app(
         with database.connection() as connection:
             user = connection.execute(
                 """SELECT id, display_name, username, email, bio, interests,
+                           profile_image_url,
                           profile_visible, discoverable,
                           password_hash, email_verified_at, suspended_at
                    FROM users WHERE email = %s""",
@@ -1263,6 +1320,7 @@ def create_app(
         with database.connection() as connection:
             user = connection.execute(
                 """SELECT id, display_name, username, email, bio, interests,
+                           profile_image_url,
                           profile_visible, discoverable,
                           password_hash, email_verified_at, suspended_at
                    FROM users WHERE email = %s""",
@@ -1340,8 +1398,28 @@ def create_app(
                    SET display_name = %s, username = %s, bio = %s, interests = %s, updated_at = now()
                    WHERE id = %s AND email_verified_at IS NOT NULL
                    RETURNING id, display_name, username, email, bio, interests,
+                             profile_image_url,
                              profile_visible, discoverable""",
                 (input.name, input.username, input.bio, input.interests, user["id"]),
+            ).fetchone()
+        if not updated:
+            raise ApiError(401, "not_authenticated", "Sign in to continue.")
+        return {"user": public_user(updated)}
+
+    @app.put("/api/auth/profile/photo")
+    def update_profile_photo(
+        input: ProfilePhotoInput,
+        request: Request,
+    ) -> Dict[str, Any]:
+        user = require_user(request)
+        with database.connection() as connection:
+            updated = connection.execute(
+                """UPDATE users
+                   SET profile_image_url = %s, updated_at = now()
+                   WHERE id = %s AND email_verified_at IS NOT NULL
+                   RETURNING id, display_name, username, email, bio, interests,
+                             profile_image_url, profile_visible, discoverable""",
+                (input.image_url, user["id"]),
             ).fetchone()
         if not updated:
             raise ApiError(401, "not_authenticated", "Sign in to continue.")
@@ -2122,6 +2200,7 @@ def create_app(
             rows = connection.execute(
                 """SELECT p.id, p.body, p.image_urls, p.created_at,
                           u.id AS author_id, u.display_name, u.username,
+                          u.profile_image_url AS author_image_url,
                           (SELECT count(*) FROM social_post_likes l WHERE l.post_id = p.id) AS like_count,
                           (SELECT count(*) FROM social_post_comments c WHERE c.post_id = p.id) AS comment_count,
                           EXISTS (
@@ -2324,7 +2403,8 @@ def create_app(
                 raise ApiError(404, "post_not_found", "That post could not be found.")
             rows = connection.execute(
                 """SELECT c.id, c.body, c.created_at, c.parent_comment_id,
-                          u.id AS author_id, u.display_name, u.username
+                          u.id AS author_id, u.display_name, u.username,
+                          u.profile_image_url AS author_image_url
                    FROM social_post_comments c
                    JOIN users u ON u.id = c.user_id
                    WHERE c.post_id = %s
@@ -2368,7 +2448,8 @@ def create_app(
                 raise ApiError(404, "post_not_found", "That post could not be found.")
             row = connection.execute(
                 """SELECT c.id, c.body, c.created_at, c.parent_comment_id,
-                          u.id AS author_id, u.display_name, u.username
+                          u.id AS author_id, u.display_name, u.username,
+                          u.profile_image_url AS author_image_url
                    FROM social_post_comments c
                    JOIN users u ON u.id = c.user_id
                    WHERE c.id = %s""",
@@ -2635,7 +2716,7 @@ def create_app(
         pattern = escaped_query + "%"
         with database.connection() as connection:
             rows = connection.execute(
-                """SELECT id, display_name, username
+                """SELECT id, display_name, username, profile_image_url
                    FROM users
                    WHERE email_verified_at IS NOT NULL
                      AND profile_visible AND discoverable
@@ -2654,6 +2735,7 @@ def create_app(
                     "id": str(row["id"]),
                     "name": row["display_name"],
                     "username": row["username"],
+                    "avatar": row.get("profile_image_url"),
                 }
                 for row in rows
             ],
@@ -2678,7 +2760,7 @@ def create_app(
         pattern = "%" + escaped_query + "%" if escaped_query else None
         with database.connection() as connection:
             rows = connection.execute(
-                """SELECT c.id, c.name, c.description, c.created_at,
+                """SELECT c.id, c.name, c.description, c.image_url, c.created_at,
                           (SELECT count(*) FROM community_memberships members
                            WHERE members.community_id = c.id) AS member_count,
                           EXISTS (
@@ -2706,10 +2788,10 @@ def create_app(
     ) -> Dict[str, Any]:
         with database.connection() as connection:
             inserted = connection.execute(
-                """INSERT INTO communities (owner_id, name, description)
-                   VALUES (%s, %s, %s)
+                """INSERT INTO communities (owner_id, name, description, image_url)
+                   VALUES (%s, %s, %s, %s)
                    RETURNING id""",
-                (user["id"], input.name, input.description),
+                (user["id"], input.name, input.description, input.image_url),
             ).fetchone()
             if not inserted:
                 raise ApiError(500, "internal_error", "The community could not be created.")
@@ -2778,7 +2860,7 @@ def create_app(
         with database.connection() as connection:
             rows = connection.execute(
                 """SELECT person.id, person.display_name, person.username, person.bio,
-                          person.interests,
+                          person.interests, person.profile_image_url,
                           (SELECT count(*)
                            FROM user_follows followers
                            WHERE followers.following_id = person.id) AS follower_count,
@@ -2884,7 +2966,7 @@ def create_app(
 
     def job_record(connection: Any, job_id: UUID, viewer_id: Any) -> Optional[Dict[str, Any]]:
         return connection.execute(
-            """SELECT j.id, j.title, j.company, j.location, j.employment_type,
+            """SELECT j.id, j.title, j.company, j.company_image_url, j.location, j.employment_type,
                       j.workplace_type, j.summary, j.description, j.created_at,
                       author.display_name, author.username,
                       EXISTS (
@@ -2972,7 +3054,7 @@ def create_app(
 
         with database.connection() as connection:
             rows = connection.execute(
-                """SELECT j.id, j.title, j.company, j.location, j.employment_type,
+                """SELECT j.id, j.title, j.company, j.company_image_url, j.location, j.employment_type,
                           j.workplace_type, j.summary, j.description, j.created_at,
                           author.display_name, author.username,
                           EXISTS (
@@ -3013,8 +3095,8 @@ def create_app(
             inserted = connection.execute(
                 """INSERT INTO job_listings
                        (user_id, title, company, location, employment_type,
-                        workplace_type, summary, description)
-                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                        workplace_type, summary, description, company_image_url)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
                    RETURNING id""",
                 (
                     user["id"],
@@ -3025,6 +3107,7 @@ def create_app(
                     input.workplace_type,
                     input.summary,
                     input.description,
+                    input.company_image_url,
                 ),
             ).fetchone()
             if not inserted:
@@ -3160,8 +3243,18 @@ def create_app(
                           other.id AS recipient_id,
                           other.display_name AS recipient_name,
                           other.username AS recipient_username,
+                          other.profile_image_url AS recipient_avatar,
                           latest.body AS last_message,
+                          latest.image_url AS last_image_url,
                           latest.created_at AS last_message_at,
+                          EXISTS (
+                              SELECT 1
+                              FROM user_blocks block
+                              WHERE block.blocker_id = %s
+                                AND block.blocked_id = other.id
+                          ) AS is_blocked_by_me,
+                          COALESCE(preferences.is_muted, false) AS is_muted,
+                          COALESCE(preferences.is_archived, false) AS is_archived,
                           (SELECT count(*)
                            FROM direct_messages unread
                            WHERE unread.conversation_id = c.id
@@ -3174,15 +3267,18 @@ def create_app(
                          ELSE c.participant_one_id
                      END
                    LEFT JOIN LATERAL (
-                       SELECT body, created_at
+                       SELECT body, image_url, created_at
                        FROM direct_messages
                        WHERE conversation_id = c.id
                        ORDER BY created_at DESC, id DESC
                        LIMIT 1
                    ) latest ON TRUE
+                   LEFT JOIN direct_conversation_preferences preferences
+                     ON preferences.conversation_id = c.id
+                    AND preferences.user_id = %s
                    WHERE c.participant_one_id = %s OR c.participant_two_id = %s
                    ORDER BY COALESCE(latest.created_at, c.created_at) DESC""",
-                (user["id"], user["id"], user["id"], user["id"]),
+                (user["id"], user["id"], user["id"], user["id"], user["id"], user["id"]),
             ).fetchall()
         return {
             "conversations": [
@@ -3192,12 +3288,16 @@ def create_app(
                         "id": str(row["recipient_id"]),
                         "name": row["recipient_name"],
                         "username": row["recipient_username"],
+                        "avatar": row.get("recipient_avatar"),
                     },
-                    "lastMessage": row["last_message"] or "",
+                    "lastMessage": row["last_message"] or ("Photo" if row.get("last_image_url") else ""),
                     "lastMessageAt": (
                         row["last_message_at"] or row["created_at"]
                     ).isoformat(),
                     "unreadCount": int(row["unread_count"]),
+                    "isBlockedByMe": bool(row["is_blocked_by_me"]),
+                    "isMuted": bool(row["is_muted"]),
+                    "isArchived": bool(row["is_archived"]),
                 }
                 for row in rows
             ],
@@ -3225,6 +3325,17 @@ def create_app(
             ).fetchone()
             if not recipient:
                 raise ApiError(404, "user_not_found", "That account could not be found.")
+            block = connection.execute(
+                """SELECT EXISTS (
+                       SELECT 1
+                       FROM user_blocks
+                       WHERE (blocker_id = %s AND blocked_id = %s)
+                          OR (blocker_id = %s AND blocked_id = %s)
+                   ) AS blocked""",
+                (user["id"], input.recipient_id, input.recipient_id, user["id"]),
+            ).fetchone()
+            if block and block["blocked"]:
+                raise ApiError(403, "user_blocked", "This conversation is unavailable.")
             conversation = connection.execute(
                 """INSERT INTO direct_conversations (participant_one_id, participant_two_id)
                    VALUES (LEAST(%s, %s), GREATEST(%s, %s))
@@ -3237,11 +3348,47 @@ def create_app(
             raise ApiError(500, "internal_error", "The conversation could not be opened.")
         return {"conversationId": str(conversation["id"])}
 
-    @app.get("/api/messages/conversations/{conversation_id}/messages")
-    def list_direct_messages(
+    @app.put("/api/messages/conversations/{conversation_id}/block")
+    def update_direct_conversation_block(
         conversation_id: UUID,
+        input: DirectConversationBlockInput,
         request: Request,
-        limit: int = Query(default=100, ge=1, le=200),
+    ) -> Dict[str, Any]:
+        user = require_user(request)
+        with database.connection() as connection:
+            conversation = connection.execute(
+                """SELECT other.id AS recipient_id
+                   FROM direct_conversations c
+                   JOIN users other
+                     ON other.id = CASE
+                         WHEN c.participant_one_id = %s THEN c.participant_two_id
+                         ELSE c.participant_one_id
+                     END
+                   WHERE c.id = %s
+                     AND (c.participant_one_id = %s OR c.participant_two_id = %s)""",
+                (user["id"], conversation_id, user["id"], user["id"]),
+            ).fetchone()
+            if not conversation:
+                raise ApiError(404, "conversation_not_found", "That conversation could not be found.")
+            if input.blocked:
+                connection.execute(
+                    """INSERT INTO user_blocks (blocker_id, blocked_id)
+                       VALUES (%s, %s)
+                       ON CONFLICT (blocker_id, blocked_id) DO NOTHING""",
+                    (user["id"], conversation["recipient_id"]),
+                )
+            else:
+                connection.execute(
+                    "DELETE FROM user_blocks WHERE blocker_id = %s AND blocked_id = %s",
+                    (user["id"], conversation["recipient_id"]),
+                )
+        return {"isBlockedByMe": input.blocked}
+
+    @app.put("/api/messages/conversations/{conversation_id}/preferences")
+    def update_direct_conversation_preferences(
+        conversation_id: UUID,
+        input: DirectConversationPreferencesInput,
+        request: Request,
     ) -> Dict[str, Any]:
         user = require_user(request)
         with database.connection() as connection:
@@ -3254,30 +3401,85 @@ def create_app(
             ).fetchone()
             if not conversation:
                 raise ApiError(404, "conversation_not_found", "That conversation could not be found.")
-            read_messages = connection.execute(
-                """UPDATE direct_messages
-                   SET read_at = now()
-                   WHERE conversation_id = %s
-                     AND recipient_id = %s
-                     AND read_at IS NULL
-                   RETURNING sender_id""",
-                (conversation_id, user["id"]),
-            ).fetchall()
-            rows = connection.execute(
-                """SELECT message.id, message.body, message.created_at, message.read_at,
-                          message.sender_id,
-                          sender.display_name, sender.username
-                   FROM (
-                       SELECT id, body, created_at, read_at, sender_id
-                       FROM direct_messages
+            preferences = connection.execute(
+                """INSERT INTO direct_conversation_preferences
+                       (conversation_id, user_id, is_muted, is_archived)
+                   VALUES (%s, %s, %s, %s)
+                   ON CONFLICT (conversation_id, user_id)
+                   DO UPDATE SET is_muted = EXCLUDED.is_muted,
+                                 is_archived = EXCLUDED.is_archived,
+                                 updated_at = now()
+                   RETURNING is_muted, is_archived""",
+                (conversation_id, user["id"], input.is_muted, input.is_archived),
+            ).fetchone()
+        if not preferences:
+            raise ApiError(500, "internal_error", "Chat settings could not be saved.")
+        return {
+            "isMuted": bool(preferences["is_muted"]),
+            "isArchived": bool(preferences["is_archived"]),
+        }
+
+    @app.get("/api/messages/conversations/{conversation_id}/messages")
+    def list_direct_messages(
+        conversation_id: UUID,
+        request: Request,
+        limit: int = Query(default=100, ge=1, le=200),
+        query: Optional[str] = Query(default=None, min_length=1, max_length=200),
+    ) -> Dict[str, Any]:
+        user = require_user(request)
+        with database.connection() as connection:
+            conversation = connection.execute(
+                """SELECT id
+                   FROM direct_conversations
+                   WHERE id = %s
+                     AND (participant_one_id = %s OR participant_two_id = %s)""",
+                (conversation_id, user["id"], user["id"]),
+            ).fetchone()
+            if not conversation:
+                raise ApiError(404, "conversation_not_found", "That conversation could not be found.")
+            if query:
+                read_messages = []
+                rows = connection.execute(
+                    """SELECT message.id, message.body, message.image_url, message.created_at, message.read_at,
+                              message.sender_id,
+                              sender.display_name, sender.username
+                       FROM (
+                           SELECT id, body, image_url, created_at, read_at, sender_id
+                           FROM direct_messages
+                           WHERE conversation_id = %s
+                             AND strpos(lower(body), lower(%s)) > 0
+                           ORDER BY created_at DESC, id DESC
+                           LIMIT %s
+                       ) message
+                       JOIN users sender ON sender.id = message.sender_id
+                       ORDER BY message.created_at ASC, message.id ASC""",
+                    (conversation_id, query.strip(), limit),
+                ).fetchall()
+            else:
+                read_messages = connection.execute(
+                    """UPDATE direct_messages
+                       SET read_at = now()
                        WHERE conversation_id = %s
-                       ORDER BY created_at DESC, id DESC
-                       LIMIT %s
-                   ) message
-                   JOIN users sender ON sender.id = message.sender_id
-                   ORDER BY message.created_at ASC, message.id ASC""",
-                (conversation_id, limit),
-            ).fetchall()
+                         AND recipient_id = %s
+                         AND read_at IS NULL
+                       RETURNING sender_id""",
+                    (conversation_id, user["id"]),
+                ).fetchall()
+                rows = connection.execute(
+                    """SELECT message.id, message.body, message.image_url, message.created_at, message.read_at,
+                              message.sender_id,
+                              sender.display_name, sender.username
+                       FROM (
+                           SELECT id, body, image_url, created_at, read_at, sender_id
+                           FROM direct_messages
+                           WHERE conversation_id = %s
+                           ORDER BY created_at DESC, id DESC
+                           LIMIT %s
+                       ) message
+                       JOIN users sender ON sender.id = message.sender_id
+                       ORDER BY message.created_at ASC, message.id ASC""",
+                    (conversation_id, limit),
+                ).fetchall()
         sender_ids = list({row["sender_id"] for row in read_messages})
         if sender_ids:
             publish_realtime(
@@ -3303,15 +3505,29 @@ def create_app(
     ) -> Dict[str, Any]:
         user = require_user(request)
         with database.connection() as connection:
+            block = connection.execute(
+                """SELECT EXISTS (
+                       SELECT 1
+                       FROM direct_conversations c
+                       JOIN user_blocks b
+                         ON (b.blocker_id = c.participant_one_id AND b.blocked_id = c.participant_two_id)
+                         OR (b.blocker_id = c.participant_two_id AND b.blocked_id = c.participant_one_id)
+                       WHERE c.id = %s
+                         AND (c.participant_one_id = %s OR c.participant_two_id = %s)
+                   ) AS blocked""",
+                (conversation_id, user["id"], user["id"]),
+            ).fetchone()
+            if block and block["blocked"]:
+                raise ApiError(403, "user_blocked", "This conversation is unavailable.")
             inserted = connection.execute(
                 """INSERT INTO direct_messages
-                       (conversation_id, sender_id, recipient_id, body)
+                       (conversation_id, sender_id, recipient_id, body, image_url)
                    SELECT c.id, %s,
                           CASE
                               WHEN c.participant_one_id = %s THEN c.participant_two_id
                               ELSE c.participant_one_id
                           END,
-                          %s
+                          COALESCE(%s, 'Photo'), %s
                    FROM direct_conversations c
                    WHERE c.id = %s
                      AND (c.participant_one_id = %s OR c.participant_two_id = %s)
@@ -3320,6 +3536,7 @@ def create_app(
                     user["id"],
                     user["id"],
                     input.text,
+                    input.image_url,
                     conversation_id,
                     user["id"],
                     user["id"],
@@ -3328,7 +3545,7 @@ def create_app(
             if not inserted:
                 raise ApiError(404, "conversation_not_found", "That conversation could not be found.")
             row = connection.execute(
-                """SELECT message.id, message.body, message.created_at, message.read_at,
+                """SELECT message.id, message.body, message.image_url, message.created_at, message.read_at,
                           message.sender_id, message.recipient_id,
                           sender.display_name, sender.username
                    FROM direct_messages message

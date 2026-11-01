@@ -35,7 +35,9 @@ All social routes require a verified, signed-in account and use the existing sec
 - `GET /api/social/posts/{post_id}/comments?limit=100` lists comments (1–200 per request).
 - `POST /api/social/posts/{post_id}/comments` creates a comment (`{"text":"..."}`, up to 280 characters); an optional `parent_comment_id` replies to a top-level comment on that post. Replies are limited to one level.
 
-`POST /api/media/images` uploads one authenticated JPEG, PNG, or WebP image (maximum 4 MB and 20 megapixels); uploaded files are validated, resized, and stored as WebP. Images are served to signed-in members at the returned URL. The Create page lets members add up to five photos to a post. Post creation, likes, comments, bookmarks, and image uploads are rate-limited per client IP. `GET /api/social/posts?following_only=true` limits results to authors the current user follows. Stories and video uploads are not implemented.
+`POST /api/media/images` accepts one authenticated JPEG, PNG, or WebP image (maximum 4 MB and 20 megapixels); uploaded files are validated, resized, and stored as WebP. The web app automatically optimizes larger selected photos before upload. Image files are stored on the API host in `ICONNECT_MEDIA_DIR` (default: `./uploads` relative to the repository root), not in PostgreSQL; production should point this variable at a persistent VPS directory and make it writable by the API service account. Images are served to signed-in members at the returned URL. Upload controls are available for posts, profile photos, private-message attachments, iBuy products, local listings, community covers, and job/company photos. Post creation, likes, comments, bookmarks, and image uploads are rate-limited per client IP. `GET /api/social/posts?following_only=true` limits results to authors the current user follows. Stories and video uploads are not implemented.
+
+- `PUT /api/auth/profile/photo` updates or removes the signed-in member's photo (`{"image_url":"/api/media/images/<id>.webp"}` or `{"image_url":null}`).
 
 ## iBuy marketplace API
 
@@ -52,7 +54,7 @@ Listings and image galleries are stored in PostgreSQL, with uploaded image files
 All local marketplace routes require a verified account:
 
 - `GET /api/local-marketplace/listings?category=Homes&query=apartment&location=Lagos&limit=50` lists published member listings. `category` can be `Homes`, `Services`, or `Farm`; each filter is optional and `limit` is 1–100.
-- `POST /api/local-marketplace/listings` publishes a listing with `category`, `title`, `price`, `location`, `detail`, `description`, and an optional HTTPS `image_url`.
+- `POST /api/local-marketplace/listings` publishes a listing with `category`, `title`, `price`, `location`, `detail`, `description`, and an optional HTTPS or uploaded-image `image_url`.
 - `GET /api/local-marketplace/listings/{listing_id}` returns a published listing and the provider’s public name and username.
 
 Listings are stored in PostgreSQL. Members can message a provider through private messaging. Payments, bookings, external social account connections, and delivery are not implemented; members must confirm those details directly.
@@ -74,7 +76,7 @@ The same privacy preferences also control whether an account appears in message 
 All community routes require a verified account:
 
 - `GET /api/communities?query=makers&limit=50` lists communities, the current membership state, and member count without exposing members’ private account details. Search is optional and `limit` is 1–100.
-- `POST /api/communities` creates a community with `name` and `description`; its creator is automatically joined.
+- `POST /api/communities` creates a community with `name`, `description`, and an optional uploaded `image_url`; its creator is automatically joined.
 - `PUT /api/communities/{community_id}/membership` joins or leaves a community with `{"joined":true|false}`. Repeating the same request is safe.
 
 Communities and memberships are stored in PostgreSQL.
@@ -84,7 +86,7 @@ Communities and memberships are stored in PostgreSQL.
 All job routes require a verified, signed-in account:
 
 - `GET /api/jobs?query=design&location=remote&workplace_type=remote&view=all` searches listings. `view` can be `all`, `saved`, `applied`, or `mine`; results include the signed-in user's save/application state.
-- `POST /api/jobs` publishes a listing with title, company, location, employment type, workplace type (`remote`, `hybrid`, or `onsite`), summary, and description.
+- `POST /api/jobs` publishes a listing with title, company, location, employment type, workplace type (`remote`, `hybrid`, or `onsite`), summary, description, and optional uploaded `company_image_url`.
 - `PUT /api/jobs/{job_id}/save` sets saved state (`{"saved":true|false}`); repeating the same request is safe.
 - `POST /api/jobs/{job_id}/applications` submits an optional cover letter. Duplicate applications do not create duplicate records, and listing owners cannot apply to their own roles.
 - `GET /api/jobs/{job_id}/applications` lists applicants only for the owner of that listing. Applicant email addresses are not returned.
@@ -98,10 +100,12 @@ All messaging routes require a verified account and return only participants' pu
 - `GET /api/messages/users?query=bo` searches verified accounts by name or username prefix.
 - `GET /api/messages/conversations` lists the signed-in user's conversations and unread counts.
 - `POST /api/messages/conversations` opens or creates a private one-to-one conversation (`{"recipient_id":"<user-id>"}`).
-- `GET /api/messages/conversations/{conversation_id}/messages?limit=100` loads messages and marks incoming messages as read.
-- `POST /api/messages/conversations/{conversation_id}/messages` sends a text message (`{"text":"..."}`, up to 2,000 characters).
+- `GET /api/messages/conversations/{conversation_id}/messages?limit=100` loads recent messages and marks incoming messages as read; add `query=<text>` to search the conversation without changing read receipts.
+- `POST /api/messages/conversations/{conversation_id}/messages` sends text (`{"text":"..."}`, up to 2,000 characters), one uploaded photo (`{"image_url":"/api/media/images/<id>.webp"}`), or both.
+- `PUT /api/messages/conversations/{conversation_id}/block` blocks or unblocks the other participant (`{"blocked":true}`); either participant's block prevents both people from sending.
+- `PUT /api/messages/conversations/{conversation_id}/preferences` saves that member's mute and archive settings (`{"is_muted":true,"is_archived":false}`).
 
-Message responses include `readAt`; senders can show a read receipt after the recipient opens that conversation. Message sending is rate-limited per client IP. Every read and write verifies conversation membership. Attachments, message deletion, voice/video calls, and push delivery are not implemented.
+Message responses include `readAt`; senders can show a read receipt after the recipient opens that conversation. Message sending is rate-limited per client IP. Every read and write verifies conversation membership. Chat search queries stored message history. Mute suppresses the in-app incoming sound, while archive hides the conversation from the default and unread inbox views. File attachments other than photos, message deletion, voice/video calls, and push delivery are not implemented.
 
 ## Live updates
 
