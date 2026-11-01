@@ -198,6 +198,7 @@ class FakeMessagingConnection:
         if sql.startswith("update direct_messages"):
             conversation_id, recipient_id = map(str, parameters)
             now = datetime.now(timezone.utc)
+            updated = []
             for message in self.state["messages"].values():
                 if (
                     message["conversation_id"] == conversation_id
@@ -205,7 +206,8 @@ class FakeMessagingConnection:
                     and message["read_at"] is None
                 ):
                     message["read_at"] = now
-            return FakeResult()
+                    updated.append({"sender_id": message["sender_id"]})
+            return FakeResult(rows=updated)
         if sql.startswith("insert into direct_messages"):
             sender_id = str(parameters[0])
             conversation_id = str(parameters[3])
@@ -260,6 +262,7 @@ class FakeMessagingConnection:
             "created_at": message["created_at"],
             "read_at": message["read_at"],
             "sender_id": message["sender_id"],
+            "recipient_id": message["recipient_id"],
             "display_name": sender["display_name"],
             "username": sender["username"],
         }
@@ -320,9 +323,10 @@ class MessagingFlowTests(unittest.TestCase):
             trust_proxy=0,
             admin_emails=frozenset(),
         )
-        self.client = TestClient(create_app(settings=settings, pool=self.pool))
-        self.bob_client = TestClient(create_app(settings=settings, pool=self.pool))
-        self.casey_client = TestClient(create_app(settings=settings, pool=self.pool))
+        app = create_app(settings=settings, pool=self.pool)
+        self.client = TestClient(app)
+        self.bob_client = TestClient(app)
+        self.casey_client = TestClient(app)
         for key, client in (
             ("alice", self.client),
             ("bob", self.bob_client),
@@ -370,28 +374,42 @@ class MessagingFlowTests(unittest.TestCase):
 
         message_url = "/api/messages/conversations/{}/messages".format(conversation_id)
         self.assertEqual(self.client.post(message_url, json={"text": "   "}).status_code, 400)
-        sent = self.client.post(message_url, json={"text": "  Hello, Bob!  "})
-        self.assertEqual(sent.status_code, 201)
-        self.assertEqual(sent.json()["message"]["text"], "Hello, Bob!")
-        self.assertTrue(sent.json()["message"]["isMine"])
-        self.assertIsNone(sent.json()["message"]["readAt"])
+        with (
+            self.client.websocket_connect(
+                "/api/realtime",
+                headers={"origin": "http://localhost:5173"},
+            ) as alice_socket,
+            self.bob_client.websocket_connect(
+                "/api/realtime",
+                headers={"origin": "http://localhost:5173"},
+            ) as bob_socket,
+        ):
+            self.assertEqual(alice_socket.receive_json()["type"], "connected")
+            self.assertEqual(bob_socket.receive_json()["type"], "connected")
+            sent = self.client.post(message_url, json={"text": "  Hello, Bob!  "})
+            self.assertEqual(sent.status_code, 201)
+            self.assertEqual(sent.json()["message"]["text"], "Hello, Bob!")
+            self.assertTrue(sent.json()["message"]["isMine"])
+            self.assertIsNone(sent.json()["message"]["readAt"])
+            self.assertEqual(bob_socket.receive_json()["type"], "message.created")
 
-        bob_conversations = self.bob_client.get("/api/messages/conversations").json()["conversations"]
-        self.assertEqual(len(bob_conversations), 1)
-        self.assertEqual(bob_conversations[0]["unreadCount"], 1)
+            bob_conversations = self.bob_client.get("/api/messages/conversations").json()["conversations"]
+            self.assertEqual(len(bob_conversations), 1)
+            self.assertEqual(bob_conversations[0]["unreadCount"], 1)
 
-        received = self.bob_client.get(message_url)
-        self.assertEqual(received.status_code, 200)
-        self.assertEqual(received.json()["messages"][0]["text"], "Hello, Bob!")
-        self.assertFalse(received.json()["messages"][0]["isMine"])
-        self.assertIsNotNone(received.json()["messages"][0]["readAt"])
-        alice_view = self.client.get(message_url)
-        self.assertTrue(alice_view.json()["messages"][0]["isMine"])
-        self.assertIsNotNone(alice_view.json()["messages"][0]["readAt"])
-        self.assertEqual(
-            self.bob_client.get("/api/messages/conversations").json()["conversations"][0]["unreadCount"],
-            0,
-        )
+            received = self.bob_client.get(message_url)
+            self.assertEqual(received.status_code, 200)
+            self.assertEqual(received.json()["messages"][0]["text"], "Hello, Bob!")
+            self.assertFalse(received.json()["messages"][0]["isMine"])
+            self.assertIsNotNone(received.json()["messages"][0]["readAt"])
+            self.assertEqual(alice_socket.receive_json()["type"], "message.read")
+            alice_view = self.client.get(message_url)
+            self.assertTrue(alice_view.json()["messages"][0]["isMine"])
+            self.assertIsNotNone(alice_view.json()["messages"][0]["readAt"])
+            self.assertEqual(
+                self.bob_client.get("/api/messages/conversations").json()["conversations"][0]["unreadCount"],
+                0,
+            )
 
         forbidden_read = self.casey_client.get(message_url)
         forbidden_send = self.casey_client.post(message_url, json={"text": "Not a participant"})

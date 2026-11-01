@@ -13,10 +13,10 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from io import BytesIO
 from pathlib import Path
-from typing import Any, Callable, Deque, Dict, List, Literal, Optional
+from typing import Any, Callable, Deque, Dict, List, Literal, Optional, Tuple
 from urllib.parse import urlsplit
 from uuid import UUID, uuid4
-from fastapi import Depends, FastAPI, Query, Request, Response
+from fastapi import Depends, FastAPI, Query, Request, Response, WebSocket, WebSocketDisconnect
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse
 from PIL import Image, ImageOps, UnidentifiedImageError
@@ -184,6 +184,7 @@ class SocialPostInput(StrictModel):
 
 class SocialCommentInput(StrictModel):
     text: str = Field(min_length=1, max_length=280)
+    parent_comment_id: Optional[UUID] = None
 
     @field_validator("text")
     @classmethod
@@ -192,6 +193,18 @@ class SocialCommentInput(StrictModel):
         if not value:
             raise ValueError("Comment text is required.")
         return value
+
+    @field_validator("parent_comment_id", mode="before")
+    @classmethod
+    def parse_parent_comment_id(cls, value: Any) -> Optional[UUID]:
+        if value is None or isinstance(value, UUID):
+            return value
+        if not isinstance(value, str):
+            raise ValueError("Parent comment id is invalid.")
+        try:
+            return UUID(value)
+        except ValueError as error:
+            raise ValueError("Parent comment id is invalid.") from error
 
 
 class SocialLikeInput(StrictModel):
@@ -510,6 +523,11 @@ def create_app(
     message_rate_limit_lock = threading.Lock()
     media_upload_rate_limit_state: Dict[str, Deque[float]] = defaultdict(deque)
     media_upload_rate_limit_lock = threading.Lock()
+    realtime_connections: Dict[
+        str,
+        Dict[int, Tuple[asyncio.AbstractEventLoop, asyncio.Queue[Dict[str, Any]]]],
+    ] = defaultdict(dict)
+    realtime_connections_lock = threading.Lock()
     configured_media_directory = media_directory or Path(os.getenv(
         "ICONNECT_MEDIA_DIR",
         str(DEFAULT_MEDIA_DIRECTORY),
@@ -520,6 +538,59 @@ def create_app(
         else DEFAULT_MEDIA_DIRECTORY.parent / configured_media_directory
     )
     cookie_name = "__Host-iconnect.sid" if settings.production else "iconnect.sid"
+
+    def publish_realtime(
+        event: Dict[str, Any],
+        user_ids: Optional[List[Any]] = None,
+    ) -> None:
+        normalized_user_ids = (
+            {str(user_id) for user_id in user_ids}
+            if user_ids is not None
+            else None
+        )
+        with realtime_connections_lock:
+            if normalized_user_ids is None:
+                subscribers = [
+                    subscriber
+                    for user_subscribers in realtime_connections.values()
+                    for subscriber in user_subscribers.values()
+                ]
+            else:
+                subscribers = [
+                    subscriber
+                    for user_id in normalized_user_ids
+                    for subscriber in realtime_connections.get(user_id, {}).values()
+                ]
+        for loop, queue in subscribers:
+            def enqueue_event(target_queue: asyncio.Queue, payload: Dict[str, Any]) -> None:
+                if target_queue.full():
+                    while not target_queue.empty():
+                        target_queue.get_nowait()
+                    target_queue.put_nowait({"type": "sync"})
+                else:
+                    target_queue.put_nowait(payload)
+
+            try:
+                loop.call_soon_threadsafe(enqueue_event, queue, event)
+            except RuntimeError:
+                continue
+
+    def register_realtime_connection(
+        user_id: Any,
+        connection_id: int,
+        loop: asyncio.AbstractEventLoop,
+        queue: asyncio.Queue[Dict[str, Any]],
+    ) -> None:
+        with realtime_connections_lock:
+            realtime_connections[str(user_id)][connection_id] = (loop, queue)
+
+    def unregister_realtime_connection(user_id: Any, connection_id: int) -> None:
+        with realtime_connections_lock:
+            user_subscribers = realtime_connections.get(str(user_id))
+            if user_subscribers:
+                user_subscribers.pop(connection_id, None)
+                if not user_subscribers:
+                    realtime_connections.pop(str(user_id), None)
 
     @asynccontextmanager
     async def lifespan(_application: FastAPI):
@@ -737,6 +808,11 @@ def create_app(
             "id": str(row["id"]),
             "text": row["body"],
             "createdAt": row["created_at"].isoformat(),
+            "parentCommentId": (
+                str(row["parent_comment_id"])
+                if row.get("parent_comment_id")
+                else None
+            ),
             "author": {
                 "id": str(row["author_id"]),
                 "name": row["display_name"],
@@ -910,8 +986,7 @@ def create_app(
             path="/",
         )
 
-    def current_user(request: Request) -> Optional[Dict[str, Any]]:
-        token = request.cookies.get(cookie_name)
+    def user_for_session(token: Optional[str]) -> Optional[Dict[str, Any]]:
         if not token:
             return None
         with database.connection() as connection:
@@ -927,11 +1002,57 @@ def create_app(
             ).fetchone()
             return user
 
+    def current_user(request: Request) -> Optional[Dict[str, Any]]:
+        return user_for_session(request.cookies.get(cookie_name))
+
     def require_user(request: Request) -> Dict[str, Any]:
         user = current_user(request)
         if not user:
             raise ApiError(401, "not_authenticated", "Sign in to continue.")
         return user
+
+    @app.websocket("/api/realtime")
+    async def realtime_socket(websocket: WebSocket) -> None:
+        origin = websocket.headers.get("origin")
+        allowed_origins = {settings.app_origin}
+        if not settings.production:
+            allowed_origins.update({
+                "http://localhost:5173",
+                "http://127.0.0.1:5173",
+            })
+        if origin and origin not in allowed_origins:
+            await websocket.close(code=1008)
+            return
+        user = await asyncio.to_thread(
+            user_for_session,
+            websocket.cookies.get(cookie_name),
+        )
+        if not user:
+            await websocket.close(code=1008)
+            return
+
+        await websocket.accept()
+        connection_id = id(websocket)
+        event_queue: asyncio.Queue[Dict[str, Any]] = asyncio.Queue(maxsize=100)
+        register_realtime_connection(
+            user["id"],
+            connection_id,
+            asyncio.get_running_loop(),
+            event_queue,
+        )
+        try:
+            await websocket.send_json({"type": "connected"})
+            while True:
+                try:
+                    event = await asyncio.wait_for(event_queue.get(), timeout=25)
+                except asyncio.TimeoutError:
+                    await websocket.send_json({"type": "ping"})
+                    continue
+                await websocket.send_json(event)
+        except WebSocketDisconnect:
+            pass
+        finally:
+            unregister_realtime_connection(user["id"], connection_id)
 
     def require_admin(request: Request) -> Dict[str, Any]:
         user = require_user(request)
@@ -2064,6 +2185,7 @@ def create_app(
             post = social_post(connection, inserted["id"], user["id"])
         if not post:
             raise ApiError(500, "internal_error", "The post could not be created.")
+        publish_realtime({"type": "post.created", "postId": str(post["id"])})
         return {"post": public_social_post(post, user["id"])}
 
     @app.put(
@@ -2088,6 +2210,7 @@ def create_app(
             post = social_post(connection, updated["id"], user["id"])
         if not post:
             raise ApiError(500, "internal_error", "The updated post could not be loaded.")
+        publish_realtime({"type": "post.updated", "postId": str(post["id"])})
         return {"post": public_social_post(post, user["id"])}
 
     @app.delete(
@@ -2106,6 +2229,7 @@ def create_app(
             ).fetchone()
         if not deleted:
             raise ApiError(404, "post_not_found", "That post could not be found.")
+        publish_realtime({"type": "post.deleted", "postId": str(post_id)})
         return Response(status_code=204)
 
     @app.put(
@@ -2137,6 +2261,7 @@ def create_app(
                        WHERE post_id = %s AND user_id = %s""",
                     (post_id, user["id"]),
                 )
+        publish_realtime({"type": "post.updated", "postId": str(post_id)})
         return {"bookmarked": input.bookmarked}
 
     @app.get("/api/social/posts/{post_id}")
@@ -2180,6 +2305,7 @@ def create_app(
             post = social_post(connection, post_id, user["id"])
         if not post:
             raise ApiError(404, "post_not_found", "That post could not be found.")
+        publish_realtime({"type": "post.updated", "postId": str(post_id)})
         return {"post": public_social_post(post, user["id"])}
 
     @app.get(
@@ -2197,7 +2323,7 @@ def create_app(
             ).fetchone():
                 raise ApiError(404, "post_not_found", "That post could not be found.")
             rows = connection.execute(
-                """SELECT c.id, c.body, c.created_at,
+                """SELECT c.id, c.body, c.created_at, c.parent_comment_id,
                           u.id AS author_id, u.display_name, u.username
                    FROM social_post_comments c
                    JOIN users u ON u.id = c.user_id
@@ -2219,18 +2345,29 @@ def create_app(
         user: Dict[str, Any] = Depends(require_user),
     ) -> Dict[str, Any]:
         with database.connection() as connection:
+            if input.parent_comment_id:
+                parent = connection.execute(
+                    """SELECT id
+                       FROM social_post_comments
+                       WHERE id = %s AND post_id = %s
+                         AND parent_comment_id IS NULL""",
+                    (input.parent_comment_id, post_id),
+                ).fetchone()
+                if not parent:
+                    raise ApiError(404, "comment_not_found", "That comment could not be found.")
             inserted = connection.execute(
-                """INSERT INTO social_post_comments (post_id, user_id, body)
-                   SELECT p.id, %s, %s
+                """INSERT INTO social_post_comments
+                       (post_id, user_id, body, parent_comment_id)
+                   SELECT p.id, %s, %s, %s
                    FROM social_posts p
                    WHERE p.id = %s
                    RETURNING id""",
-                (user["id"], input.text, post_id),
+                (user["id"], input.text, input.parent_comment_id, post_id),
             ).fetchone()
             if not inserted:
                 raise ApiError(404, "post_not_found", "That post could not be found.")
             row = connection.execute(
-                """SELECT c.id, c.body, c.created_at,
+                """SELECT c.id, c.body, c.created_at, c.parent_comment_id,
                           u.id AS author_id, u.display_name, u.username
                    FROM social_post_comments c
                    JOIN users u ON u.id = c.user_id
@@ -2239,6 +2376,11 @@ def create_app(
             ).fetchone()
         if not row:
             raise ApiError(500, "internal_error", "The reply could not be created.")
+        publish_realtime({
+            "type": "comment.created",
+            "postId": str(post_id),
+            "commentId": str(row["id"]),
+        })
         return {"comment": public_social_comment(row)}
 
     @app.get("/api/marketplace/products")
@@ -3112,14 +3254,15 @@ def create_app(
             ).fetchone()
             if not conversation:
                 raise ApiError(404, "conversation_not_found", "That conversation could not be found.")
-            connection.execute(
+            read_messages = connection.execute(
                 """UPDATE direct_messages
                    SET read_at = now()
                    WHERE conversation_id = %s
                      AND recipient_id = %s
-                     AND read_at IS NULL""",
+                     AND read_at IS NULL
+                   RETURNING sender_id""",
                 (conversation_id, user["id"]),
-            )
+            ).fetchall()
             rows = connection.execute(
                 """SELECT message.id, message.body, message.created_at, message.read_at,
                           message.sender_id,
@@ -3135,6 +3278,12 @@ def create_app(
                    ORDER BY message.created_at ASC, message.id ASC""",
                 (conversation_id, limit),
             ).fetchall()
+        sender_ids = list({row["sender_id"] for row in read_messages})
+        if sender_ids:
+            publish_realtime(
+                {"type": "message.read", "conversationId": str(conversation_id)},
+                sender_ids,
+            )
         return {
             "messages": [
                 public_direct_message(row, user["id"])
@@ -3180,7 +3329,7 @@ def create_app(
                 raise ApiError(404, "conversation_not_found", "That conversation could not be found.")
             row = connection.execute(
                 """SELECT message.id, message.body, message.created_at, message.read_at,
-                          message.sender_id,
+                          message.sender_id, message.recipient_id,
                           sender.display_name, sender.username
                    FROM direct_messages message
                    JOIN users sender ON sender.id = message.sender_id
@@ -3189,6 +3338,15 @@ def create_app(
             ).fetchone()
         if not row:
             raise ApiError(500, "internal_error", "The message could not be sent.")
+        publish_realtime(
+            {
+                "type": "message.created",
+                "conversationId": str(conversation_id),
+                "messageId": str(row["id"]),
+                "senderId": str(row["sender_id"]),
+            },
+            [row["recipient_id"]],
+        )
         return {"message": public_direct_message(row, user["id"])}
 
     return app
