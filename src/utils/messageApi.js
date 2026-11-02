@@ -25,6 +25,7 @@ export function toConversation(conversation) {
     time: formatRelativeTime(conversation.lastMessageAt),
     unreadCount: conversation.unreadCount,
     isBlockedByMe: conversation.isBlockedByMe,
+    isBlockedByThem: conversation.isBlockedByThem,
     isMuted: conversation.isMuted,
     isArchived: conversation.isArchived,
     isPersistent: true,

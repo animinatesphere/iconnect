@@ -898,6 +898,9 @@ button, a { -webkit-tap-highlight-color: transparent; }
 .chat-composer > button:first-child { width: 25px; height: 25px; border: 0; border-radius: 5px; background: #f2f2eb; color: #6e7067; font-size: 16px; }
 .chat-composer input { flex: 1; min-width: 0; border: 0; outline: 0; background: transparent; color: #44463f; font-size: 13px; }
 .chat-composer input::placeholder { color: #a0a096; }
+.chat-composer-disabled { background: #f6f5f0; box-shadow: none; }
+.chat-composer-disabled .chat-image-picker, .chat-composer-disabled input { color: #aaa99f; cursor: not-allowed; }
+.chat-composer-disabled .chat-send { background: #a6a79e; cursor: not-allowed; }
 .chat-image-picker { position: relative; width: 30px; height: 30px; display: grid; flex: 0 0 auto; place-items: center; border-radius: 50%; color: #73756c; cursor: pointer; }
 .chat-image-picker:hover { background: #f2f2eb; }
 .chat-image-picker input { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; cursor: pointer; }
@@ -3004,6 +3007,24 @@ button, a { -webkit-tap-highlight-color: transparent; }
 .admin-danger-action { border-color: #efdfda; color: #a15a4f; }
 .admin-danger-action:hover { background: #fbf3f0; }
 .admin-products-layout, .admin-role-layout { display: grid; gap: 14px; }
+.admin-publishing-panel { padding: 15px; }
+.admin-publish-tabs { display: flex; gap: 5px; padding: 4px; border: 1px solid #eeede7; border-radius: 8px; background: #f8f8f3; }
+.admin-publish-tabs button { display: inline-flex; align-items: center; gap: 6px; min-height: 31px; padding: 0 10px; border: 0; border-radius: 6px; background: transparent; color: #77796f; font: inherit; font-size: 9px; cursor: pointer; }
+.admin-publish-tabs .admin-publish-tab-active { background: white; color: #485438; box-shadow: 0 1px 4px #27281f12; font-weight: 700; }
+.admin-publish-form { display: grid; gap: 12px; margin-top: 15px; }
+.admin-publish-post-label { display: grid; gap: 6px; color: #66685f; font-size: 9px; font-weight: 700; }
+.admin-publish-post-label textarea { width: 100%; min-width: 0; min-height: 100px; padding: 10px; border: 1px solid #e4e3db; border-radius: 7px; outline: 0; background: white; color: #40423a; font: inherit; font-size: 10px; resize: vertical; }
+.admin-publish-post-label textarea:focus { border-color: #9bab73; box-shadow: 0 0 0 3px #dce8c340; }
+.admin-publish-form .jobs-create-fields { gap: 11px; }
+.admin-publish-form .jobs-create-fields label { font-size: 9px; }
+.admin-publish-form .jobs-create-fields input, .admin-publish-form .jobs-create-fields select, .admin-publish-form .jobs-create-fields textarea { min-height: 36px; font-size: 10px; }
+.admin-publish-form .jobs-create-fields textarea { min-height: 95px; }
+.admin-publish-form .jobs-form-note { font-size: 9px; }
+.admin-publish-photo-preview { width: min(230px, 100%); max-height: 170px; border: 1px solid #e8e7df; border-radius: 8px; background: #f4f3ed; object-fit: cover; }
+.admin-publish-help { align-self: start; padding: 15px; }
+.admin-publish-help h2 { margin: 8px 0; color: #43453d; font: 700 15px 'Manrope', sans-serif; }
+.admin-publish-help p { margin: 0 0 13px; color: #85867d; font-size: 9px; line-height: 1.65; }
+.admin-publish-help .admin-row-action { display: inline-flex; align-items: center; gap: 6px; }
 .admin-products-panel { overflow: hidden; padding: 15px 0 0; }
 .admin-products-panel > .admin-panel-heading { padding: 0 15px; }
 .admin-products-toolbar { display: flex; align-items: center; gap: 7px; }

@@ -1,8 +1,7 @@
 import React, { useEffect, useState } from 'react'
 import { Image as ImageIcon, Plus, Search, Store, Trash2, X } from 'lucide-react'
-import { createMarketplaceProduct } from '../../utils/marketplaceApi.js'
 import { uploadImage } from '../../utils/mediaApi.js'
-import { deleteAdminContent, getAdminContent, updateAdminProduct } from '../../utils/adminApi.js'
+import { createAdminProduct, deleteAdminContent, getAdminContent, updateAdminProduct } from '../../utils/adminApi.js'
 
 const categories = ['Style', 'Tech', 'Home', 'Other']
 const emptyProduct = { name: '', category: 'Home', price: '', stock: '1', description: '', published: true }
@@ -94,7 +93,7 @@ export default function AdminProductsPanel() {
         await updateAdminProduct(editingId, { ...product, imageUrls: nextImages })
         setNotice('Product changes saved.')
       } else {
-        await createMarketplaceProduct({ ...product, imageUrls: nextImages })
+        await createAdminProduct({ ...product, imageUrls: nextImages })
         setNotice('Product published to iBuy.')
       }
       resetForm()

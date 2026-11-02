@@ -107,6 +107,8 @@ All messaging routes require a verified account and return only participants' pu
 
 Message responses include `readAt`; senders can show a read receipt after the recipient opens that conversation. Message sending is rate-limited per client IP. Every read and write verifies conversation membership. Chat search queries stored message history. Mute suppresses the in-app incoming sound, while archive hides the conversation from the default and unread inbox views. File attachments other than photos, message deletion, voice/video calls, and push delivery are not implemented.
 
+Administrators can publish official content using admin-only routes: `POST /api/admin/posts`, `POST /api/admin/products`, `POST /api/admin/jobs`, and `POST /api/admin/local-listings`. They validate the same content fields and uploaded image references as member posts and listings, publish directly into the user-visible feed and marketplaces, and record a `create_admin_content` audit event. The admin Publishing section creates posts, jobs, and housing listings; Products manages iBuy items. Members can continue publishing through their existing routes.
+
 ## Live updates
 
 The authenticated WebSocket endpoint at `/api/realtime` streams message-created and read-receipt events to the conversation participants, and post/comment changes to connected members. Events contain identifiers and metadata, not message or comment text. The web app reconnects automatically, refreshes on reconnect, and keeps a 60-second polling fallback for inbox recovery.

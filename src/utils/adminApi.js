@@ -67,6 +67,57 @@ export async function updateAdminProduct(productId, product) {
   })
 }
 
+export async function createAdminProduct(product) {
+  const payload = await apiRequest('/api/admin/products', {
+    method: 'POST',
+    body: JSON.stringify({
+      name: product.name,
+      category: product.category,
+      price: Number(product.price),
+      stock: Number(product.stock),
+      description: product.description,
+      image_urls: product.imageUrls ?? [],
+      published: product.published ?? true,
+    }),
+  })
+  return payload.product
+}
+
+export async function createAdminPost(post) {
+  const payload = await apiRequest('/api/admin/posts', {
+    method: 'POST',
+    body: JSON.stringify({
+      text: post.text,
+      image_urls: post.imageUrls ?? [],
+    }),
+  })
+  return payload.post
+}
+
+export async function createAdminJob(job) {
+  const payload = await apiRequest('/api/admin/jobs', {
+    method: 'POST',
+    body: JSON.stringify(job),
+  })
+  return payload.job
+}
+
+export async function createAdminLocalListing(listing) {
+  const payload = await apiRequest('/api/admin/local-listings', {
+    method: 'POST',
+    body: JSON.stringify({
+      category: listing.category,
+      title: listing.title,
+      price: listing.price,
+      location: listing.location,
+      detail: listing.detail,
+      description: listing.description,
+      image_url: listing.imageUrl || null,
+    }),
+  })
+  return payload.listing
+}
+
 export async function getAdminSubadmins() {
   return apiRequest('/api/admin/subadmins')
 }

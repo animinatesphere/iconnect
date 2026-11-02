@@ -439,7 +439,7 @@ export default function InboxPage() {
                 <div className="chat-date-divider"><span>PRIVATE CONVERSATION</span></div>
                 <div className="chat-privacy-note">Messages are visible only to the two people in this conversation.</div>
                 {chatSearchOpen && <label className="chat-search-toolbar"><Search size={15} /><input autoFocus value={chatSearch} onChange={(event) => setChatSearch(event.target.value)} placeholder="Search messages in this chat" aria-label="Search messages in this chat" /><span>{normalizedChatSearch ? searchingMessages ? 'Searching…' : `${visibleMessages.length} found` : 'All messages'}</span><button type="button" aria-label="Close chat search" onClick={() => { setChatSearchOpen(false); setChatSearch('') }}><X size={15} /></button></label>}
-                {activeRemote.isBlockedByMe && <div className="chat-blocked-banner" role="status"><Ban size={15} /><span>You blocked {activeRemote.name}. They can’t message you.</span><button type="button" onClick={toggleBlocked} disabled={updatingChatSetting}>Unblock</button></div>}
+                {(activeRemote.isBlockedByMe || activeRemote.isBlockedByThem) && <div className="chat-blocked-banner" role="status"><Ban size={15} /><span>{activeRemote.isBlockedByMe ? `You blocked ${activeRemote.name}. Unblock them to send messages.` : `${activeRemote.name} blocked you. You can’t send messages to this person.`}</span>{activeRemote.isBlockedByMe && <button type="button" onClick={toggleBlocked} disabled={updatingChatSetting}>Unblock</button>}</div>}
                 {loadingMessages && <div className="chat-skeleton-list" role="status" aria-label="Loading messages">{[0, 1, 2, 3].map((item) => <div className={`chat-skeleton-message ${item % 2 ? 'chat-skeleton-message-mine' : ''}`} key={item}><i className="inbox-skeleton" /><span className="inbox-skeleton inbox-skeleton-time" /></div>)}</div>}
                 {!loadingMessages && messagesLoadError && <p className="inbox-empty-state" role="alert">Messages couldn’t be loaded. {messagesLoadError}</p>}
                 {!loadingMessages && !messagesLoadError && !messages.length && <p className="inbox-empty-state">This conversation is ready. Send the first message.</p>}
@@ -459,7 +459,7 @@ export default function InboxPage() {
                 </div>)}<div ref={messagesEnd} />
               </div>
               {messageImagePreview && <div className="chat-selected-image-preview"><img src={messageImagePreview} alt="Selected photo attachment" /><button type="button" aria-label="Remove selected photo" onClick={() => setMessageImage(null)} disabled={sending}><X size={14} /></button></div>}
-              {!activeRemote.isBlockedByMe && <form className="chat-composer" onSubmit={sendMessage}>
+              {!activeRemote.isBlockedByMe && <form className={`chat-composer ${activeRemote.isBlockedByThem ? 'chat-composer-disabled' : ''}`} onSubmit={sendMessage}>
                 <label className="chat-image-picker" aria-label="Attach a photo"><ImagePlus size={17} /><input type="file" accept="image/jpeg,image/png,image/webp" onChange={(event) => {
                   const file = event.target.files?.[0]
                   event.target.value = ''
@@ -470,9 +470,9 @@ export default function InboxPage() {
                   }
                   setMessageImage(file)
                   setError('')
-                }} disabled={sending || loadingMessages} /></label>
-                <input value={message} onChange={(event) => setMessage(event.target.value)} placeholder={`Message ${activeRemote.name.split(' ')[0]}...`} aria-label="Write a message" maxLength={2000} disabled={sending || loadingMessages} />
-                <button className="chat-send" type="submit" aria-label="Send message" disabled={(!message.trim() && !messageImage) || sending || loadingMessages}><Send size={16} /></button>
+                }} disabled={sending || loadingMessages || activeRemote.isBlockedByThem} /></label>
+                <input value={message} onChange={(event) => setMessage(event.target.value)} placeholder={activeRemote.isBlockedByThem ? `You can’t message ${activeRemote.name.split(' ')[0]} because they blocked you.` : `Message ${activeRemote.name.split(' ')[0]}...`} aria-label="Write a message" maxLength={2000} disabled={sending || loadingMessages || activeRemote.isBlockedByThem} />
+                <button className="chat-send" type="submit" aria-label="Send message" disabled={(!message.trim() && !messageImage) || sending || loadingMessages || activeRemote.isBlockedByThem}><Send size={16} /></button>
               </form>}
               <p className="chat-account-footnote">Private messages and photos are stored in your account.</p>
             </>}
