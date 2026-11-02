@@ -35,11 +35,10 @@ class FakeMessagingConnection:
         sql = re.sub(r"\s+", " ", query).strip().lower()
         if sql.startswith("select exists") and "from user_blocks" in sql:
             blocker_one, blocked_one, blocker_two, blocked_two = map(str, parameters)
-            is_blocked = (
-                (blocker_one, blocked_one) in self.state["blocks"]
-                or (blocker_two, blocked_two) in self.state["blocks"]
-            )
-            return FakeResult({"blocked": is_blocked})
+            return FakeResult({
+                "blocked_by_me": (blocker_one, blocked_one) in self.state["blocks"],
+                "blocked_by_them": (blocker_two, blocked_two) in self.state["blocks"],
+            })
         if sql.startswith("select exists") and "from direct_conversations c" in sql:
             conversation_id, viewer_id, _ = map(str, parameters)
             conversation = self.state["conversations"].get(conversation_id)
@@ -204,6 +203,7 @@ class FakeMessagingConnection:
                         "recipient_avatar": self.state["users"][other_id].get("profile_image_url"),
                         "last_message_at": latest["created_at"] if latest else None,
                         "is_blocked_by_me": (viewer_id, other_id) in self.state["blocks"],
+                        "is_blocked_by_them": (other_id, viewer_id) in self.state["blocks"],
                         "is_muted": self.state["preferences"].get(
                             (conversation["id"], viewer_id), {}
                         ).get("is_muted", False),
@@ -220,6 +220,31 @@ class FakeMessagingConnection:
             rows.sort(key=lambda item: item["last_message_at"] or item["created_at"], reverse=True)
             return FakeResult(rows=rows)
         if sql.startswith("select other.id as recipient_id") and "from direct_conversations c" in sql:
+            if "blocked_by_me" in sql:
+                (
+                    viewer_id,
+                    blocked_by_them_viewer,
+                    viewer_for_other,
+                    conversation_id,
+                    participant_one_viewer,
+                    participant_two_viewer,
+                ) = map(str, parameters)
+                conversation = self.state["conversations"].get(conversation_id)
+                if not conversation or viewer_id not in {
+                    conversation["participant_one_id"],
+                    conversation["participant_two_id"],
+                }:
+                    return FakeResult()
+                recipient_id = next(
+                    participant
+                    for participant in (conversation["participant_one_id"], conversation["participant_two_id"])
+                    if participant != viewer_id
+                )
+                return FakeResult({
+                    "recipient_id": recipient_id,
+                    "blocked_by_me": (viewer_for_other, recipient_id) in self.state["blocks"],
+                    "blocked_by_them": (recipient_id, blocked_by_them_viewer) in self.state["blocks"],
+                })
             viewer_id, conversation_id, _, _ = map(str, parameters)
             conversation = self.state["conversations"].get(conversation_id)
             if not conversation or viewer_id not in {
@@ -565,9 +590,14 @@ class MessagingFlowTests(unittest.TestCase):
         self.assertTrue(
             self.client.get("/api/messages/conversations").json()["conversations"][0]["isBlockedByMe"]
         )
-        self.assertEqual(self.bob_client.post(conversation_url + "/messages", json={
+        bob_conversation = self.bob_client.get("/api/messages/conversations").json()["conversations"][0]
+        self.assertTrue(bob_conversation["isBlockedByThem"])
+        blocked_send = self.bob_client.post(conversation_url + "/messages", json={
             "text": "A blocked message",
-        }).status_code, 403)
+        })
+        self.assertEqual(blocked_send.status_code, 403)
+        self.assertEqual(blocked_send.json()["error"]["code"], "blocked_by_them")
+        self.assertIn("they blocked you", blocked_send.json()["error"]["message"].lower())
         self.assertEqual(self.bob_client.post("/api/messages/conversations", json={
             "recipient_id": self.user_ids["alice"],
         }).status_code, 403)
