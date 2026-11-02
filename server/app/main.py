@@ -337,6 +337,9 @@ class CommunityInput(StrictModel):
     name: str = Field(min_length=1, max_length=80)
     description: str = Field(min_length=1, max_length=500)
     image_url: Optional[str] = Field(default=None, max_length=2048)
+    rules: str = Field(default="", max_length=2000)
+    members_can_post: bool = True
+    membership_mode: Literal["open", "approval"] = "open"
 
     @field_validator("image_url")
     @classmethod
@@ -353,9 +356,18 @@ class CommunityInput(StrictModel):
             raise ValueError("Community name and description are required.")
         return value
 
+    @field_validator("rules")
+    @classmethod
+    def clean_community_rules(cls, value: str) -> str:
+        return value.strip()
+
 
 class CommunityMembershipInput(StrictModel):
     joined: bool
+
+
+class CommunityJoinRequestInput(StrictModel):
+    approved: bool
 
 
 class DirectConversationInput(StrictModel):
@@ -987,21 +999,80 @@ def create_app(
             "joinedByMe": bool(row["joined_by_me"]),
             "createdAt": row["created_at"].isoformat(),
             "imageUrl": row.get("image_url"),
+            "ownerId": str(row["owner_id"]) if row.get("owner_id") else None,
+            "ownerName": row.get("owner_name"),
+            "ownerUsername": row.get("owner_username"),
+            "rules": row.get("rules") or "",
+            "membersCanPost": bool(row.get("members_can_post", True)),
+            "membershipMode": row.get("membership_mode", "open"),
+            "isAdmin": bool(row.get("is_admin", False)),
+            "joinRequestedByMe": bool(row.get("join_requested_by_me", False)),
+            "pendingRequestCount": int(row.get("pending_request_count", 0)),
         }
 
     def community_record(connection: Any, community_id: UUID, viewer_id: Any) -> Optional[Dict[str, Any]]:
         return connection.execute(
-            """SELECT c.id, c.name, c.description, c.image_url, c.created_at,
+            """SELECT c.id, c.owner_id, c.name, c.description, c.image_url,
+                      c.rules, c.members_can_post, c.membership_mode, c.created_at,
+                      owner.display_name AS owner_name,
+                      owner.username AS owner_username,
                       (SELECT count(*) FROM community_memberships members
                        WHERE members.community_id = c.id) AS member_count,
+                      (SELECT count(*) FROM community_join_requests requests
+                       WHERE requests.community_id = c.id AND requests.status = 'pending')
+                         AS pending_request_count,
                       EXISTS (
                           SELECT 1 FROM community_memberships mine
                           WHERE mine.community_id = c.id AND mine.user_id = %s
+                      ) AS joined_by_me,
+                      EXISTS (
+                          SELECT 1 FROM community_join_requests mine_request
+                          WHERE mine_request.community_id = c.id
+                            AND mine_request.user_id = %s
+                            AND mine_request.status = 'pending'
+                      ) AS join_requested_by_me,
+                      c.owner_id = %s AS is_admin
+               FROM communities c
+               JOIN users owner ON owner.id = c.owner_id
+               WHERE c.id = %s""",
+            (viewer_id, viewer_id, viewer_id, community_id),
+        ).fetchone()
+
+    def require_community_member(connection: Any, community_id: UUID, user_id: Any) -> Dict[str, Any]:
+        community = connection.execute(
+            """SELECT c.owner_id, c.members_can_post,
+                      EXISTS (
+                          SELECT 1 FROM community_memberships membership
+                          WHERE membership.community_id = c.id AND membership.user_id = %s
                       ) AS joined_by_me
                FROM communities c
                WHERE c.id = %s""",
-            (viewer_id, community_id),
+            (user_id, community_id),
         ).fetchone()
+        if not community:
+            raise ApiError(404, "community_not_found", "That community could not be found.")
+        if not community["joined_by_me"] and str(community["owner_id"]) != str(user_id):
+            raise ApiError(403, "community_membership_required", "Join this community to view its member space.")
+        return community
+
+    def public_community_post(row: Dict[str, Any], viewer_id: Any, owner_id: Any) -> Dict[str, Any]:
+        return {
+            "id": str(row["id"]),
+            "text": row["body"],
+            "imageUrls": row.get("image_urls") or [],
+            "createdAt": row["created_at"].isoformat(),
+            "isMine": str(row["author_id"]) == str(viewer_id),
+            "canDelete": (
+                str(row["author_id"]) == str(viewer_id)
+                or str(owner_id) == str(viewer_id)
+            ),
+            "author": {
+                "id": str(row["author_id"]),
+                "name": row["display_name"],
+                "username": row["username"],
+                "image": row.get("author_image_url"),
+            },
+        }
 
     def public_direct_message(row: Dict[str, Any], viewer_id: Any) -> Dict[str, Any]:
         return {
@@ -3220,20 +3291,34 @@ def create_app(
         pattern = "%" + escaped_query + "%" if escaped_query else None
         with database.connection() as connection:
             rows = connection.execute(
-                """SELECT c.id, c.name, c.description, c.image_url, c.created_at,
+                """SELECT c.id, c.owner_id, c.name, c.description, c.image_url,
+                          c.rules, c.members_can_post, c.membership_mode, c.created_at,
+                          owner.display_name AS owner_name,
+                          owner.username AS owner_username,
                           (SELECT count(*) FROM community_memberships members
                            WHERE members.community_id = c.id) AS member_count,
+                          (SELECT count(*) FROM community_join_requests requests
+                           WHERE requests.community_id = c.id AND requests.status = 'pending')
+                            AS pending_request_count,
                           EXISTS (
                               SELECT 1 FROM community_memberships mine
                               WHERE mine.community_id = c.id AND mine.user_id = %s
-                          ) AS joined_by_me
+                          ) AS joined_by_me,
+                          EXISTS (
+                              SELECT 1 FROM community_join_requests mine_request
+                              WHERE mine_request.community_id = c.id
+                                AND mine_request.user_id = %s
+                                AND mine_request.status = 'pending'
+                          ) AS join_requested_by_me,
+                          c.owner_id = %s AS is_admin
                    FROM communities c
+                   JOIN users owner ON owner.id = c.owner_id
                    WHERE %s::text IS NULL
                       OR lower(c.name) LIKE %s ESCAPE E'\\\\'
                       OR lower(c.description) LIKE %s ESCAPE E'\\\\'
                    ORDER BY c.created_at DESC, c.id DESC
                    LIMIT %s""",
-                (user["id"], pattern, pattern, pattern, limit),
+                (user["id"], user["id"], user["id"], pattern, pattern, pattern, limit),
             ).fetchall()
         return {"communities": [public_community(row) for row in rows]}
 
@@ -3248,10 +3333,20 @@ def create_app(
     ) -> Dict[str, Any]:
         with database.connection() as connection:
             inserted = connection.execute(
-                """INSERT INTO communities (owner_id, name, description, image_url)
-                   VALUES (%s, %s, %s, %s)
+                """INSERT INTO communities
+                       (owner_id, name, description, image_url, rules, members_can_post,
+                        membership_mode)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s)
                    RETURNING id""",
-                (user["id"], input.name, input.description, input.image_url),
+                (
+                    user["id"],
+                    input.name,
+                    input.description,
+                    input.image_url,
+                    input.rules,
+                    input.members_can_post,
+                    input.membership_mode,
+                ),
             ).fetchone()
             if not inserted:
                 raise ApiError(500, "internal_error", "The community could not be created.")
@@ -3266,6 +3361,57 @@ def create_app(
             raise ApiError(500, "internal_error", "The community could not be loaded.")
         return {"community": public_community(row)}
 
+    @app.get("/api/communities/{community_id}")
+    def get_community(
+        community_id: UUID,
+        user: Dict[str, Any] = Depends(require_user),
+    ) -> Dict[str, Any]:
+        with database.connection() as connection:
+            row = community_record(connection, community_id, user["id"])
+        if not row:
+            raise ApiError(404, "community_not_found", "That community could not be found.")
+        return {"community": public_community(row)}
+
+    @app.put(
+        "/api/communities/{community_id}",
+        dependencies=[Depends(enforce_social_rate_limit)],
+    )
+    def update_community(
+        community_id: UUID,
+        input: CommunityInput,
+        user: Dict[str, Any] = Depends(require_user),
+    ) -> Dict[str, Any]:
+        with database.connection() as connection:
+            updated = connection.execute(
+                """UPDATE communities
+                   SET name = %s, description = %s, image_url = %s,
+                       rules = %s, members_can_post = %s, membership_mode = %s
+                   WHERE id = %s AND owner_id = %s
+                   RETURNING id""",
+                (
+                    input.name,
+                    input.description,
+                    input.image_url,
+                    input.rules,
+                    input.members_can_post,
+                    input.membership_mode,
+                    community_id,
+                    user["id"],
+                ),
+            ).fetchone()
+            if not updated:
+                exists = connection.execute(
+                    "SELECT id FROM communities WHERE id = %s",
+                    (community_id,),
+                ).fetchone()
+                if not exists:
+                    raise ApiError(404, "community_not_found", "That community could not be found.")
+                raise ApiError(403, "community_admin_required", "Only the community creator can change its settings.")
+            row = community_record(connection, community_id, user["id"])
+        if not row:
+            raise ApiError(500, "internal_error", "The community settings could not be loaded.")
+        return {"community": public_community(row)}
+
     @app.put(
         "/api/communities/{community_id}/membership",
         dependencies=[Depends(enforce_social_rate_limit)],
@@ -3276,28 +3422,292 @@ def create_app(
         user: Dict[str, Any] = Depends(require_user),
     ) -> Dict[str, Any]:
         with database.connection() as connection:
-            if not connection.execute(
-                "SELECT id FROM communities WHERE id = %s",
+            community = connection.execute(
+                "SELECT id, owner_id, membership_mode FROM communities WHERE id = %s",
                 (community_id,),
-            ).fetchone():
+            ).fetchone()
+            if not community:
                 raise ApiError(404, "community_not_found", "That community could not be found.")
             if input.joined:
-                connection.execute(
-                    """INSERT INTO community_memberships (community_id, user_id)
-                       VALUES (%s, %s)
-                       ON CONFLICT (community_id, user_id) DO NOTHING""",
-                    (community_id, user["id"]),
-                )
+                if (
+                    community["membership_mode"] == "approval"
+                    and str(community["owner_id"]) != str(user["id"])
+                ):
+                    already_member = connection.execute(
+                        """SELECT user_id FROM community_memberships
+                           WHERE community_id = %s AND user_id = %s""",
+                        (community_id, user["id"]),
+                    ).fetchone()
+                    if not already_member:
+                        connection.execute(
+                            """INSERT INTO community_join_requests (community_id, user_id, status)
+                               VALUES (%s, %s, 'pending')
+                               ON CONFLICT (community_id, user_id)
+                               DO UPDATE SET status = 'pending', updated_at = now()""",
+                            (community_id, user["id"]),
+                        )
+                else:
+                    connection.execute(
+                        """INSERT INTO community_memberships (community_id, user_id)
+                           VALUES (%s, %s)
+                           ON CONFLICT (community_id, user_id) DO NOTHING""",
+                        (community_id, user["id"]),
+                    )
+                    connection.execute(
+                        """UPDATE community_join_requests
+                           SET status = 'approved', updated_at = now()
+                           WHERE community_id = %s AND user_id = %s
+                             AND status = 'pending'""",
+                        (community_id, user["id"]),
+                    )
             else:
+                if str(community["owner_id"]) == str(user["id"]):
+                    raise ApiError(409, "community_owner_cannot_leave", "The community creator must remain a member.")
                 connection.execute(
                     """DELETE FROM community_memberships
                        WHERE community_id = %s AND user_id = %s""",
+                    (community_id, user["id"]),
+                )
+                connection.execute(
+                    """UPDATE community_join_requests
+                       SET status = 'cancelled', updated_at = now()
+                       WHERE community_id = %s AND user_id = %s AND status = 'pending'""",
                     (community_id, user["id"]),
                 )
             row = community_record(connection, community_id, user["id"])
         if not row:
             raise ApiError(404, "community_not_found", "That community could not be found.")
         return {"community": public_community(row)}
+
+    @app.get("/api/communities/{community_id}/members")
+    def list_community_members(
+        community_id: UUID,
+        limit: int = Query(default=100, ge=1, le=200),
+        user: Dict[str, Any] = Depends(require_user),
+    ) -> Dict[str, Any]:
+        with database.connection() as connection:
+            community = require_community_member(connection, community_id, user["id"])
+            rows = connection.execute(
+                """SELECT member.id, member.display_name, member.username,
+                          member.profile_image_url, membership.created_at
+                   FROM community_memberships membership
+                   JOIN users member ON member.id = membership.user_id
+                   WHERE membership.community_id = %s
+                   ORDER BY (member.id = %s) DESC, membership.created_at ASC
+                   LIMIT %s""",
+                (community_id, community["owner_id"], limit),
+            ).fetchall()
+        return {
+            "members": [
+                {
+                    "id": str(row["id"]),
+                    "name": row["display_name"],
+                    "username": row["username"],
+                    "image": row.get("profile_image_url"),
+                    "isOwner": str(row["id"]) == str(community["owner_id"]),
+                }
+                for row in rows
+            ],
+        }
+
+    @app.delete(
+        "/api/communities/{community_id}/members/{member_id}",
+        status_code=204,
+        dependencies=[Depends(enforce_social_rate_limit)],
+    )
+    def remove_community_member(
+        community_id: UUID,
+        member_id: UUID,
+        user: Dict[str, Any] = Depends(require_user),
+    ) -> Response:
+        with database.connection() as connection:
+            community = connection.execute(
+                "SELECT owner_id FROM communities WHERE id = %s",
+                (community_id,),
+            ).fetchone()
+            if not community:
+                raise ApiError(404, "community_not_found", "That community could not be found.")
+            if str(community["owner_id"]) != str(user["id"]):
+                raise ApiError(403, "community_admin_required", "Only the community creator can remove members.")
+            if str(community["owner_id"]) == str(member_id):
+                raise ApiError(409, "cannot_remove_community_owner", "The community creator cannot be removed.")
+            removed = connection.execute(
+                """DELETE FROM community_memberships
+                   WHERE community_id = %s AND user_id = %s
+                   RETURNING user_id""",
+                (community_id, member_id),
+            ).fetchone()
+            if not removed:
+                raise ApiError(404, "community_member_not_found", "That community member could not be found.")
+        return Response(status_code=204)
+
+    @app.get("/api/communities/{community_id}/join-requests")
+    def list_community_join_requests(
+        community_id: UUID,
+        user: Dict[str, Any] = Depends(require_user),
+    ) -> Dict[str, Any]:
+        with database.connection() as connection:
+            community = connection.execute(
+                "SELECT owner_id FROM communities WHERE id = %s",
+                (community_id,),
+            ).fetchone()
+            if not community:
+                raise ApiError(404, "community_not_found", "That community could not be found.")
+            if str(community["owner_id"]) != str(user["id"]):
+                raise ApiError(403, "community_admin_required", "Only the community creator can review join requests.")
+            rows = connection.execute(
+                """SELECT requester.id, requester.display_name, requester.username,
+                          requester.profile_image_url, request.created_at
+                   FROM community_join_requests request
+                   JOIN users requester ON requester.id = request.user_id
+                   WHERE request.community_id = %s AND request.status = 'pending'
+                   ORDER BY request.created_at, requester.id
+                   LIMIT 100""",
+                (community_id,),
+            ).fetchall()
+        return {
+            "requests": [
+                {
+                    "id": str(row["id"]),
+                    "name": row["display_name"],
+                    "username": row["username"],
+                    "image": row.get("profile_image_url"),
+                    "requestedAt": row["created_at"].isoformat(),
+                }
+                for row in rows
+            ],
+        }
+
+    @app.put(
+        "/api/communities/{community_id}/join-requests/{member_id}",
+        dependencies=[Depends(enforce_social_rate_limit)],
+    )
+    def review_community_join_request(
+        community_id: UUID,
+        member_id: UUID,
+        input: CommunityJoinRequestInput,
+        user: Dict[str, Any] = Depends(require_user),
+    ) -> Dict[str, bool]:
+        with database.connection() as connection:
+            community = connection.execute(
+                "SELECT owner_id FROM communities WHERE id = %s",
+                (community_id,),
+            ).fetchone()
+            if not community:
+                raise ApiError(404, "community_not_found", "That community could not be found.")
+            if str(community["owner_id"]) != str(user["id"]):
+                raise ApiError(403, "community_admin_required", "Only the community creator can review join requests.")
+            request_row = connection.execute(
+                """SELECT user_id FROM community_join_requests
+                   WHERE community_id = %s AND user_id = %s AND status = 'pending'""",
+                (community_id, member_id),
+            ).fetchone()
+            if not request_row:
+                raise ApiError(404, "community_join_request_not_found", "That join request could not be found.")
+            if input.approved:
+                connection.execute(
+                    """INSERT INTO community_memberships (community_id, user_id)
+                       VALUES (%s, %s)
+                       ON CONFLICT (community_id, user_id) DO NOTHING""",
+                    (community_id, member_id),
+                )
+            connection.execute(
+                """UPDATE community_join_requests
+                   SET status = %s, updated_at = now()
+                   WHERE community_id = %s AND user_id = %s AND status = 'pending'""",
+                ("approved" if input.approved else "declined", community_id, member_id),
+            )
+        return {"approved": input.approved}
+
+    @app.get("/api/communities/{community_id}/posts")
+    def list_community_posts(
+        community_id: UUID,
+        limit: int = Query(default=50, ge=1, le=100),
+        offset: int = Query(default=0, ge=0),
+        user: Dict[str, Any] = Depends(require_user),
+    ) -> Dict[str, Any]:
+        with database.connection() as connection:
+            community = require_community_member(connection, community_id, user["id"])
+            rows = connection.execute(
+                """SELECT post.id, post.body, post.image_urls, post.created_at,
+                          author.id AS author_id, author.display_name, author.username,
+                          author.profile_image_url AS author_image_url
+                   FROM community_posts post
+                   JOIN users author ON author.id = post.user_id
+                   WHERE post.community_id = %s
+                   ORDER BY post.created_at DESC, post.id DESC
+                   LIMIT %s OFFSET %s""",
+                (community_id, limit, offset),
+            ).fetchall()
+            owner_id = community["owner_id"]
+        return {
+            "posts": [
+                public_community_post(row, user["id"], owner_id)
+                for row in rows
+            ],
+            "page": {"limit": limit, "offset": offset},
+        }
+
+    @app.post(
+        "/api/communities/{community_id}/posts",
+        status_code=201,
+        dependencies=[Depends(enforce_social_rate_limit)],
+    )
+    def create_community_post(
+        community_id: UUID,
+        input: SocialPostInput,
+        user: Dict[str, Any] = Depends(require_user),
+    ) -> Dict[str, Any]:
+        with database.connection() as connection:
+            community = require_community_member(connection, community_id, user["id"])
+            if not community["members_can_post"] and str(community["owner_id"]) != str(user["id"]):
+                raise ApiError(403, "community_posting_restricted", "Only the community creator can post here.")
+            inserted = connection.execute(
+                """INSERT INTO community_posts (community_id, user_id, body, image_urls)
+                   VALUES (%s, %s, %s, %s)
+                   RETURNING id""",
+                (community_id, user["id"], input.text, input.image_urls),
+            ).fetchone()
+            if not inserted:
+                raise ApiError(500, "internal_error", "The community post could not be created.")
+            row = connection.execute(
+                """SELECT post.id, post.body, post.image_urls, post.created_at,
+                          author.id AS author_id, author.display_name, author.username,
+                          author.profile_image_url AS author_image_url
+                   FROM community_posts post
+                   JOIN users author ON author.id = post.user_id
+                   WHERE post.id = %s""",
+                (inserted["id"],),
+            ).fetchone()
+            owner_id = community["owner_id"]
+        if not row:
+            raise ApiError(500, "internal_error", "The community post could not be loaded.")
+        return {"post": public_community_post(row, user["id"], owner_id)}
+
+    @app.delete(
+        "/api/communities/{community_id}/posts/{post_id}",
+        status_code=204,
+        dependencies=[Depends(enforce_social_rate_limit)],
+    )
+    def delete_community_post(
+        community_id: UUID,
+        post_id: UUID,
+        user: Dict[str, Any] = Depends(require_user),
+    ) -> Response:
+        with database.connection() as connection:
+            deleted = connection.execute(
+                """DELETE FROM community_posts post
+                   USING communities community
+                   WHERE post.id = %s
+                     AND post.community_id = %s
+                     AND community.id = post.community_id
+                     AND (post.user_id = %s OR community.owner_id = %s)
+                   RETURNING post.id""",
+                (post_id, community_id, user["id"], user["id"]),
+            ).fetchone()
+        if not deleted:
+            raise ApiError(404, "community_post_not_found", "That community post could not be found.")
+        return Response(status_code=204)
 
     @app.get("/api/people")
     def discover_people(

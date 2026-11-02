@@ -176,7 +176,13 @@ class FakeConnection:
                 "following": 0,
                 "followers": 0,
             })
-        if "from community_memberships membership" in sql:
+        if (
+            "from community_memberships membership" in sql
+            and not sql.startswith((
+                "select c.owner_id, c.members_can_post",
+                "select member.id",
+            ))
+        ):
             return FakeResult(rows=[])
         if "from communities c where c.owner_id = %s" in sql:
             return FakeResult(rows=[])
@@ -376,25 +382,212 @@ class FakeConnection:
                 "name": parameters[1],
                 "description": parameters[2],
                 "image_url": parameters[3],
+                "rules": parameters[4],
+                "members_can_post": parameters[5],
+                "membership_mode": parameters[6],
                 "created_at": datetime.now(timezone.utc),
             }
             self.state["communities"].append(community)
             return FakeResult({"id": community["id"]})
+        if sql.startswith("update communities"):
+            community = next(
+                (
+                    item for item in self.state["communities"]
+                    if item["id"] == str(parameters[6])
+                    and item["owner_id"] == str(parameters[7])
+                ),
+                None,
+            )
+            if not community:
+                return FakeResult()
+            community.update({
+                "name": parameters[0],
+                "description": parameters[1],
+                "image_url": parameters[2],
+                "rules": parameters[3],
+                "members_can_post": parameters[4],
+                "membership_mode": parameters[5],
+            })
+            return FakeResult({"id": community["id"]})
+        if sql.startswith("select c.owner_id, c.members_can_post"):
+            community = next(
+                (item for item in self.state["communities"] if item["id"] == str(parameters[1])),
+                None,
+            )
+            if not community:
+                return FakeResult()
+            return FakeResult({
+                "owner_id": community["owner_id"],
+                "members_can_post": community.get("members_can_post", True),
+                "joined_by_me": (
+                    (community["id"], str(parameters[0])) in self.state["community_memberships"]
+                ),
+            })
+        if sql.startswith("select id, owner_id, membership_mode from communities where id = %s"):
+            community = next(
+                (item for item in self.state["communities"] if item["id"] == str(parameters[0])),
+                None,
+            )
+            return FakeResult(
+                {
+                    "id": community["id"],
+                    "owner_id": community["owner_id"],
+                    "membership_mode": community["membership_mode"],
+                }
+                if community else None
+            )
+        if sql.startswith("select id, owner_id from communities where id = %s"):
+            community = next(
+                (item for item in self.state["communities"] if item["id"] == str(parameters[0])),
+                None,
+            )
+            return FakeResult(
+                {"id": community["id"], "owner_id": community["owner_id"]}
+                if community else None
+            )
+        if sql.startswith("select owner_id from communities where id = %s"):
+            community = next(
+                (item for item in self.state["communities"] if item["id"] == str(parameters[0])),
+                None,
+            )
+            return FakeResult({"owner_id": community["owner_id"]} if community else None)
         if sql.startswith("insert into community_memberships"):
             self.state["community_memberships"].add((str(parameters[0]), str(parameters[1])))
             return FakeResult(rowcount=1)
-        if sql.startswith("delete from community_memberships"):
-            self.state["community_memberships"].discard((str(parameters[0]), str(parameters[1])))
+        if sql.startswith("select user_id from community_memberships"):
+            membership = (str(parameters[0]), str(parameters[1]))
+            return FakeResult({"user_id": membership[1]} if membership in self.state["community_memberships"] else None)
+        if sql.startswith("insert into community_join_requests"):
+            key = (str(parameters[0]), str(parameters[1]))
+            self.state["community_join_requests"][key] = {
+                "status": "pending",
+                "created_at": datetime.now(timezone.utc),
+            }
             return FakeResult(rowcount=1)
+        if sql.startswith("update community_join_requests"):
+            if "set status = 'approved'" in sql:
+                status = "approved"
+                community_id, member_id = parameters
+            elif "set status = 'cancelled'" in sql:
+                status = "cancelled"
+                community_id, member_id = parameters
+            else:
+                status, community_id, member_id = parameters
+            key = (str(community_id), str(member_id))
+            request = self.state["community_join_requests"].get(key)
+            if request and request["status"] == "pending":
+                request["status"] = status
+            return FakeResult(rowcount=1 if request else 0)
+        if sql.startswith("delete from community_memberships"):
+            membership = (str(parameters[0]), str(parameters[1]))
+            existed = membership in self.state["community_memberships"]
+            self.state["community_memberships"].discard(membership)
+            return FakeResult({"user_id": membership[1]} if existed else None)
+        if sql.startswith("select member.id") and "from community_memberships membership" in sql:
+            community_id, owner_id, limit = parameters
+            members = [
+                (self.state["user"]["id"], self.state["user"])
+                for item in self.state["communities"]
+                if item["id"] == str(community_id)
+            ]
+            return FakeResult(rows=[
+                {
+                    "id": member_id,
+                    "display_name": member["display_name"],
+                    "username": member["username"],
+                    "profile_image_url": member.get("profile_image_url"),
+                }
+                for member_id, member in members[:limit]
+            ])
+        if sql.startswith("select requester.id") and "from community_join_requests request" in sql:
+            community_id = str(parameters[0])
+            requests = [
+                (key, request) for key, request in self.state["community_join_requests"].items()
+                if key[0] == community_id and request["status"] == "pending"
+            ]
+            return FakeResult(rows=[
+                {
+                    "id": key[1],
+                    "display_name": self.state["user"]["display_name"],
+                    "username": self.state["user"]["username"],
+                    "profile_image_url": self.state["user"].get("profile_image_url"),
+                    "created_at": request["created_at"],
+                }
+                for key, request in requests
+            ])
+        if sql.startswith("select user_id from community_join_requests"):
+            request = self.state["community_join_requests"].get(
+                (str(parameters[0]), str(parameters[1]))
+            )
+            return FakeResult(
+                {"user_id": str(parameters[1])}
+                if request and request["status"] == "pending"
+                else None
+            )
+        if sql.startswith("insert into community_posts"):
+            post = {
+                "id": str(uuid4()),
+                "community_id": str(parameters[0]),
+                "user_id": str(parameters[1]),
+                "body": parameters[2],
+                "image_urls": parameters[3],
+                "created_at": datetime.now(timezone.utc),
+            }
+            self.state["community_posts"].append(post)
+            return FakeResult({"id": post["id"]})
+        if sql.startswith("select post.id") and "from community_posts post" in sql:
+            if "where post.id = %s" in sql:
+                posts = list(self.state["community_posts"])
+                posts = [post for post in posts if post["id"] == str(parameters[0])]
+            else:
+                posts = [
+                    post for post in self.state["community_posts"]
+                    if post["community_id"] == str(parameters[0])
+                ]
+                posts = sorted(posts, key=lambda post: post["created_at"], reverse=True)
+                posts = posts[parameters[2]:parameters[2] + parameters[1]]
+            return FakeResult(rows=[
+                {
+                    "id": post["id"],
+                    "body": post["body"],
+                    "image_urls": post["image_urls"],
+                    "created_at": post["created_at"],
+                    "author_id": post["user_id"],
+                    "display_name": self.state["user"]["display_name"],
+                    "username": self.state["user"]["username"],
+                    "author_image_url": self.state["user"].get("profile_image_url"),
+                }
+                for post in posts
+            ])
+        if sql.startswith("delete from community_posts"):
+            post = next(
+                (
+                    item for item in self.state["community_posts"]
+                    if item["id"] == str(parameters[0])
+                    and item["community_id"] == str(parameters[1])
+                    and (
+                        item["user_id"] == str(parameters[2])
+                        or any(
+                            community["id"] == item["community_id"]
+                            and community["owner_id"] == str(parameters[3])
+                            for community in self.state["communities"]
+                        )
+                    )
+                ),
+                None,
+            )
+            if post:
+                self.state["community_posts"].remove(post)
+            return FakeResult({"id": post["id"]} if post else None)
         if sql.startswith("select c.id") and "from communities c" in sql:
             if "where c.id = %s" in sql:
-                viewer_id, community_id = parameters
+                viewer_id, viewer_for_request, viewer_for_admin, community_id = parameters
                 communities = [
                     item for item in self.state["communities"]
                     if item["id"] == str(community_id)
                 ]
             else:
-                viewer_id, search, _, _, limit = parameters
+                viewer_id, viewer_for_admin, viewer_for_request, search, _, _, limit = parameters
                 communities = self.state["communities"]
                 if search:
                     search_text = search.strip("%").lower()
@@ -739,15 +932,29 @@ class FakeConnection:
     def _community_row(self, community, viewer_id):
         return {
             "id": community["id"],
+            "owner_id": community["owner_id"],
             "name": community["name"],
             "description": community["description"],
             "created_at": community["created_at"],
+            "owner_name": self.state["user"]["display_name"],
+            "owner_username": self.state["user"]["username"],
             "member_count": sum(
                 membership[0] == community["id"]
                 for membership in self.state["community_memberships"]
             ),
             "joined_by_me": (community["id"], str(viewer_id)) in self.state["community_memberships"],
             "image_url": community.get("image_url"),
+            "rules": community.get("rules", ""),
+            "members_can_post": community.get("members_can_post", True),
+            "membership_mode": community.get("membership_mode", "open"),
+            "is_admin": community["owner_id"] == str(viewer_id),
+            "join_requested_by_me": self.state["community_join_requests"].get(
+                (community["id"], str(viewer_id)), {}
+            ).get("status") == "pending",
+            "pending_request_count": sum(
+                key[0] == community["id"] and request["status"] == "pending"
+                for key, request in self.state["community_join_requests"].items()
+            ),
         }
 
     def _admin_user_row(self):
@@ -802,6 +1009,8 @@ class FakePool:
             "local_listings": [],
             "communities": [],
             "community_memberships": set(),
+            "community_join_requests": {},
+            "community_posts": [],
             "admin_audit": [],
             "admin_roles": {},
             "admin_role_lookups": 0,
@@ -1594,22 +1803,92 @@ class AuthFlowTests(unittest.TestCase):
             "name": "  Local Makers ",
             "description": " A place for nearby designers and builders. ",
             "image_url": "/api/media/images/{}.webp".format("a" * 32),
+            "rules": " Be kind and stay on topic. ",
         })
         self.assertEqual(created.status_code, 201, created.text)
         community = created.json()["community"]
         self.assertEqual(community["name"], "Local Makers")
         self.assertEqual(community["description"], "A place for nearby designers and builders.")
         self.assertEqual(community["imageUrl"], "/api/media/images/{}.webp".format("a" * 32))
+        self.assertEqual(community["rules"], "Be kind and stay on topic.")
+        self.assertTrue(community["membersCanPost"])
+        self.assertTrue(community["isAdmin"])
         self.assertEqual(community["memberCount"], 1)
         self.assertTrue(community["joinedByMe"])
         self.assertNotIn("owner", community)
+        stored_community = self.pool.state["communities"][0]
+        self.assertEqual(stored_community["id"], community["id"])
+
+        community_url = "/api/communities/{}".format(community["id"])
+        group_detail = self.client.get(community_url)
+        self.assertEqual(group_detail.status_code, 200, group_detail.text)
+        self.assertEqual(group_detail.json()["community"]["ownerId"], community["ownerId"])
+        updated_group = self.client.put(community_url, json={
+            "name": "Local Makers Club",
+            "description": "A member-led makers group.",
+            "image_url": "/api/media/images/{}.webp".format("b" * 32),
+            "rules": "Be kind. No spam.",
+            "members_can_post": False,
+        })
+        self.assertEqual(updated_group.status_code, 200, updated_group.text)
+        self.assertFalse(updated_group.json()["community"]["membersCanPost"])
+        self.assertEqual(updated_group.json()["community"]["rules"], "Be kind. No spam.")
+        stored_community["owner_id"] = "00000000-0000-0000-0000-000000000099"
+        non_admin_update = self.client.put(community_url, json={
+            "name": "Changed by member",
+            "description": "This update should be rejected.",
+            "rules": "",
+            "members_can_post": True,
+        })
+        self.assertEqual(non_admin_update.status_code, 403)
+        restricted_post = self.client.post(
+            community_url + "/posts",
+            json={"text": "Members cannot post while the creator restricts posting."},
+        )
+        self.assertEqual(restricted_post.status_code, 403, restricted_post.text)
+        non_admin_remove = self.client.delete(
+            community_url + "/members/00000000-0000-0000-0000-000000000098"
+        )
+        self.assertEqual(non_admin_remove.status_code, 403)
+        stored_community["members_can_post"] = True
+        member_post = self.client.post(community_url + "/posts", json={
+            "text": "Hello from a member of this group.",
+            "image_urls": ["/api/media/images/{}.webp".format("c" * 32)],
+        })
+        self.assertEqual(member_post.status_code, 201, member_post.text)
+        self.assertEqual(member_post.json()["post"]["text"], "Hello from a member of this group.")
+        self.assertTrue(member_post.json()["post"]["canDelete"])
+        self.assertEqual(len(self.client.get(community_url + "/posts").json()["posts"]), 1)
+        member_post_id = member_post.json()["post"]["id"]
+        self.assertEqual(self.client.delete(community_url + "/posts/" + member_post_id).status_code, 204)
+
+        stored_community["owner_id"] = self.pool.state["user"]["id"]
+        owner_post = self.client.post(community_url + "/posts", json={"text": "Creator announcement."})
+        self.assertEqual(owner_post.status_code, 201, owner_post.text)
+        owner_post_id = owner_post.json()["post"]["id"]
+        self.pool.state["community_posts"][0]["user_id"] = "00000000-0000-0000-0000-000000000098"
+        self.assertEqual(self.client.delete(community_url + "/posts/" + owner_post_id).status_code, 204)
+        members = self.client.get(community_url + "/members")
+        self.assertEqual(members.status_code, 200, members.text)
+        self.assertTrue(members.json()["members"][0]["isOwner"])
+        self.assertEqual(
+            self.client.delete(
+                community_url + "/members/" + self.pool.state["user"]["id"]
+            ).status_code,
+            409,
+        )
 
         listed = self.client.get("/api/communities?query=makers")
         self.assertEqual(listed.status_code, 200)
         self.assertEqual([item["id"] for item in listed.json()["communities"]], [community["id"]])
         self.assertEqual(self.client.get("/api/communities?query=x").status_code, 400)
 
+        stored_community["owner_id"] = "00000000-0000-0000-0000-000000000099"
         membership_url = "/api/communities/{}/membership".format(community["id"])
+        stored_community["owner_id"] = self.pool.state["user"]["id"]
+        owner_leave = self.client.put(membership_url, json={"joined": False})
+        self.assertEqual(owner_leave.status_code, 409)
+        stored_community["owner_id"] = "00000000-0000-0000-0000-000000000099"
         left = self.client.put(membership_url, json={"joined": False})
         self.assertEqual(left.status_code, 200)
         self.assertEqual(left.json()["community"]["memberCount"], 0)
@@ -1621,6 +1900,38 @@ class AuthFlowTests(unittest.TestCase):
         self.assertEqual(joined_again.json()["community"]["memberCount"], 1)
         left_again = self.client.put(membership_url, json={"joined": False})
         self.assertEqual(left_again.json()["community"]["memberCount"], 0)
+        stored_community["owner_id"] = self.pool.state["user"]["id"]
+        self.pool.state["community_memberships"].add(
+            (community["id"], self.pool.state["user"]["id"])
+        )
+        approval_settings = self.client.put(community_url, json={
+            "name": stored_community["name"],
+            "description": stored_community["description"],
+            "rules": stored_community["rules"],
+            "members_can_post": True,
+            "membership_mode": "approval",
+        })
+        self.assertEqual(approval_settings.status_code, 200, approval_settings.text)
+        self.assertEqual(approval_settings.json()["community"]["membershipMode"], "approval")
+        self.pool.state["community_memberships"].discard(
+            (community["id"], self.pool.state["user"]["id"])
+        )
+        stored_community["owner_id"] = "00000000-0000-0000-0000-000000000099"
+        request = self.client.put(membership_url, json={"joined": True})
+        self.assertEqual(request.status_code, 200, request.text)
+        self.assertTrue(request.json()["community"]["joinRequestedByMe"])
+        self.assertFalse(request.json()["community"]["joinedByMe"])
+        self.assertEqual(self.client.get(community_url + "/posts").status_code, 403)
+        stored_community["owner_id"] = self.pool.state["user"]["id"]
+        requests = self.client.get(community_url + "/join-requests")
+        self.assertEqual(requests.status_code, 200, requests.text)
+        self.assertEqual(len(requests.json()["requests"]), 1)
+        approved = self.client.put(
+            community_url + "/join-requests/{}".format(self.pool.state["user"]["id"]),
+            json={"approved": True},
+        )
+        self.assertEqual(approved.status_code, 200, approved.text)
+        self.assertTrue(self.client.get(community_url).json()["community"]["joinedByMe"])
         self.assertEqual(
             self.client.put(
                 "/api/communities/00000000-0000-0000-0000-000000000002/membership",

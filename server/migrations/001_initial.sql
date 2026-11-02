@@ -198,10 +198,32 @@ CREATE TABLE IF NOT EXISTS communities (
   description varchar(500) NOT NULL
     CHECK (char_length(btrim(description)) BETWEEN 1 AND 500),
   image_url varchar(2048),
+  rules text NOT NULL DEFAULT '',
+  members_can_post boolean NOT NULL DEFAULT true,
+  membership_mode varchar(10) NOT NULL DEFAULT 'open'
+    CHECK (membership_mode IN ('open', 'approval')),
   created_at timestamptz NOT NULL DEFAULT now()
 );
 
 ALTER TABLE communities ADD COLUMN IF NOT EXISTS image_url varchar(2048);
+ALTER TABLE communities ADD COLUMN IF NOT EXISTS rules text NOT NULL DEFAULT '';
+ALTER TABLE communities ADD COLUMN IF NOT EXISTS members_can_post boolean NOT NULL DEFAULT true;
+ALTER TABLE communities
+  ADD COLUMN IF NOT EXISTS membership_mode varchar(10) NOT NULL DEFAULT 'open';
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'communities_membership_mode_check'
+      AND conrelid = 'communities'::regclass
+  ) THEN
+    ALTER TABLE communities
+      ADD CONSTRAINT communities_membership_mode_check
+      CHECK (membership_mode IN ('open', 'approval'));
+  END IF;
+END;
+$$;
 
 CREATE INDEX IF NOT EXISTS communities_created_at_idx
   ON communities(created_at DESC, id DESC);
@@ -215,6 +237,32 @@ CREATE TABLE IF NOT EXISTS community_memberships (
 
 CREATE INDEX IF NOT EXISTS community_memberships_user_id_idx
   ON community_memberships(user_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS community_join_requests (
+  community_id uuid NOT NULL REFERENCES communities(id) ON DELETE CASCADE,
+  user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  status varchar(10) NOT NULL DEFAULT 'pending'
+    CHECK (status IN ('pending', 'approved', 'declined', 'cancelled')),
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (community_id, user_id)
+);
+
+CREATE INDEX IF NOT EXISTS community_join_requests_pending_idx
+  ON community_join_requests(community_id, created_at)
+  WHERE status = 'pending';
+
+CREATE TABLE IF NOT EXISTS community_posts (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  community_id uuid NOT NULL REFERENCES communities(id) ON DELETE CASCADE,
+  user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  body varchar(500) NOT NULL CHECK (char_length(btrim(body)) BETWEEN 1 AND 500),
+  image_urls text[] NOT NULL DEFAULT '{}',
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS community_posts_created_at_idx
+  ON community_posts(community_id, created_at DESC, id DESC);
 
 CREATE INDEX IF NOT EXISTS users_discoverable_profile_idx
   ON users(lower(display_name), lower(username))

@@ -184,7 +184,7 @@ export default function UserShell() {
         <NavigationGroup title="DISCOVER" links={exploreLinks} onNavigate={closeSidebar} />
         <div className="sidebar-communities">
           <div className="sidebar-section-heading"><span>YOUR COMMUNITIES</span><button aria-label="Explore communities" onClick={closeSidebar}><Plus size={15} /></button></div>
-          {joinedCommunities.map((community, index) => <Link key={community.id} to="/app/connect" onClick={closeSidebar}><span className={`community-dot ${['dot-green', 'dot-purple', 'dot-peach'][index]}`} /> {community.name}</Link>)}
+          {joinedCommunities.map((community, index) => <Link key={community.id} to={`/app/communities/${community.id}`} onClick={closeSidebar}><span className={`community-dot ${['dot-green', 'dot-purple', 'dot-peach'][index]}`} /> {community.name}</Link>)}
           {!joinedCommunities.length && <Link to="/app/connect" onClick={closeSidebar}><span className="community-dot dot-green" /> Discover communities</Link>}
         </div>
         <div className="sidebar-bottom">

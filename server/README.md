@@ -86,11 +86,20 @@ The same privacy preferences also control whether an account appears in message 
 
 All community routes require a verified account:
 
-- `GET /api/communities?query=makers&limit=50` lists communities, the current membership state, and member count without exposing members’ private account details. Search is optional and `limit` is 1–100.
-- `POST /api/communities` creates a community with `name`, `description`, and an optional uploaded `image_url`; its creator is automatically joined.
-- `PUT /api/communities/{community_id}/membership` joins or leaves a community with `{"joined":true|false}`. Repeating the same request is safe.
+- `GET /api/communities?query=makers&limit=50` lists communities, membership status, owner, posting setting, and member count. Search is optional and `limit` is 1–100.
+- `POST /api/communities` creates a community with `name`, `description`, an optional uploaded `image_url`, optional `rules`, `members_can_post` (defaults to true), and `membership_mode` (`open` by default or `approval`); its creator is automatically joined and can immediately manage the group.
+- `GET /api/communities/{community_id}` loads community details, rules, and creator settings.
+- `PUT /api/communities/{community_id}` lets the creator update the name, description, cover photo, rules, `members_can_post`, and `membership_mode` settings.
+- `PUT /api/communities/{community_id}/membership` joins or leaves a community with `{"joined":true|false}`. Open groups add members immediately; approval groups create a pending request for the creator. Members can cancel pending requests, and the creator cannot leave their own group.
+- `GET /api/communities/{community_id}/posts?limit=50&offset=0` loads the member-only feed; joined members and the creator can read it.
+- `POST /api/communities/{community_id}/posts` shares text and up to five uploaded `image_urls`. Members can post by default; the creator can disable member posting in group settings.
+- `DELETE /api/communities/{community_id}/posts/{post_id}` lets an author delete their own post or the creator moderate any group post.
+- `GET /api/communities/{community_id}/members?limit=100` lists group members to members and the creator.
+- `DELETE /api/communities/{community_id}/members/{member_id}` lets the creator remove a member. The creator cannot remove themself.
+- `GET /api/communities/{community_id}/join-requests` lists pending requests for the creator.
+- `PUT /api/communities/{community_id}/join-requests/{member_id}` accepts `{"approved":true|false}` and is restricted to the creator.
 
-Communities and memberships are stored in PostgreSQL.
+Community settings, posts, and memberships are stored in PostgreSQL. Uploaded cover/post photos use the authenticated image upload endpoint.
 
 ## Job Hub API
 
