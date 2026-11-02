@@ -35,7 +35,18 @@ All social routes require a verified, signed-in account and use the existing sec
 - `GET /api/social/posts/{post_id}/comments?limit=100` lists comments (1–200 per request).
 - `POST /api/social/posts/{post_id}/comments` creates a comment (`{"text":"..."}`, up to 280 characters); an optional `parent_comment_id` replies to a top-level comment on that post. Replies are limited to one level.
 
-`POST /api/media/images` accepts one authenticated JPEG, PNG, or WebP image (maximum 4 MB and 20 megapixels); uploaded files are validated, resized, and stored as WebP. The web app automatically optimizes larger selected photos before upload. Image files are stored on the API host in `ICONNECT_MEDIA_DIR` (default: `./uploads` relative to the repository root), not in PostgreSQL; production should point this variable at a persistent VPS directory and make it writable by the API service account. Images are served to signed-in members at the returned URL. Upload controls are available for posts, profile photos, private-message attachments, iBuy products, local listings, community covers, and job/company photos. Post creation, likes, comments, bookmarks, and image uploads are rate-limited per client IP. `GET /api/social/posts?following_only=true` limits results to authors the current user follows. Stories and video uploads are not implemented.
+`POST /api/media/images` accepts one authenticated JPEG, PNG, or WebP image (maximum 4 MB and 20 megapixels); uploaded files are validated, resized, and stored as WebP. The web app automatically optimizes larger selected photos before upload. Image files are stored on the API host in `ICONNECT_MEDIA_DIR` (default: `./uploads` relative to the repository root), not in PostgreSQL; production should point this variable at a persistent VPS directory and make it writable by the API service account. Images are served to signed-in members at the returned URL. Upload controls are available for posts, profile photos, private-message attachments, iBuy products, local listings, community covers, and job/company photos. Post creation, likes, comments, bookmarks, and media uploads are rate-limited per client IP. `GET /api/social/posts?following_only=true` limits results to authors the current user follows. Stories and live video are not implemented.
+
+## Video Hub and Studio
+
+All video routes require a verified, signed-in member. Videos are stored as files below `ICONNECT_MEDIA_DIR/videos` and metadata is stored in PostgreSQL. Only the uploader can delete a video; playback is not public and requires the member session cookie.
+
+- `POST /api/videos` streams one MP4 or WebM file to disk (maximum 250 MiB). Send the raw file body with `Content-Type: video/mp4` or `video/webm`, plus percent-encoded `X-Video-Title` and optional `X-Video-Caption` headers (title up to 120 characters, caption up to 500).
+- `GET /api/videos?query=clip&view=all&limit=50` lists and searches videos; `view` can be `all` or `mine`, and `limit` is 1–100.
+- `GET /api/videos/{video_id}/stream` streams a video to signed-in members.
+- `DELETE /api/videos/{video_id}` permanently removes the uploader's video and its media file.
+
+The Studio accepts MP4 and WebM, validates their file signatures, and reports upload progress. Browser playback depends on the codecs used to encode the file (H.264/AAC MP4 and VP8/VP9 WebM are recommended). Video files count toward VPS disk usage; monitor free space and back up the `videos` media directory. The API does not transcode videos, enforce a global storage quota, or provide live streaming.
 
 - `PUT /api/auth/profile/photo` updates or removes the signed-in member's photo (`{"image_url":"/api/media/images/<id>.webp"}` or `{"image_url":null}`).
 
@@ -152,4 +163,21 @@ The Vercel rewrite must only be deployed after the API hostname has DNS, a worki
 
 Set `NODE_ENV=production`, `API_HOST=127.0.0.1`, `API_PORT=10000`, `APP_ORIGIN=https://www.iconnectdworld.com`, `DATABASE_URL`, `SESSION_SECRET`, `OTP_HASH_SECRET`, `RESEND_API_KEY`, `EMAIL_FROM`, `SESSION_MAX_AGE_DAYS=7`, `TRUST_PROXY=1`, the intended server-only `ADMIN_EMAILS`, and `ICONNECT_MEDIA_DIR=/var/lib/iconnect/uploads` in the VPS environment. Create the media directory and make it writable by the API service account before starting the API. Keep secrets out of source control and never put them in `VITE_*` variables.
 
-On the VPS, create the environment with `python3 -m venv server/.venv`, install runtime packages with `server/.venv/bin/pip install -r server/requirements.txt`, and run `npm run db:migrate`. Configure the Nginx API virtual host with `client_max_body_size 5m;` so image uploads under the API's 4 MB limit are accepted, and proxy WebSocket upgrades for `/api/realtime` as described above; then test and reload Nginx. Run the API with `server/.venv/bin/uvicorn server.app.main:app --host 127.0.0.1 --port 10000`. The migration creates the account, verification-code, session, admin audit, social feed/bookmark, messaging, follow, community, job, iBuy product/gallery, and local marketplace listing tables idempotently. Back up the media directory alongside PostgreSQL. The API does not configure PostgreSQL, DNS, Nginx, TLS, backups, or a process supervisor.
+On the VPS, create the environment with `python3 -m venv server/.venv`, install runtime packages with `server/.venv/bin/pip install -r server/requirements.txt`, and run `npm run db:migrate`. The API virtual host must allow request bodies up to 260 MB for 250 MiB video uploads. Add this exact-match location to its HTTPS `server` block so Nginx streams upload bodies to the API instead of buffering the entire upload first:
+
+```nginx
+location = /api/videos {
+    client_max_body_size 260M;
+    client_body_timeout 300s;
+    proxy_request_buffering off;
+    proxy_send_timeout 300s;
+    proxy_pass http://127.0.0.1:10000;
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+}
+```
+
+Keep the existing `/api/realtime` WebSocket proxy and other API routes, then run `sudo nginx -t` and reload Nginx. Run the API with `server/.venv/bin/uvicorn server.app.main:app --host 127.0.0.1 --port 10000`. The migration creates the account, verification-code, session, admin audit, social feed/bookmark, messaging, follow, community, job, iBuy product/gallery, local marketplace listing, and video tables idempotently. Back up the media directory alongside PostgreSQL. The API does not configure PostgreSQL, DNS, Nginx, TLS, backups, or a process supervisor.
