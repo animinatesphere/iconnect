@@ -2995,6 +2995,34 @@ button, a { -webkit-tap-highlight-color: transparent; }
   .video-studio-card { padding: 11px; }
 }
 
+.video-studio-link { display: inline-flex; align-items: center; gap: 7px; text-decoration: none; }
+.video-studio-layout { grid-template-columns: minmax(0, 1fr) minmax(240px, .55fr); }
+.video-studio-form { align-content: start; }
+.video-field-optional { display: inline; color: #999a90; font-size: 8px; font-weight: 400; }
+.video-upload-dropzone input { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; clip-path: inset(50%); }
+.video-upload-dropzone:focus-within { outline: 2px solid #8a9b63; outline-offset: 2px; }
+.video-card-caption { margin: 4px 10px 11px; color: #77786f; font-size: 9px; line-height: 1.5; overflow-wrap: anywhere; }
+.video-error-message, .video-success-message { display: flex; align-items: center; gap: 9px; margin: 0 0 12px; padding: 10px 12px; border: 1px solid #f0d8d2; border-radius: 8px; background: #fff7f5; color: #8d4a3e; font-size: 10px; line-height: 1.5; }
+.video-error-message button { margin-left: auto; border: 0; background: transparent; color: inherit; font: inherit; font-weight: 700; text-decoration: underline; cursor: pointer; }
+.video-success-message { border-color: #e1e9d4; background: #f5f8ee; color: #5f7040; }
+.video-success-message a { margin-left: auto; color: inherit; font-weight: 700; }
+.video-upload-progress { display: grid; gap: 7px; color: #686a60; font-size: 9px; }
+.video-upload-progress > div { display: flex; justify-content: space-between; gap: 8px; }
+.video-upload-progress progress { width: 100%; height: 8px; accent-color: #819653; }
+.video-upload-progress small { color: #93948b; font-size: 8px; }
+.video-studio-page .video-demo-banner { margin-bottom: 15px; }
+
+@media (max-width: 760px) {
+  .video-studio-layout { grid-template-columns: minmax(0, 1fr); }
+  .video-studio-layout .video-studio-column { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+@media (max-width: 520px) {
+  .video-studio-layout .video-studio-column { grid-template-columns: minmax(0, 1fr); }
+  .video-error-message, .video-success-message { align-items: flex-start; flex-wrap: wrap; }
+  .video-success-message a { margin-left: 24px; }
+}
+
 .admin-metric-recent { border-color: #e4e9d8; background: #fbfcf8; }
 .admin-content-controls { display: flex; align-items: center; gap: 8px; }
 .admin-content-controls select { min-height: 34px; padding: 0 9px; border: 1px solid #e8e7e0; border-radius: 7px; background: white; color: #55574f; font: inherit; font-size: 9px; }

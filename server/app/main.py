@@ -14,7 +14,7 @@ from datetime import datetime, timedelta, timezone
 from io import BytesIO
 from pathlib import Path
 from typing import Any, Callable, Deque, Dict, List, Literal, Optional, Tuple
-from urllib.parse import urlsplit
+from urllib.parse import unquote, urlsplit
 from uuid import UUID, uuid4
 from fastapi import Depends, FastAPI, Query, Request, Response, WebSocket, WebSocketDisconnect
 from fastapi.exceptions import RequestValidationError
@@ -50,6 +50,7 @@ MESSAGE_REQUEST_LIMIT = 120
 MEDIA_UPLOAD_WINDOW_SECONDS = 15 * 60
 MEDIA_UPLOAD_REQUEST_LIMIT = 30
 MAX_IMAGE_BYTES = 4 * 1024 * 1024
+MAX_VIDEO_BYTES = 250 * 1024 * 1024
 MAX_IMAGE_PIXELS = 20_000_000
 MAX_IMAGES_PER_RECORD = 5
 DEFAULT_MEDIA_DIRECTORY = Path(__file__).resolve().parents[2] / "uploads"
@@ -466,6 +467,24 @@ def public_user(user: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def public_video(video: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "id": str(video["id"]),
+        "title": video["title"],
+        "caption": video["caption"],
+        "url": "/api/videos/{}/stream".format(video["id"]),
+        "contentType": video["content_type"],
+        "fileSize": video["file_size"],
+        "createdAt": video["created_at"].isoformat(),
+        "author": {
+            "id": str(video["user_id"]),
+            "name": video["display_name"],
+            "username": video["username"],
+            "image": video.get("profile_image_url"),
+        },
+    }
+
+
 def _send_otp_email(
     email: str,
     name: str,
@@ -585,6 +604,7 @@ def create_app(
         if configured_media_directory.is_absolute()
         else DEFAULT_MEDIA_DIRECTORY.parent / configured_media_directory
     )
+    videos_directory = uploads_directory / "videos"
     cookie_name = "__Host-iconnect.sid" if settings.production else "iconnect.sid"
 
     def publish_realtime(
@@ -711,6 +731,8 @@ def create_app(
                 body_limit = (
                     MAX_IMAGE_BYTES
                     if request.url.path == "/api/media/images"
+                    else MAX_VIDEO_BYTES
+                    if request.url.path == "/api/videos"
                     else MAX_REQUEST_BYTES
                 )
                 if int(content_length) > body_limit:
@@ -1204,6 +1226,157 @@ def create_app(
             media_type="image/webp",
             headers={"Cache-Control": "public, max-age=31536000, immutable"},
         )
+
+    @app.post("/api/videos", status_code=201)
+    async def create_video(request: Request) -> Dict[str, Any]:
+        user = require_user(request)
+        enforce_media_upload_rate_limit(request)
+        content_type = request.headers.get("content-type", "").split(";", 1)[0].strip().lower()
+        if content_type not in {"video/mp4", "video/webm"}:
+            raise ApiError(400, "invalid_video", "Choose an MP4 or WebM video.")
+        try:
+            title = unquote(request.headers.get("x-video-title", ""), errors="strict").strip()
+            caption = unquote(request.headers.get("x-video-caption", ""), errors="strict").strip()
+        except UnicodeDecodeError as error:
+            raise ApiError(400, "invalid_video", "Video details contain invalid text.") from error
+        if not title or len(title) > 120 or len(caption) > 500:
+            raise ApiError(400, "invalid_video", "Add a title (up to 120 characters) and a caption up to 500 characters.")
+
+        filename = uuid4().hex + (".mp4" if content_type == "video/mp4" else ".webm")
+        temporary_path = videos_directory / (filename + ".uploading")
+        video_path = videos_directory / filename
+        total_size = 0
+        signature = bytearray()
+        try:
+            await asyncio.to_thread(videos_directory.mkdir, parents=True, exist_ok=True)
+            with temporary_path.open("xb") as output:
+                async for chunk in request.stream():
+                    if not chunk:
+                        continue
+                    total_size += len(chunk)
+                    if total_size > MAX_VIDEO_BYTES:
+                        raise ApiError(413, "video_too_large", "Videos must be 250 MB or smaller.")
+                    if len(signature) < 16:
+                        signature.extend(chunk[:16 - len(signature)])
+                    output.write(chunk)
+            valid_signature = (
+                len(signature) >= 12 and signature[4:8] == b"ftyp"
+                if content_type == "video/mp4"
+                else signature.startswith(b"\x1a\x45\xdf\xa3")
+            )
+            if not total_size or not valid_signature:
+                raise ApiError(400, "invalid_video", "The uploaded file does not match its video format.")
+            await asyncio.to_thread(temporary_path.replace, video_path)
+            with database.connection() as connection:
+                inserted = connection.execute(
+                    """INSERT INTO videos (user_id, title, caption, filename, content_type, file_size)
+                       VALUES (%s, %s, %s, %s, %s, %s)
+                       RETURNING id""",
+                    (user["id"], title, caption, filename, content_type, total_size),
+                ).fetchone()
+                if not inserted:
+                    raise ApiError(500, "internal_error", "The video could not be published.")
+                row = connection.execute(
+                    """SELECT video.id, video.user_id, video.title, video.caption,
+                              video.filename, video.content_type, video.file_size, video.created_at,
+                              author.display_name, author.username, author.profile_image_url
+                       FROM videos video
+                       JOIN users author ON author.id = video.user_id
+                       WHERE video.id = %s""",
+                    (inserted["id"],),
+                ).fetchone()
+        except ApiError:
+            temporary_path.unlink(missing_ok=True)
+            if video_path.exists():
+                video_path.unlink(missing_ok=True)
+            raise
+        except OSError as error:
+            temporary_path.unlink(missing_ok=True)
+            if video_path.exists():
+                video_path.unlink(missing_ok=True)
+            logger.exception("Could not save an uploaded video for user %s", user["id"])
+            raise ApiError(500, "media_unavailable", "The video could not be saved. Check server media storage.") from error
+        except Exception:
+            temporary_path.unlink(missing_ok=True)
+            if video_path.exists():
+                video_path.unlink(missing_ok=True)
+            raise
+        if not row:
+            video_path.unlink(missing_ok=True)
+            raise ApiError(500, "internal_error", "The published video could not be loaded.")
+        publish_realtime({"type": "video.created", "videoId": str(row["id"])})
+        return {"video": public_video(row)}
+
+    @app.get("/api/videos")
+    def list_videos(
+        request: Request,
+        query: Optional[str] = Query(default=None, max_length=80),
+        view: Literal["all", "mine"] = "all",
+        limit: int = Query(default=50, ge=1, le=100),
+    ) -> Dict[str, Any]:
+        user = require_user(request)
+        normalized_query = (query or "").strip().lower()
+        if normalized_query and len(normalized_query) < 2:
+            raise ApiError(400, "invalid_input", "Enter at least two characters to search.")
+        filters = []
+        parameters: List[Any] = []
+        if view == "mine":
+            filters.append("video.user_id = %s")
+            parameters.append(user["id"])
+        if normalized_query:
+            filters.append("strpos(lower(video.title || ' ' || video.caption || ' ' || author.display_name), %s) > 0")
+            parameters.append(normalized_query)
+        parameters.append(limit)
+        where_clause = " AND ".join(filters) if filters else "TRUE"
+        with database.connection() as connection:
+            rows = connection.execute(
+                """SELECT video.id, video.user_id, video.title, video.caption,
+                          video.filename, video.content_type, video.file_size, video.created_at,
+                          author.display_name, author.username, author.profile_image_url
+                   FROM videos video
+                   JOIN users author ON author.id = video.user_id
+                   WHERE {}
+                   ORDER BY video.created_at DESC, video.id DESC
+                   LIMIT %s""".format(where_clause),
+                tuple(parameters),
+            ).fetchall()
+        return {"videos": [public_video(row) for row in rows]}
+
+    @app.get("/api/videos/{video_id}/stream")
+    def stream_video(video_id: UUID, request: Request) -> Response:
+        require_user(request)
+        with database.connection() as connection:
+            video = connection.execute(
+                "SELECT filename, content_type FROM videos WHERE id = %s",
+                (video_id,),
+            ).fetchone()
+        if not video:
+            raise ApiError(404, "video_not_found", "That video could not be found.")
+        video_path = videos_directory / video["filename"]
+        if not video_path.is_file():
+            raise ApiError(404, "video_not_found", "That video file is no longer available.")
+        return FileResponse(
+            video_path,
+            media_type=video["content_type"],
+            headers={"Cache-Control": "private, no-store", "Accept-Ranges": "bytes"},
+        )
+
+    @app.delete("/api/videos/{video_id}", status_code=204)
+    def delete_video(video_id: UUID, request: Request) -> Response:
+        user = require_user(request)
+        with database.connection() as connection:
+            removed = connection.execute(
+                "DELETE FROM videos WHERE id = %s AND user_id = %s RETURNING filename",
+                (video_id, user["id"]),
+            ).fetchone()
+        if not removed:
+            raise ApiError(404, "video_not_found", "That video could not be found.")
+        try:
+            (videos_directory / removed["filename"]).unlink(missing_ok=True)
+        except OSError:
+            logger.exception("Could not remove video media %s for user %s", video_id, user["id"])
+            raise ApiError(500, "media_unavailable", "The video record was removed, but its media file could not be deleted.")
+        return Response(status_code=204)
 
     @app.get("/api/health")
     def health() -> Dict[str, str]:

@@ -314,3 +314,20 @@ CREATE INDEX IF NOT EXISTS local_marketplace_listings_published_created_at_idx
 CREATE INDEX IF NOT EXISTS local_marketplace_listings_category_location_idx
   ON local_marketplace_listings(category, lower(location))
   WHERE published;
+
+CREATE TABLE IF NOT EXISTS videos (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  title varchar(120) NOT NULL CHECK (char_length(btrim(title)) BETWEEN 1 AND 120),
+  caption varchar(500) NOT NULL DEFAULT '',
+  filename varchar(40) NOT NULL UNIQUE,
+  content_type varchar(32) NOT NULL CHECK (content_type IN ('video/mp4', 'video/webm')),
+  file_size bigint NOT NULL CHECK (file_size > 0),
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS videos_created_at_idx
+  ON videos(created_at DESC, id DESC);
+
+CREATE INDEX IF NOT EXISTS videos_user_created_at_idx
+  ON videos(user_id, created_at DESC, id DESC);

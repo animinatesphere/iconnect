@@ -171,6 +171,62 @@ class FakeConnection:
             "select follower.id, follower.display_name",
         )):
             return FakeResult(rows=[])
+        if sql.startswith("insert into videos"):
+            video = {
+                "id": str(uuid4()),
+                "user_id": str(parameters[0]),
+                "title": parameters[1],
+                "caption": parameters[2],
+                "filename": parameters[3],
+                "content_type": parameters[4],
+                "file_size": parameters[5],
+                "created_at": datetime.now(timezone.utc),
+            }
+            self.state["videos"].append(video)
+            return FakeResult({"id": video["id"]})
+        if sql.startswith("select video.id, video.user_id"):
+            if "where video.id = %s" in sql:
+                video_id = str(parameters[0])
+                video = next((item for item in self.state["videos"] if item["id"] == video_id), None)
+                return FakeResult(self._video_row(video) if video else None)
+            videos = list(reversed(self.state["videos"]))
+            parameter_index = 0
+            if "video.user_id = %s" in sql:
+                owner_id = str(parameters[parameter_index])
+                parameter_index += 1
+                videos = [item for item in videos if item["user_id"] == owner_id]
+            if "strpos(lower(video.title" in sql:
+                term = parameters[parameter_index]
+                parameter_index += 1
+                videos = [
+                    item for item in videos
+                    if term in "{} {} {}".format(
+                        item["title"],
+                        item["caption"],
+                        self.state["user"]["display_name"],
+                    ).lower()
+                ]
+            return FakeResult(rows=[self._video_row(video) for video in videos[:parameters[parameter_index]]])
+        if sql.startswith("select filename, content_type from videos"):
+            video_id = str(parameters[0])
+            video = next((item for item in self.state["videos"] if item["id"] == video_id), None)
+            return FakeResult({
+                "filename": video["filename"],
+                "content_type": video["content_type"],
+            } if video else None)
+        if sql.startswith("delete from videos"):
+            video_id, user_id = map(str, parameters)
+            video = next(
+                (
+                    item for item in self.state["videos"]
+                    if item["id"] == video_id and item["user_id"] == user_id
+                ),
+                None,
+            )
+            if not video:
+                return FakeResult()
+            self.state["videos"].remove(video)
+            return FakeResult({"filename": video["filename"]})
         if sql.startswith("insert into social_posts"):
             post = {
                 "id": str(uuid4()),
@@ -574,6 +630,15 @@ class FakeConnection:
             "bookmarked_by_me": (post["id"], viewer_id) in self.state["bookmarks"],
         }
 
+    def _video_row(self, video):
+        user = self.state["user"]
+        return {
+            **video,
+            "display_name": user["display_name"],
+            "username": user["username"],
+            "profile_image_url": user.get("profile_image_url"),
+        }
+
     def _marketplace_product_row(self, product):
         user = self.state["user"]
         return {
@@ -667,6 +732,7 @@ class FakePool:
             "verification": None,
             "sessions": {},
             "posts": [],
+            "videos": [],
             "products": [],
             "local_listings": [],
             "communities": [],
@@ -932,6 +998,99 @@ class AuthFlowTests(unittest.TestCase):
             "image_urls": ["/api/media/images/{}.png".format("a" * 32)] * 6,
         })
         self.assertEqual(post.status_code, 400)
+
+    def test_signed_in_members_can_upload_watch_search_and_delete_videos(self):
+        self.assertEqual(self.client.get("/api/videos").status_code, 401)
+        unauthorized_upload = self.client.post(
+            "/api/videos",
+            content=b"\x00\x00\x00\x18ftypisomxxxx",
+            headers={
+                "Content-Type": "video/mp4",
+                "X-Video-Title": "Unauthorized",
+            },
+        )
+        self.assertEqual(unauthorized_upload.status_code, 401)
+
+        signup = self.client.post("/api/auth/register", json={
+            "name": "Video User",
+            "email": "new@example.com",
+            "password": "a long test password",
+        })
+        self.assertEqual(signup.status_code, 202)
+        verified = self.client.post("/api/auth/verify-email", json={
+            "email": "new@example.com",
+            "code": self.delivered_code,
+        })
+        self.assertEqual(verified.status_code, 200)
+
+        invalid_video = self.client.post(
+            "/api/videos",
+            content=b"not a video",
+            headers={
+                "Content-Type": "video/mp4",
+                "X-Video-Title": "Invalid",
+            },
+        )
+        self.assertEqual(invalid_video.status_code, 400)
+        self.assertEqual(invalid_video.json()["error"]["code"], "invalid_video")
+
+        video_bytes = b"\x00\x00\x00\x18ftypisomxxxx"
+        uploaded = self.client.post(
+            "/api/videos",
+            content=video_bytes,
+            headers={
+                "Content-Type": "video/mp4",
+                "X-Video-Title": "Caf%C3%A9 walk",
+                "X-Video-Caption": "A%20short%20clip",
+            },
+        )
+        self.assertEqual(uploaded.status_code, 201, uploaded.text)
+        video = uploaded.json()["video"]
+        self.assertEqual(video["title"], "Café walk")
+        self.assertEqual(video["caption"], "A short clip")
+        self.assertEqual(video["contentType"], "video/mp4")
+        self.assertEqual(video["fileSize"], len(video_bytes))
+        self.assertEqual(video["author"]["name"], "Video User")
+
+        listed = self.client.get("/api/videos?view=mine&query=Caf%C3%A9")
+        self.assertEqual(listed.status_code, 200, listed.text)
+        self.assertEqual([item["id"] for item in listed.json()["videos"]], [video["id"]])
+        self.assertEqual(self.client.get("/api/videos?query=x").status_code, 400)
+
+        playback = self.client.get(video["url"])
+        self.assertEqual(playback.status_code, 200, playback.text)
+        self.assertEqual(playback.headers["content-type"], "video/mp4")
+        self.assertEqual(playback.content, video_bytes)
+
+        deleted = self.client.delete("/api/videos/{}".format(video["id"]))
+        self.assertEqual(deleted.status_code, 204)
+        self.assertEqual(self.client.get(video["url"]).status_code, 404)
+        self.assertEqual(self.pool.state["videos"], [])
+
+    def test_video_upload_enforces_stream_size_limit(self):
+        self.client.post("/api/auth/register", json={
+            "name": "Video User",
+            "email": "new@example.com",
+            "password": "a long test password",
+        })
+        self.client.post("/api/auth/verify-email", json={
+            "email": "new@example.com",
+            "code": self.delivered_code,
+        })
+
+        with patch("server.app.main.MAX_VIDEO_BYTES", 16):
+            oversized = self.client.post(
+                "/api/videos",
+                content=iter((b"\x00\x00\x00\x18ftypisomxxxx!",)),
+                headers={
+                    "Content-Type": "video/mp4",
+                    "X-Video-Title": "Too large",
+                },
+            )
+        self.assertEqual(oversized.status_code, 413)
+        self.assertEqual(self.pool.state["videos"], [])
+        videos_directory = Path(self.media_tmp.name) / "videos"
+        self.assertFalse(videos_directory.exists() and list(videos_directory.iterdir()))
 
     def test_rejects_foreign_origin_and_extra_fields(self):
         blocked = self.client.post(
