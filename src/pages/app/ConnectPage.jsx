@@ -156,7 +156,7 @@ export default function ConnectPage() {
       setCommunityDraft({ name: '', description: '' })
       setCommunityImage(null)
       setCommunityFormOpen(false)
-      setNotice(`You created ${community.name} and joined its membership.`)
+      navigate(`/app/communities/${community.id}`)
     } catch (createError) {
       setError(createError instanceof Error ? createError.message : 'Could not create this community.')
     } finally {
@@ -165,13 +165,23 @@ export default function ConnectPage() {
   }
 
   async function toggleCommunity(community) {
+    if (community.isAdmin || community.joinedByMe || community.joinRequestedByMe) {
+      navigate(`/app/communities/${community.id}`)
+      return
+    }
     if (pendingCommunityIds.includes(community.id)) return
     setPendingCommunityIds((current) => [...current, community.id])
     try {
-      const updated = await setCommunityJoined(community.id, !community.joinedByMe)
+      const updated = await setCommunityJoined(community.id, true)
       setCommunities((current) => current.map((item) => item.id === updated.id ? updated : item))
       setError('')
-      setNotice(updated.joinedByMe ? `You joined ${community.name}.` : `You left ${community.name}.`)
+      if (updated.joinedByMe) {
+        navigate(`/app/communities/${community.id}`)
+      } else if (updated.joinRequestedByMe) {
+        navigate(`/app/communities/${community.id}`)
+      } else {
+        setNotice(`Could not join ${community.name}.`)
+      }
     } catch (membershipError) {
       setError(membershipError instanceof Error ? membershipError.message : 'Could not update your community membership.')
     } finally {
@@ -212,7 +222,7 @@ export default function ConnectPage() {
         }} disabled={creatingCommunity} /></label>{communityImagePreview && <img className="community-cover-preview" src={communityImagePreview} alt="Selected community cover" />}<button type="submit" className="app-primary-button" disabled={creatingCommunity}>{creatingCommunity ? 'Creating…' : 'Create community'}</button></form>}
         {communityError && <p className="feed-interaction-notice feed-error" role="alert">{communityError}</p>}
         {loadingCommunities && <p className="connect-empty-state">Loading communities…</p>}
-        {!loadingCommunities && !communityError && communities.length > 0 && <div className="connect-community-list">{communities.map((community) => <article key={community.id}>{community.imageUrl ? <img className="connect-community-image" src={community.imageUrl} alt="" /> : <span className="connect-community-icon"><Compass size={18} /></span>}<div><h3>{community.name}</h3><p>{community.description}</p><small>{community.memberCount} {community.memberCount === 1 ? 'member' : 'members'} · Created {new Date(community.createdAt).toLocaleDateString()}</small></div><button type="button" className={community.joinedByMe ? 'joined-community-button' : 'connect-community-join'} onClick={() => toggleCommunity(community)} disabled={pendingCommunityIds.includes(community.id)}>{pendingCommunityIds.includes(community.id) ? 'Saving…' : community.joinedByMe ? 'Leave' : 'Join'}</button></article>)}</div>}
+        {!loadingCommunities && !communityError && communities.length > 0 && <div className="connect-community-list">{communities.map((community) => <article key={community.id}>{community.imageUrl ? <img className="connect-community-image" src={community.imageUrl} alt="" /> : <span className="connect-community-icon"><Compass size={18} /></span>}<div><button type="button" className="connect-community-open" onClick={() => navigate(`/app/communities/${community.id}`)}>{community.name}</button><p>{community.description}</p><small>{community.memberCount} {community.memberCount === 1 ? 'member' : 'members'} · Created {new Date(community.createdAt).toLocaleDateString()}</small></div><button type="button" className={community.joinedByMe || community.joinRequestedByMe ? 'joined-community-button' : 'connect-community-join'} onClick={() => toggleCommunity(community)} disabled={pendingCommunityIds.includes(community.id)}>{pendingCommunityIds.includes(community.id) ? 'Saving…' : community.joinRequestedByMe ? 'Requested' : community.joinedByMe ? 'Open' : 'Join'}</button></article>)}</div>}
         {!loadingCommunities && !communityError && communities.length === 0 && <p className="connect-empty-state">{search.length === 1 ? 'Enter at least two characters to search communities.' : `No communities match “${search}”. Create one to get started.`}</p>}
         {activeTab === 'For you' && <button type="button" onClick={() => setActiveTab('Communities')}>See communities <ArrowUpRight size={14} /></button>}
       </section>}

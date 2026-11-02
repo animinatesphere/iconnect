@@ -1058,6 +1058,8 @@ button, a { -webkit-tap-highlight-color: transparent; }
 .connect-community-list p { margin: 0 0 4px; color: #77796f; font-size: 8px; line-height: 1.5; }
 .connect-community-list small { color: #99998f; font-size: 7px; }
 .connect-community-join, .connect-community-list .joined-community-button { min-width: 54px; padding: 7px 9px; border: 1px solid #dfe5d0; border-radius: 5px; background: #f6f8ef; color: #6c7d4a; font-size: 8px; font-weight: 700; cursor: pointer; }
+.connect-community-open { padding: 0; border: 0; background: transparent; color: #45473f; font: 700 10px 'Manrope', sans-serif; text-align: left; cursor: pointer; }
+.connect-community-open:hover { color: #71824e; }
 .connect-communities-section > .connect-empty-state { margin: 0; }
 .connect-communities-section > button:not(.connect-create-community) { display: inline-flex; align-items: center; gap: 5px; margin-top: 10px; padding: 0; border: 0; background: transparent; color: #6f7c4c; font-size: 8px; font-weight: 700; cursor: pointer; }
 .follow-button { width: 100%; display: flex; align-items: center; justify-content: center; gap: 7px; margin-top: 11px; padding: 8px; border: 1px solid #dfe5d0; border-radius: 5px; background: #f6f8ef; color: #6c7d4a; font-size: 8px; font-weight: 700; }
@@ -1073,6 +1075,100 @@ button, a { -webkit-tap-highlight-color: transparent; }
 .suggested-community-card button { display: flex; align-items: center; gap: 6px; margin-top: 9px; padding: 0; border: 0; background: none; color: #788550; font-size: 7px; font-weight: 700; }
 .connect-safety-note { display: flex; align-items: center; gap: 10px; margin-top: 20px; padding: 12px; border: 1px solid #f0e9df; border-radius: 7px; background: #fbf7f0; color: #ae8c68; }
 .connect-safety-note p { flex: 1; margin: 0; color: #898377; font-size: 8px; line-height: 1.6; }.connect-safety-note strong { color: #756d5e; }
+.community-page { max-width: 980px; }
+.community-page > .app-back-link { margin: 0 0 14px; }
+.community-page-loading { padding: 36px 0; color: #828479; font-size: 13px; text-align: center; }
+.community-hero { position: relative; min-height: 330px; overflow: hidden; display: flex; align-items: flex-end; border-radius: 16px; background: #51594a; isolation: isolate; }
+.community-hero > img, .community-hero-placeholder, .community-hero-overlay { position: absolute; inset: 0; width: 100%; height: 100%; }
+.community-hero > img { z-index: -2; object-fit: cover; }
+.community-hero-placeholder { z-index: -2; display: grid; place-items: center; background: radial-gradient(circle at 75% 16%, #b5c29a, transparent 34%), linear-gradient(135deg, #45513c, #899471); color: #ffffffa8; }
+.community-hero-overlay { z-index: -1; background: linear-gradient(90deg, #191c18e8 0%, #232620b8 50%, #20231c33 100%), linear-gradient(0deg, #171a16a8, transparent 60%); }
+.community-hero-content { width: min(100%, 750px); padding: 35px clamp(20px, 5vw, 48px); color: white; }
+.community-hero-content .app-page-eyebrow { color: #d3ddc2; }
+.community-hero-content h1 { margin: 8px 0; font: 700 clamp(28px, 4vw, 42px)/1.1 'Manrope', sans-serif; letter-spacing: -1.5px; }
+.community-hero-content > p { max-width: 640px; margin: 0; color: #f1f1eb; font-size: 13px; line-height: 1.65; }
+.community-hero-meta { display: flex; flex-wrap: wrap; gap: 16px; margin-top: 16px; color: #e2e4dc; font-size: 10px; }
+.community-hero-meta > span { display: inline-flex; align-items: center; gap: 6px; }
+.community-hero-actions { display: flex; gap: 8px; margin-top: 19px; }
+.community-hero-actions .app-primary-button { min-height: 39px; padding: 0 15px; font-size: 11px; }
+.community-settings-button { min-height: 39px; display: inline-flex; align-items: center; gap: 7px; padding: 0 13px; border: 1px solid #ffffff66; border-radius: 7px; background: #ffffff1a; color: white; font-size: 11px; font-weight: 700; cursor: pointer; }
+.community-rules-card, .community-admin-panel, .community-post-composer, .community-post-card, .community-posting-locked, .community-join-prompt { margin-top: 16px; padding: 18px; border: 1px solid #eae9e2; border-radius: 12px; background: #fffefa; }
+.community-rules-card > div { display: flex; align-items: center; gap: 8px; color: #788651; }
+.community-rules-card h2, .community-panel-heading h2, .community-feed-heading h2 { margin: 0; color: #41433b; font: 600 16px 'Manrope', sans-serif; }
+.community-rules-card > p { margin: 10px 0 0; color: #74766c; font-size: 12px; line-height: 1.7; white-space: pre-wrap; }
+.community-admin-panel { display: grid; grid-template-columns: minmax(0, 1fr) minmax(220px, .7fr); gap: 22px; }
+.community-admin-panel > .community-panel-heading { grid-column: 1 / -1; margin-bottom: -6px; }
+.community-panel-heading { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 12px; color: #7d875c; }
+.community-panel-heading .app-page-eyebrow { color: #92958a; }
+.community-panel-heading h2 { margin-top: 4px; }
+.community-panel-heading h3 { margin: 0; color: #41433b; font: 600 14px 'Manrope', sans-serif; }
+.community-panel-heading > span { color: #8b8d82; font-size: 10px; }
+.community-settings-form { display: grid; gap: 12px; }
+.community-settings-form > label:not(.media-upload-picker) { display: grid; gap: 6px; color: #65675e; font-size: 10px; font-weight: 700; }
+.community-settings-form input:not([type="checkbox"]), .community-settings-form textarea, .community-settings-form select, .community-post-composer textarea { width: 100%; padding: 10px 11px; border: 1px solid #e6e5de; border-radius: 7px; outline: 0; background: white; color: #44463f; font: inherit; font-size: 12px; line-height: 1.5; }
+.community-settings-form input:focus, .community-settings-form textarea:focus, .community-settings-form select:focus, .community-post-composer textarea:focus { border-color: #b6c493; box-shadow: 0 0 0 3px #dce5c766; }
+.community-settings-form textarea, .community-post-composer textarea { resize: vertical; }
+.community-settings-preview { width: 100%; max-height: 170px; border-radius: 8px; object-fit: cover; }
+.community-posting-setting { display: flex; align-items: flex-start; gap: 9px; padding: 11px; border: 1px solid #e9ebdf; border-radius: 8px; background: #f8f9f4; }
+.community-posting-setting input { width: 15px; height: 15px; margin: 1px 0 0; accent-color: #71824e; }
+.community-posting-setting span { display: grid; gap: 4px; }
+.community-posting-setting strong { color: #52564a; font-size: 10px; }
+.community-posting-setting small { color: #898b80; font-size: 9px; }
+.community-settings-form > .app-primary-button { justify-self: start; min-height: 37px; font-size: 10px; }
+.community-member-management { padding-left: 18px; border-left: 1px solid #efeee8; }
+.community-member-row { display: flex; align-items: center; gap: 9px; padding: 9px 0; border-top: 1px solid #f0efe9; }
+.community-member-row > .avatar { width: 34px; height: 34px; flex-basis: 34px; }
+.community-member-row > span { flex: 1; display: grid; gap: 3px; min-width: 0; }
+.community-member-row strong { overflow: hidden; color: #55574f; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.community-member-row small { color: #96978d; font-size: 9px; }
+.community-member-row > button { padding: 6px 8px; border: 1px solid #eddcd7; border-radius: 6px; background: #fff8f6; color: #a45b4e; font-size: 9px; font-weight: 700; cursor: pointer; }
+.community-post-composer-heading { display: flex; align-items: center; gap: 10px; margin-bottom: 13px; }
+.community-post-composer-heading > .avatar { width: 40px; height: 40px; flex-basis: 40px; }
+.community-post-composer-heading > span, .community-post-card header > div { display: grid; gap: 4px; }
+.community-post-composer-heading strong, .community-post-card header strong { color: #4a4c44; font-size: 11px; }
+.community-post-composer-heading small, .community-post-card header small { color: #92948a; font-size: 9px; }
+.community-post-composer textarea { min-height: 95px; }
+.community-composer-footer { display: flex; align-items: center; gap: 12px; margin-top: 10px; }
+.community-composer-footer > small { flex: 1; color: #999a91; font-size: 9px; text-align: right; }
+.community-add-photo { position: relative; display: inline-flex; align-items: center; gap: 6px; min-height: 35px; padding: 0 10px; border: 1px solid #e7e8df; border-radius: 7px; background: #fafbf7; color: #6d7b4e; font-size: 10px; font-weight: 700; cursor: pointer; }
+.community-add-photo input { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; cursor: pointer; }
+.community-composer-footer .app-primary-button { min-height: 36px; font-size: 10px; }
+.community-image-previews { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+.community-image-previews > div { position: relative; width: 76px; height: 76px; overflow: hidden; border-radius: 8px; }
+.community-image-previews img { width: 100%; height: 100%; object-fit: cover; }
+.community-image-previews button { position: absolute; top: 4px; right: 4px; display: grid; width: 23px; height: 23px; place-items: center; border: 0; border-radius: 50%; background: #2228; color: white; cursor: pointer; }
+.community-feed-section { margin-top: 21px; }
+.community-feed-heading { display: flex; align-items: end; justify-content: space-between; gap: 10px; margin-bottom: 11px; }
+.community-feed-heading h2 { margin-top: 4px; font-size: 19px; }
+.community-feed-heading > span { color: #919389; font-size: 10px; }
+.community-post-card { margin-top: 10px; }
+.community-post-card header { display: flex; align-items: center; gap: 10px; }
+.community-post-card header > .avatar { width: 40px; height: 40px; flex-basis: 40px; }
+.community-post-card header > button { display: grid; width: 34px; height: 34px; place-items: center; margin-left: auto; border: 0; border-radius: 7px; background: transparent; color: #85877c; cursor: pointer; }
+.community-post-card header > button:hover { background: #f3f4ed; color: #5f6e45; }
+.community-post-card > p { margin: 14px 0; color: #55574f; font-size: 13px; line-height: 1.7; white-space: pre-wrap; overflow-wrap: anywhere; }
+.community-post-images { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 5px; overflow: hidden; border-radius: 9px; }
+.community-post-images img { width: 100%; max-height: 420px; aspect-ratio: 1.2; object-fit: cover; background: #f1f0eb; }
+.community-post-images-1 { grid-template-columns: 1fr; }
+.community-post-images-1 img { max-height: 520px; aspect-ratio: 1.5; }
+.community-post-images-3 img:first-child { grid-row: span 2; height: 100%; }
+.community-posting-locked { display: flex; align-items: center; gap: 10px; background: #f7f8f2; color: #747b5e; font-size: 11px; line-height: 1.5; }
+.community-join-prompt { display: grid; justify-items: center; padding: 38px 20px; color: #7a8755; text-align: center; }
+.community-join-prompt h2 { margin: 10px 0 5px; color: #41433b; font: 600 18px 'Manrope', sans-serif; }
+.community-join-prompt p { max-width: 400px; margin: 0 0 15px; color: #85877c; font-size: 11px; line-height: 1.6; }
+.community-join-prompt .app-primary-button { min-height: 38px; font-size: 10px; }
+@media (max-width: 760px) {
+  .community-hero { min-height: 300px; border-radius: 12px; }
+  .community-hero-content { padding: 24px 18px; }
+  .community-hero-meta { gap: 8px 12px; font-size: 9px; }
+  .community-admin-panel { grid-template-columns: 1fr; gap: 18px; padding: 14px; }
+  .community-member-management { padding: 15px 0 0; border-top: 1px solid #efeee8; border-left: 0; }
+  .community-post-composer, .community-post-card { padding: 14px; }
+  .community-composer-footer { flex-wrap: wrap; gap: 8px; }
+  .community-composer-footer > small { flex-basis: 100%; order: 2; text-align: left; }
+  .community-composer-footer .app-primary-button { margin-left: auto; }
+  .community-post-images img { max-height: 280px; }
+}
 .invest-preview-banner, .assistant-disclaimer { display: flex; align-items: center; gap: 10px; padding: 12px; border: 1px solid #eadfd1; border-radius: 7px; background: #faf4ed; color: #aa8966; font-size: 8px; line-height: 1.6; }
 .invest-preview-banner strong, .assistant-disclaimer strong { color: #786b58; }
 .wallet-overview-card { max-width: 640px; min-height: 240px; position: relative; overflow: hidden; margin: 19px auto 30px; padding: 22px; border-radius: 12px; background: linear-gradient(130deg, #35392f, #252820 70%, #484b3e); color: #f9f8f0; }

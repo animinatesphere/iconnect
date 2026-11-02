@@ -20,6 +20,7 @@ import InboxPage from './pages/app/InboxPage.jsx'
 import CreatePage from './pages/app/CreatePage.jsx'
 import JobsPage from './pages/app/JobsPage.jsx'
 import ConnectPage from './pages/app/ConnectPage.jsx'
+import CommunityPage from './pages/app/CommunityPage.jsx'
 import InvestPage from './pages/app/InvestPage.jsx'
 import AssistantPage from './pages/app/AssistantPage.jsx'
 import AccountPage from './pages/app/AccountPage.jsx'
@@ -152,6 +153,7 @@ function AppRoutes() {
               <Route path="social" element={<SocialPage />} />
               <Route path="jobs" element={<JobsPage />} />
               <Route path="connect" element={<ConnectPage />} />
+              <Route path="communities/:communityId" element={<CommunityPage />} />
               <Route path="invest" element={<InvestPage />} />
               <Route path="assistant" element={<AssistantPage />} />
               <Route path="profile" element={<AccountPage />} />
