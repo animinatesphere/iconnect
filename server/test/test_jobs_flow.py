@@ -44,6 +44,14 @@ class FakeJobsConnection:
         if sql.startswith("select user_id from admin_roles"):
             return FakeResult()
 
+        if sql.startswith("select user_id from job_business_profiles"):
+            user_id = str(parameters[0])
+            return FakeResult(
+                {"user_id": user_id}
+                if user_id in self.state["business_profiles"]
+                else None
+            )
+
         if sql.startswith("insert into job_listings"):
             (
                 user_id,
@@ -206,6 +214,7 @@ class FakeJobsPool:
             "users": {},
             "sessions": {},
             "jobs": {},
+            "business_profiles": {},
             "bookmarks": set(),
             "applications": {},
         }
@@ -234,6 +243,9 @@ class JobsFlowTests(unittest.TestCase):
                 "username": username,
                 "email": "{}@example.com".format(username),
                 "email_verified_at": datetime.now(timezone.utc),
+            }
+            self.pool.state["business_profiles"][self.user_ids[key]] = {
+                "user_id": self.user_ids[key],
             }
         settings = Settings(
             app_origin="http://localhost:5173",
@@ -338,6 +350,21 @@ class JobsFlowTests(unittest.TestCase):
             }).status_code,
             403,
         )
+
+    def test_member_must_submit_company_details_and_cac_before_posting(self):
+        self.pool.state["business_profiles"].pop(self.user_ids["alice"])
+        listing = {
+            "title": "Product Designer",
+            "company": "Common Ground",
+            "location": "Lagos",
+            "employment_type": "Full-time",
+            "workplace_type": "hybrid",
+            "summary": "A role",
+            "description": "Role details",
+        }
+        blocked = self.clients["alice"].post("/api/jobs", json=listing)
+        self.assertEqual(blocked.status_code, 403)
+        self.assertEqual(blocked.json()["error"]["code"], "business_profile_required")
 
     def test_applications_are_repeat_safe_and_private_to_listing_owner(self):
         job = self.create_listing(owner="bob")

@@ -8,6 +8,7 @@ import RoadmapPage from './pages/RoadmapPage.jsx'
 import EarlyAccessPage from './pages/EarlyAccessPage.jsx'
 import NotFoundPage from './pages/NotFoundPage.jsx'
 import UserAppLayout from './components/UserAppLayout.jsx'
+import UserLoadingScreen from './components/UserLoadingScreen.jsx'
 import UserShell from './components/UserShell.jsx'
 import OnboardingPage from './pages/app/OnboardingPage.jsx'
 import AuthPage from './pages/app/AuthPage.jsx'
@@ -61,7 +62,7 @@ function RequireDemoSession() {
   }, [retry])
 
   if (status === 'checking') {
-    return <main className="auth-screen"><p className="backend-auth-status" role="status">Checking your account…</p></main>
+    return <UserLoadingScreen />
   }
   if (status === 'unauthenticated') return <Navigate to="/app/onboarding" replace />
   if (status === 'unavailable') {
