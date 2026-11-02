@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react'
-import { Bookmark, BriefcaseBusiness, Camera, ChevronDown, MapPin, Plus, Search, SlidersHorizontal, Users } from 'lucide-react'
+import { Bookmark, BriefcaseBusiness, Camera, CheckCircle2, ChevronDown, FileText, MapPin, Plus, Search, SlidersHorizontal, Users } from 'lucide-react'
 import AppPageHeader from '../../components/AppPageHeader.jsx'
-import { applyToJob, createJob, getJobApplications, getJobs, setJobSaved } from '../../utils/jobsApi.js'
+import { applyToJob, createJob, getJobApplications, getJobBusinessProfile, getJobs, setJobSaved, submitJobBusinessProfile } from '../../utils/jobsApi.js'
 import { uploadImage } from '../../utils/mediaApi.js'
 
 const filters = ['All opportunities', 'Remote', 'Hybrid', 'On-site', 'Saved roles', 'My applications', 'My listings']
@@ -15,6 +15,16 @@ const emptyDraft = {
   description: '',
   company_image_url: null,
 }
+const emptyBusinessProfile = {
+  company_name: '',
+  registration_number: '',
+  business_type: '',
+  business_address: '',
+  contact_phone: '',
+  description: '',
+}
+const maxBusinessDocumentBytes = 10 * 1024 * 1024
+const businessDocumentTypes = ['application/pdf', 'image/jpeg', 'image/png', 'image/webp']
 
 function collectionForFilter(filter) {
   if (filter === 'Saved roles') return 'saved'
@@ -50,6 +60,13 @@ export default function JobsPage() {
   const [applicantJobId, setApplicantJobId] = useState('')
   const [applicantsByJob, setApplicantsByJob] = useState({})
   const [loadingApplicants, setLoadingApplicants] = useState(false)
+  const [businessProfile, setBusinessProfile] = useState(null)
+  const [businessProfileLoading, setBusinessProfileLoading] = useState(true)
+  const [businessDraft, setBusinessDraft] = useState(emptyBusinessProfile)
+  const [businessDocument, setBusinessDocument] = useState(null)
+  const [showBusinessForm, setShowBusinessForm] = useState(false)
+  const [savingBusinessProfile, setSavingBusinessProfile] = useState(false)
+  const [businessUploadProgress, setBusinessUploadProgress] = useState(0)
 
   useEffect(() => {
     if (!companyImage) {
@@ -60,6 +77,30 @@ export default function JobsPage() {
     setCompanyImagePreview(preview)
     return () => URL.revokeObjectURL(preview)
   }, [companyImage])
+
+  useEffect(() => {
+    let active = true
+    getJobBusinessProfile()
+      .then((profile) => {
+        if (!active) return
+        setBusinessProfile(profile)
+        if (profile) {
+          setBusinessDraft({
+            company_name: profile.companyName,
+            registration_number: profile.registrationNumber,
+            business_type: profile.businessType,
+            business_address: profile.businessAddress,
+            contact_phone: profile.contactPhone,
+            description: profile.description,
+          })
+        }
+      })
+      .catch((loadError) => {
+        if (active) setError(loadError instanceof Error ? loadError.message : 'Could not load your company profile.')
+      })
+      .finally(() => { if (active) setBusinessProfileLoading(false) })
+    return () => { active = false }
+  }, [])
 
   useEffect(() => {
     let active = true
@@ -159,6 +200,49 @@ export default function JobsPage() {
     }
   }
 
+  function chooseBusinessDocument(event) {
+    const file = event.target.files?.[0]
+    event.target.value = ''
+    if (!file) return
+    if (!businessDocumentTypes.includes(file.type)) {
+      setError('Choose a CAC document in PDF, JPEG, PNG, or WebP format.')
+      return
+    }
+    if (file.size > maxBusinessDocumentBytes) {
+      setError('The CAC document must be 10 MB or smaller.')
+      return
+    }
+    setBusinessDocument(file)
+    setError('')
+  }
+
+  async function submitBusinessProfile(event) {
+    event.preventDefault()
+    if (!businessDocument) {
+      setError('Choose a CAC registration document before submitting your company details.')
+      return
+    }
+    setSavingBusinessProfile(true)
+    setBusinessUploadProgress(0)
+    setError('')
+    try {
+      const profile = await submitJobBusinessProfile(
+        businessDocument,
+        businessDraft,
+        setBusinessUploadProgress,
+      )
+      setBusinessProfile(profile)
+      setBusinessDocument(null)
+      setShowBusinessForm(false)
+      setShowCreateForm(true)
+      setNotice('Company details and CAC document saved. You can now post jobs.')
+    } catch (submitError) {
+      setError(submitError instanceof Error ? submitError.message : 'Could not submit your company details.')
+    } finally {
+      setSavingBusinessProfile(false)
+    }
+  }
+
   async function toggleApplicants(job) {
     if (applicantJobId === job.id) {
       setApplicantJobId('')
@@ -190,13 +274,43 @@ export default function JobsPage() {
   return (
     <div className="app-content-width">
       <AppPageHeader eyebrow="GROW AT YOUR OWN PACE" title="Job hub" description="Find opportunities shared across your world.">
-        <button className="app-primary-button" type="button" onClick={() => setShowCreateForm((open) => !open)}>
-          <Plus size={15} /> Post a role
+        <button className="app-primary-button" type="button" onClick={() => {
+          if (!businessProfile) {
+            setShowBusinessForm((open) => !open)
+            setShowCreateForm(false)
+          } else {
+            setShowCreateForm((open) => !open)
+          }
+        }} disabled={businessProfileLoading}>
+          <Plus size={15} /> {businessProfile ? 'Post a role' : 'Set up company to post'}
         </button>
       </AppPageHeader>
-      <div className="jobs-account-banner"><BriefcaseBusiness size={16} /><span><strong>Community job listings</strong> · Listings, saved roles, and applications are tied to your iConnect account. Verify details with the poster before sharing sensitive information.</span></div>
+      <div className="jobs-account-banner"><BriefcaseBusiness size={16} /><span><strong>Community job listings</strong> · Members submit company details and a CAC document once before posting roles. Listings, saved roles, and applications are tied to your iConnect account.</span></div>
       {error && <p className="feed-interaction-notice feed-error" role="alert">{error}</p>}
       {notice && <p className="feed-interaction-notice" role="status">{notice}</p>}
+
+      {businessProfile && <section className="jobs-business-profile">
+        <div><span className="jobs-business-profile-icon"><CheckCircle2 size={17} /></span><div><span className="app-page-eyebrow">EMPLOYER PROFILE SUBMITTED</span><h2>{businessProfile.companyName}</h2><p>{businessProfile.businessType} · CAC {businessProfile.registrationNumber}</p></div></div>
+        <p>{businessProfile.description}</p>
+        <div className="jobs-business-profile-details"><span>{businessProfile.businessAddress}</span><span>{businessProfile.contactPhone}</span><a href={businessProfile.documentUrl} target="_blank" rel="noreferrer"><FileText size={13} /> View submitted CAC document</a></div>
+        <button type="button" className="app-secondary-button" onClick={() => { setShowBusinessForm((open) => !open); setShowCreateForm(false) }}>Update company details</button>
+      </section>}
+
+      {showBusinessForm && <form className="jobs-create-form jobs-business-form" onSubmit={submitBusinessProfile}>
+        <div className="jobs-create-heading"><div><span className="app-page-eyebrow">EMPLOYER SETUP</span><h2>{businessProfile ? 'Update company details' : 'Register your company'}</h2></div><button type="button" className="app-secondary-button" onClick={() => setShowBusinessForm(false)}>Cancel</button></div>
+        <p className="jobs-form-note">Submit your company details and CAC registration document to unlock member job posting. Admins can view this information in your account details. Your document is stored privately and is not shown on public job listings.</p>
+        <div className="jobs-create-fields">
+          <label>Registered company name<input required maxLength={120} value={businessDraft.company_name} onChange={(event) => setBusinessDraft({ ...businessDraft, company_name: event.target.value })} /></label>
+          <label>CAC registration number<input required maxLength={80} value={businessDraft.registration_number} onChange={(event) => setBusinessDraft({ ...businessDraft, registration_number: event.target.value })} /></label>
+          <label>Business type / industry<input required maxLength={80} value={businessDraft.business_type} onChange={(event) => setBusinessDraft({ ...businessDraft, business_type: event.target.value })} placeholder="e.g. Retail, Technology, Services" /></label>
+          <label>Contact phone<input required type="tel" maxLength={40} value={businessDraft.contact_phone} onChange={(event) => setBusinessDraft({ ...businessDraft, contact_phone: event.target.value })} /></label>
+          <label className="jobs-create-wide">Registered business address<input required maxLength={240} value={businessDraft.business_address} onChange={(event) => setBusinessDraft({ ...businessDraft, business_address: event.target.value })} /></label>
+          <label className="jobs-create-wide">About the company<textarea required maxLength={1000} rows={4} value={businessDraft.description} onChange={(event) => setBusinessDraft({ ...businessDraft, description: event.target.value })} /></label>
+          <label className="jobs-create-wide jobs-cac-document-picker"><FileText size={15} />{businessDocument ? businessDocument.name : businessProfile ? 'Upload replacement CAC document (required)' : 'Upload CAC registration document'}<input type="file" accept="application/pdf,image/jpeg,image/png,image/webp" required onChange={chooseBusinessDocument} disabled={savingBusinessProfile} /><small>PDF, JPEG, PNG, or WebP · maximum 10 MB</small></label>
+        </div>
+        {savingBusinessProfile && <div className="jobs-cac-progress" role="status"><span>Uploading CAC document… {businessUploadProgress}%</span><progress max="100" value={businessUploadProgress} /></div>}
+        <button className="app-primary-button" type="submit" disabled={savingBusinessProfile || !businessDocument}>{savingBusinessProfile ? 'Submitting…' : 'Submit company details'}</button>
+      </form>}
 
       {showCreateForm && <form className="jobs-create-form" onSubmit={submitListing}>
         <div className="jobs-create-heading"><div><span className="app-page-eyebrow">EMPLOYER TOOLS</span><h2>Share an opportunity</h2></div><button type="button" className="app-secondary-button" onClick={() => setShowCreateForm(false)}>Cancel</button></div>

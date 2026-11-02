@@ -1,4 +1,43 @@
-import { apiRequest } from './api.js'
+import { ApiError, apiRequest } from './api.js'
+
+export async function getJobBusinessProfile() {
+  const payload = await apiRequest('/api/jobs/business-profile')
+  return payload.businessProfile
+}
+
+export function submitJobBusinessProfile(file, profile, onProgress = () => {}) {
+  return new Promise((resolve, reject) => {
+    const request = new XMLHttpRequest()
+    request.open('POST', '/api/jobs/business-profile')
+    request.withCredentials = true
+    request.timeout = 5 * 60 * 1000
+    request.setRequestHeader('Content-Type', file.type)
+    request.setRequestHeader('X-Company-Details', encodeURIComponent(JSON.stringify(profile)))
+    request.upload.addEventListener('progress', (event) => {
+      if (event.lengthComputable) onProgress(Math.round((event.loaded / event.total) * 100))
+    })
+    request.addEventListener('load', () => {
+      let payload
+      try {
+        payload = JSON.parse(request.responseText)
+      } catch {
+        reject(new Error('The server returned an invalid response. Try again later.'))
+        return
+      }
+      if (request.status < 200 || request.status >= 300) {
+        reject(new ApiError(
+          payload?.error?.message ?? 'The company profile could not be submitted.',
+          payload?.error?.code,
+        ))
+        return
+      }
+      resolve(payload.businessProfile)
+    })
+    request.addEventListener('error', () => reject(new Error('The CAC document upload failed. Check your connection and try again.')))
+    request.addEventListener('timeout', () => reject(new Error('The CAC document upload timed out. Check your connection and try again.')))
+    request.send(file)
+  })
+}
 
 export async function getJobs({ query = '', location = '', workplaceType = '', view = 'all' } = {}) {
   const params = new URLSearchParams()

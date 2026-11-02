@@ -28,6 +28,14 @@ export async function getAdminUserDetails(userId, { limit = 100, offset = 0 } = 
   return payload.user
 }
 
+export async function updateAdminUserPost(postId, { text, imageUrls }) {
+  const payload = await apiRequest(`/api/admin/posts/${encodeURIComponent(postId)}`, {
+    method: 'PUT',
+    body: JSON.stringify({ text, image_urls: imageUrls }),
+  })
+  return payload.post
+}
+
 export async function setAdminUserSuspended(userId, suspended) {
   return apiRequest(`/api/admin/users/${encodeURIComponent(userId)}/suspension`, {
     method: 'POST',

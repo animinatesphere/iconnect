@@ -102,7 +102,9 @@ All job routes require a verified, signed-in account:
 - `POST /api/jobs/{job_id}/applications` submits an optional cover letter. Duplicate applications do not create duplicate records, and listing owners cannot apply to their own roles.
 - `GET /api/jobs/{job_id}/applications` lists applicants only for the owner of that listing. Applicant email addresses are not returned.
 
-Listings, saved roles, and applications are stored in PostgreSQL. Listings are visible to signed-in members as soon as they're published; moderation, CV uploads, and employer application-status updates are not implemented. Members should verify listing details before sharing sensitive information.
+Before a member can post a role, they must submit their registered company name, CAC registration number, business type, business address, contact phone, company description, and a CAC document through `POST /api/jobs/business-profile`. The raw document body accepts PDF, JPEG, PNG, or WebP up to 10 MB; company fields are sent as percent-encoded JSON in `X-Company-Details`. A successful submission unlocks job posting immediately; it does not wait for admin approval. `GET /api/jobs/business-profile` returns the signed-in member's company details, and `GET /api/jobs/business-profile/document` serves only that member's document. `POST /api/jobs` enforces the company profile requirement on the server.
+
+Administrators can inspect an account's profile photo, contact email, company/CAC details, posts and images, comments, likes, bookmarks, private message text and photos, listings, jobs, applications, communities, and follow activity from the Users section. Message history is paginated with the rest of the account activity; account-detail reads and CAC document access are recorded in the audit log. CAC files are served only through an admin-authenticated endpoint. Administrators can edit member posts from the account view. Listings, business profiles, saved roles, and applications are stored in PostgreSQL. Listings are visible to signed-in members as soon as they're published; moderation, CV uploads, and employer application-status updates are not implemented. Members should verify listing details before sharing sensitive information.
 
 ## Direct messaging API
 
@@ -134,7 +136,7 @@ The app does not currently have provider-backed APIs for travel bookings, wallet
 
 Super-admin access is restricted on the server to verified accounts whose email addresses are listed in the comma-separated `ADMIN_EMAILS` environment variable. For example, set `ADMIN_EMAILS=admin@example.com` on the API server after registering and verifying that account through the normal signup flow. Multiple addresses can be separated with commas. An empty value disables super-admin access. Never expose this setting through a `VITE_*` variable.
 
-Super-admins can grant or revoke database-managed sub-admin access for existing, email-verified accounts. Sub-admins can inspect and suspend normal user accounts, manage posts/comments/listings/jobs/communities, and manage iBuy products. They cannot view private message contents, assign administrator roles, or suspend administrator accounts. Super-admins retain the server allowlist as their source of authority and can view private messages; user-detail reads are audited for both roles.
+Super-admins can grant or revoke database-managed sub-admin access for existing, email-verified accounts. Sub-admins can inspect and suspend normal user accounts, manage posts/comments/listings/jobs/communities, and manage iBuy products. Both admin roles can view private message contents in user details; only super-admins can assign administrator roles, and administrator accounts cannot be suspended through the user-status endpoint. Super-admins retain the server allowlist as their source of authority. User-detail reads, including message history, are audited for both roles.
 
 The admin portal at `/admin/login` uses the same secure session cookie as the rest of the API:
 
@@ -143,7 +145,7 @@ The admin portal at `/admin/login` uses the same secure session cookie as the re
 - `GET /api/admin/overview` returns platform totals and seven-day new-account, post, product, and job counts.
 - `GET /api/admin/users?query=alex&limit=50&offset=0` searches account names, usernames, and email addresses. Limits are 1–100.
 - `POST /api/admin/users/{user_id}/suspension` suspends or restores a normal account. Suspending revokes its active sessions; administrator accounts and the current admin cannot be suspended through this endpoint.
-- `GET /api/admin/users/{user_id}?limit=100&offset=0` returns account details and paginated posts, comments, likes, saved posts, marketplace listings, job activity, communities, and follow activity. Only super-admins receive private message contents. Limits are 1–200.
+- `GET /api/admin/users/{user_id}?limit=100&offset=0` returns account details and paginated posts, comments, likes, saved posts, direct messages, marketplace listings, job activity, communities, and follow activity. Message text, photo URLs, participants, and read status are visible to both admin roles. Limits are 1–200.
 - `GET /api/admin/content?type=posts|comments|products|local_listings|jobs|communities` searches live user content. `DELETE /api/admin/content/{type}/{id}` removes a selected record and writes an audit event.
 - `PUT /api/admin/products/{product_id}` edits an iBuy product, its photo gallery, and its published state. Product creation uses the authenticated marketplace endpoint and the normal authenticated image-upload endpoint.
 - `GET /api/admin/subadmins`, `POST /api/admin/subadmins`, and `DELETE /api/admin/subadmins/{user_id}` manage sub-admins and are restricted to super-admins.
@@ -163,9 +165,22 @@ The Vercel rewrite must only be deployed after the API hostname has DNS, a worki
 
 Set `NODE_ENV=production`, `API_HOST=127.0.0.1`, `API_PORT=10000`, `APP_ORIGIN=https://www.iconnectdworld.com`, `DATABASE_URL`, `SESSION_SECRET`, `OTP_HASH_SECRET`, `RESEND_API_KEY`, `EMAIL_FROM`, `SESSION_MAX_AGE_DAYS=7`, `TRUST_PROXY=1`, the intended server-only `ADMIN_EMAILS`, and `ICONNECT_MEDIA_DIR=/var/lib/iconnect/uploads` in the VPS environment. Create the media directory and make it writable by the API service account before starting the API. Keep secrets out of source control and never put them in `VITE_*` variables.
 
-On the VPS, create the environment with `python3 -m venv server/.venv`, install runtime packages with `server/.venv/bin/pip install -r server/requirements.txt`, and run `npm run db:migrate`. The API virtual host must allow request bodies up to 260 MB for 250 MiB video uploads. Add this exact-match location to its HTTPS `server` block so Nginx streams upload bodies to the API instead of buffering the entire upload first:
+On the VPS, create the environment with `python3 -m venv server/.venv`, install runtime packages with `server/.venv/bin/pip install -r server/requirements.txt`, and run `npm run db:migrate`. The API virtual host must allow request bodies up to 260 MB for 250 MiB video uploads and 12 MB for CAC documents. Add these exact-match locations to its HTTPS `server` block so Nginx streams upload bodies to the API instead of buffering the entire upload first:
 
 ```nginx
+location = /api/jobs/business-profile {
+    client_max_body_size 12M;
+    client_body_timeout 120s;
+    proxy_request_buffering off;
+    proxy_send_timeout 120s;
+    proxy_pass http://127.0.0.1:10000;
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+}
+
 location = /api/videos {
     client_max_body_size 260M;
     client_body_timeout 300s;
@@ -180,4 +195,4 @@ location = /api/videos {
 }
 ```
 
-Keep the existing `/api/realtime` WebSocket proxy and other API routes, then run `sudo nginx -t` and reload Nginx. Run the API with `server/.venv/bin/uvicorn server.app.main:app --host 127.0.0.1 --port 10000`. The migration creates the account, verification-code, session, admin audit, social feed/bookmark, messaging, follow, community, job, iBuy product/gallery, local marketplace listing, and video tables idempotently. Back up the media directory alongside PostgreSQL. The API does not configure PostgreSQL, DNS, Nginx, TLS, backups, or a process supervisor.
+Keep the existing `/api/realtime` WebSocket proxy and other API routes, then run `sudo nginx -t` and reload Nginx. Run the API with `server/.venv/bin/uvicorn server.app.main:app --host 127.0.0.1 --port 10000`. The migration creates the account, verification-code, session, admin audit, social feed/bookmark, messaging, follow, community, job/business-profile, iBuy product/gallery, local marketplace listing, and video tables idempotently. Back up the media directory alongside PostgreSQL, including the private `business-documents` subdirectory. The API does not configure PostgreSQL, DNS, Nginx, TLS, backups, or a process supervisor.

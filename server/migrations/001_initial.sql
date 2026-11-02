@@ -241,6 +241,22 @@ ALTER TABLE job_listings ADD COLUMN IF NOT EXISTS company_image_url varchar(2048
 CREATE INDEX IF NOT EXISTS job_listings_created_at_idx
   ON job_listings(created_at DESC, id DESC);
 
+CREATE TABLE IF NOT EXISTS job_business_profiles (
+  user_id uuid PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+  company_name varchar(120) NOT NULL,
+  registration_number varchar(80) NOT NULL,
+  business_type varchar(80) NOT NULL,
+  business_address varchar(240) NOT NULL,
+  contact_phone varchar(40) NOT NULL,
+  description varchar(1000) NOT NULL,
+  document_filename varchar(40) NOT NULL UNIQUE,
+  document_content_type varchar(32) NOT NULL
+    CHECK (document_content_type IN ('application/pdf', 'image/jpeg', 'image/png', 'image/webp')),
+  document_size bigint NOT NULL CHECK (document_size > 0),
+  submitted_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+
 CREATE TABLE IF NOT EXISTS job_bookmarks (
   user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   job_id uuid NOT NULL REFERENCES job_listings(id) ON DELETE CASCADE,

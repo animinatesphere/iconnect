@@ -1,8 +1,9 @@
 import React, { useEffect, useState } from 'react'
 import { Activity, BriefcaseBusiness, ChevronLeft, ChevronRight, FileText, LogOut, Package, Search, ShieldAlert, Users, UserCog, X } from 'lucide-react'
 import { Link, useNavigate } from 'react-router-dom'
+import Avatar from '../../components/Avatar.jsx'
 import PageMeta from '../../components/PageMeta.jsx'
-import { adminLogout, getAdminAuditLog, getAdminOverview, getAdminSession, getAdminUserDetails, getAdminUsers, setAdminUserSuspended } from '../../utils/adminApi.js'
+import { adminLogout, getAdminAuditLog, getAdminOverview, getAdminSession, getAdminUserDetails, getAdminUsers, setAdminUserSuspended, updateAdminUserPost } from '../../utils/adminApi.js'
 import AdminContentPanel from './AdminContentPanel.jsx'
 import AdminProductsPanel from './AdminProductsPanel.jsx'
 import AdminPublishingPanel from './AdminPublishingPanel.jsx'
@@ -66,7 +67,7 @@ function formatRecord(key, item) {
     case 'bookmarks':
       return `Saved @${item.author.username}’s post: ${item.postText}`
     case 'messages':
-      return `${item.sender.name} → ${item.recipient.name}: ${item.text}`
+      return `${item.sender.name} (@${item.sender.username}) → ${item.recipient.name} (@${item.recipient.username}): ${item.text}${item.readAt ? ' · Read' : ' · Unread'}`
     case 'products':
       return `${item.name} · ${item.category} · ₦${new Intl.NumberFormat('en-NG').format(item.price)} · Stock ${item.stock} · ${item.published ? 'Published' : 'Unpublished'} · ${item.description}`
     case 'localListings':
@@ -96,18 +97,22 @@ function auditDescription(event) {
   if (action === 'revoke_subadmin') return `${admin.name} revoked sub-admin access`
   if (action === 'update_user_status') return `${admin.name} ${details.suspended ? 'suspended' : 'restored'} an account`
   if (action === 'update_product') return `${admin.name} updated an iBuy product`
+  if (action === 'edit_user_post') return `${admin.name} edited a member post`
+  if (action === 'view_business_document') return `${admin.name} opened a CAC document`
   if (action === 'create_admin_content') return `${admin.name} published an official ${details.type ?? 'listing'}`
   return `${admin.name} performed ${action.replaceAll('_', ' ')}`
 }
 
-function UserDetails({ user, loading, error, onClose, onLoadOlder, loadingOlder, hasMore, onToggleSuspension, updatingStatus }) {
+function UserDetails({ user, loading, error, onClose, onLoadOlder, loadingOlder, hasMore, onToggleSuspension, updatingStatus, savingPostId, onSavePost }) {
+  const [editingPostId, setEditingPostId] = useState('')
+  const [postDraft, setPostDraft] = useState({ text: '', imageUrls: '' })
   if (!user) return null
-  const visibleActivityLabels = activityLabels.filter(([key]) => key !== 'messages' || user.role === 'super_admin')
   return (
     <div className="admin-detail-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose() }}>
       <section className="admin-detail-panel" role="dialog" aria-modal="true" aria-labelledby="admin-user-detail-title">
         <header className="admin-detail-header">
-          <div><span className="app-page-eyebrow">ACCOUNT DETAILS</span><h2 id="admin-user-detail-title">{user.name}</h2><p>@{user.username} · {user.email}</p></div>
+          <Avatar person={{ name: user.name, image: user.profileImageUrl }} className="admin-detail-avatar" />
+          <div className="admin-detail-heading-copy"><span className="app-page-eyebrow">ACCOUNT DETAILS</span><h2 id="admin-user-detail-title">{user.name}</h2><p>@{user.username} · <a href={`mailto:${user.email}`}>{user.email}</a></p></div>
           <button type="button" className="admin-detail-close" aria-label="Close user details" onClick={onClose}><X size={18} /></button>
         </header>
         {error && <p className="feed-interaction-notice feed-error" role="alert">{error}</p>}
@@ -117,17 +122,48 @@ function UserDetails({ user, loading, error, onClose, onLoadOlder, loadingOlder,
           <div className="admin-account-status"><span className={user.isAdmin ? 'admin-role-chip' : user.suspended ? 'admin-hidden-status' : 'admin-visible-status'}>{user.isAdmin ? 'Administrator account' : user.suspended ? 'Suspended account' : 'Account active'}</span>{user.isAdmin ? <small>Administrator access is managed through role controls.</small> : <button type="button" className={`admin-row-action ${user.suspended ? '' : 'admin-danger-action'}`} onClick={onToggleSuspension} disabled={updatingStatus}>{updatingStatus ? 'Updating…' : user.suspended ? 'Restore account' : 'Suspend account'}</button>}</div>
           <p>Joined {formatDate(user.createdAt)} · Last profile update {formatDate(user.updatedAt)}</p>
           {!!user.interests?.length && <p>Interests: {user.interests.join(', ')}</p>}
+          <p>Account ID: {user.id}</p>
         </div>
         <section className="admin-detail-counts" aria-label="Account activity totals">
           {activityLabels.map(([key, label]) => <div key={key}><strong>{user.counts[key] ?? 0}</strong><span>{label}</span></div>)}
         </section>
-        <div className="admin-detail-privacy-note"><ShieldAlert size={16} /><p>{user.role === 'super_admin' ? 'Private conversations are visible to super admins. Each user-detail view is recorded in the audit log.' : 'Sub-admins can review account activity but cannot view private conversation contents. Each user-detail view is recorded in the audit log.'}</p></div>
+        <div className="admin-detail-privacy-note"><ShieldAlert size={16} /><p>Message history, including text and photos, is available to admins. Account-detail and document access is recorded in the audit log.</p></div>
+        {user.businessProfile && <section className="admin-business-profile">
+          <div><span className="app-page-eyebrow">JOB POSTER COMPANY DETAILS</span><h3>{user.businessProfile.companyName}</h3></div>
+          <dl>
+            <div><dt>CAC registration number</dt><dd>{user.businessProfile.registrationNumber}</dd></div>
+            <div><dt>Business type</dt><dd>{user.businessProfile.businessType}</dd></div>
+            <div><dt>Business address</dt><dd>{user.businessProfile.businessAddress}</dd></div>
+            <div><dt>Contact phone</dt><dd><a href={`tel:${user.businessProfile.contactPhone}`}>{user.businessProfile.contactPhone}</a></dd></div>
+            <div><dt>Company details</dt><dd>{user.businessProfile.description}</dd></div>
+            <div><dt>Submitted</dt><dd>{formatDate(user.businessProfile.submittedAt)}</dd></div>
+          </dl>
+          <a className="admin-business-document-link" href={user.businessProfile.documentUrl} target="_blank" rel="noreferrer"><FileText size={15} /> Open CAC document ({user.businessProfile.documentContentType}, {formatCount(user.businessProfile.documentSize)} bytes)</a>
+        </section>}
         {loading && <p className="admin-detail-loading">Loading all account activity…</p>}
         {!loading && user.activity && <div className="admin-detail-activity">
-          {visibleActivityLabels.map(([key, label]) => {
+          {activityLabels.map(([key, label]) => {
             const records = user.activity[key] ?? []
             if (!records.length) return null
-            return <section key={key}><h3>{label} <span>{user.counts[key] ?? records.length}</span></h3><div>{records.map((item, index) => <article key={item.id ?? item.postId ?? `${key}-${index}`}><p>{formatRecord(key, item)}</p>{item.imageUrls?.length > 0 && <div className="admin-activity-images">{item.imageUrls.map((image, imageIndex) => <img key={`${image}-${imageIndex}`} src={image} alt={`User activity photo ${imageIndex + 1}`} loading="lazy" />)}</div>}<time>{formatDate(item.createdAt ?? item.joinedAt)}</time></article>)}</div></section>
+            return <section key={key}><h3>{label} <span>{user.counts[key] ?? records.length}</span></h3><div>{records.map((item, index) => <article key={item.id ?? item.postId ?? `${key}-${index}`}>
+              {key === 'posts' && editingPostId === item.id ? <form className="admin-edit-post-form" onSubmit={(event) => {
+                event.preventDefault()
+                onSavePost(item.id, {
+                  text: postDraft.text,
+                  imageUrls: postDraft.imageUrls.split('\n').map((url) => url.trim()).filter(Boolean),
+                }).then((saved) => { if (saved) setEditingPostId('') })
+              }}>
+                <label>Post text<textarea value={postDraft.text} maxLength={500} required onChange={(event) => setPostDraft((current) => ({ ...current, text: event.target.value }))} /></label>
+                <label>Photo URLs, one per line<textarea value={postDraft.imageUrls} onChange={(event) => setPostDraft((current) => ({ ...current, imageUrls: event.target.value }))} /></label>
+                <div><button type="submit" className="admin-row-action" disabled={savingPostId === item.id}>{savingPostId === item.id ? 'Saving…' : 'Save post'}</button><button type="button" className="admin-row-action" onClick={() => setEditingPostId('')} disabled={savingPostId === item.id}>Cancel</button></div>
+              </form> : <p>{formatRecord(key, item)}</p>}
+              {(item.imageUrls?.length > 0 || item.imageUrl) && <div className="admin-activity-images">{(item.imageUrls ?? (item.imageUrl ? [item.imageUrl] : [])).map((image, imageIndex) => <img key={`${image}-${imageIndex}`} src={image} alt={`${key === 'messages' ? 'Message' : 'User activity'} photo ${imageIndex + 1}`} loading="lazy" />)}</div>}
+              <time>{formatDate(item.createdAt ?? item.joinedAt)}</time>
+              {key === 'posts' && editingPostId !== item.id && <button type="button" className="admin-row-action admin-edit-post-trigger" onClick={() => {
+                setPostDraft({ text: item.text, imageUrls: (item.imageUrls ?? []).join('\n') })
+                setEditingPostId(item.id)
+              }}>Edit post</button>}
+            </article>)}</div></section>
           })}
           {hasMore && <button type="button" className="admin-load-older" onClick={onLoadOlder} disabled={loadingOlder}>{loadingOlder ? 'Loading…' : 'Load older activity'}</button>}
         </div>}
@@ -152,6 +188,7 @@ export default function AdminDashboardPage() {
   const [loadingAudit, setLoadingAudit] = useState(false)
   const [loadingOlder, setLoadingOlder] = useState(false)
   const [updatingUserStatus, setUpdatingUserStatus] = useState(false)
+  const [savingPostId, setSavingPostId] = useState('')
   const [detailError, setDetailError] = useState('')
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
@@ -283,6 +320,32 @@ export default function AdminDashboardPage() {
     }
   }
 
+  async function saveUserPost(postId, draft) {
+    setSavingPostId(postId)
+    setDetailError('')
+    try {
+      const updatedPost = await updateAdminUserPost(postId, draft)
+      setSelectedUser((current) => current && ({
+        ...current,
+        activity: {
+          ...current.activity,
+          posts: current.activity.posts.map((post) => post.id === postId
+            ? { ...post, text: updatedPost.text, imageUrls: updatedPost.imageUrls, createdAt: updatedPost.createdAt }
+            : post),
+        },
+      }))
+      getAdminAuditLog(20)
+        .then(setAuditEvents)
+        .catch((auditError) => setError(auditError instanceof Error ? auditError.message : 'Post was saved, but the audit log could not be refreshed.'))
+      return true
+    } catch (saveError) {
+      setDetailError(saveError instanceof Error ? saveError.message : 'Could not update this post.')
+      return false
+    } finally {
+      setSavingPostId('')
+    }
+  }
+
   function chooseSection(nextSection) {
     setSection(nextSection)
     setError('')
@@ -292,7 +355,7 @@ export default function AdminDashboardPage() {
 
   const olderOffset = selectedUser?.page ? selectedUser.page.offset + selectedUser.page.limit : 0
   const hasMore = Boolean(selectedUser?.counts && activityLabels
-    .filter(([key]) => key !== 'messages' || selectedUser.role === 'super_admin')
+    .filter(([key]) => key !== 'messages')
     .some(([key]) => (selectedUser.activity?.[key]?.length ?? 0) < selectedUser.counts[key]))
 
   return (
@@ -318,8 +381,8 @@ export default function AdminDashboardPage() {
       <div className="admin-portal-main">
         <header className="admin-portal-topbar"><div><span>iConnect admin</span><b>/</b><strong>{section}</strong></div><div className="admin-portal-topbar-actions"><span className="admin-preview-chip"><i /> {admin?.role === 'super_admin' ? 'SUPER ADMIN' : 'SUB-ADMIN'}</span><button type="button" onClick={signOut}><LogOut size={14} /> Sign out</button></div></header>
         <main className="admin-portal-content">
-          <div className="admin-portal-page-heading"><div><span className="app-page-eyebrow">WEBSITE OPERATIONS</span><h1>{section === 'Overview' ? 'Dashboard overview' : section}</h1><p>{section === 'Users' ? 'Search accounts and review activity. Private message contents are restricted to super admins.' : section === 'Audit log' ? 'Review administrator access and recorded management actions.' : section === 'Content' ? 'Review and remove posts, comments, listings, jobs, and communities from user pages.' : section === 'Products' ? 'Create, edit, publish, hide, or remove iBuy products with photos.' : section === 'Publishing' ? 'Publish official jobs and housing listings to the pages members use.' : section === 'Admins' ? 'Super-admins can grant and revoke sub-admin access.' : 'Live platform totals and recent growth from the iConnect database.'}</p></div>{section === 'Users' && <label className="admin-user-search"><Search size={15} /><input value={search} onChange={(event) => { setSearch(event.target.value); setUserOffset(0) }} placeholder="Search name, username, or email" aria-label="Search users" /></label>}</div>
-          {section === 'Users' && <div className="admin-safety-banner"><ShieldAlert size={18} /><span><strong>Private data access is audited.</strong> Only super admins can see private message contents. Opening a user’s details is recorded in the audit log.</span></div>}
+          <div className="admin-portal-page-heading"><div><span className="app-page-eyebrow">WEBSITE OPERATIONS</span><h1>{section === 'Overview' ? 'Dashboard overview' : section}</h1><p>{section === 'Users' ? 'Search accounts to review profile details, photos, company records, messages, and all member activity.' : section === 'Audit log' ? 'Review administrator access and recorded management actions.' : section === 'Content' ? 'Review and remove posts, comments, listings, jobs, and communities from user pages.' : section === 'Products' ? 'Create, edit, publish, hide, or remove iBuy products with photos.' : section === 'Publishing' ? 'Publish official jobs and housing listings to the pages members use.' : section === 'Admins' ? 'Super-admins can grant and revoke sub-admin access.' : 'Live platform totals and recent growth from the iConnect database.'}</p></div>{section === 'Users' && <label className="admin-user-search"><Search size={15} /><input value={search} onChange={(event) => { setSearch(event.target.value); setUserOffset(0) }} placeholder="Search name, username, or email" aria-label="Search users" /></label>}</div>
+          {section === 'Users' && <div className="admin-safety-banner"><ShieldAlert size={18} /><span><strong>Private account access is audited.</strong> Admins can view profile and company details, submitted CAC records, posts, and private message history.</span></div>}
           {error && <p className="feed-interaction-notice feed-error" role="alert">{error}</p>}
           {notice && <p className="feed-interaction-notice" role="status">{notice}</p>}
           {loading && <p className="admin-detail-loading">Loading administrator data…</p>}
@@ -331,7 +394,7 @@ export default function AdminDashboardPage() {
             <div className="admin-panel-heading"><div><span className="app-page-eyebrow">REGISTERED ACCOUNTS</span><h2>{formatCount(userTotal)} users</h2></div></div>
             {loadingUsers && <p className="admin-detail-loading">Loading accounts…</p>}
             {!loadingUsers && <div className="admin-live-user-list">{users.map((user) => <button type="button" className="admin-live-user-row" key={user.id} onClick={() => openUser(user)}>
-              <span className="admin-live-user-avatar">{user.name.slice(0, 1)}</span>
+              <Avatar person={{ name: user.name, image: user.profileImageUrl }} className="admin-live-user-avatar" />
               <span className="admin-live-user-identity"><strong>{user.name}</strong><small>@{user.username} · {user.email}</small></span>
               <span className={`admin-user-status ${user.suspended ? 'status-suspended' : user.emailVerified ? '' : 'status-review'}`}>{user.suspended ? 'Suspended' : user.emailVerified ? 'Verified' : 'Unverified'}</span>
               <span className="admin-live-user-counts">{user.counts.posts} posts · {user.counts.messages} messages</span><ChevronRight size={16} />
@@ -356,6 +419,8 @@ export default function AdminDashboardPage() {
         hasMore={hasMore && olderOffset > 0}
         onToggleSuspension={toggleSelectedUserSuspension}
         updatingStatus={updatingUserStatus}
+        savingPostId={savingPostId}
+        onSavePost={saveUserPost}
       />}
     </div>
   )

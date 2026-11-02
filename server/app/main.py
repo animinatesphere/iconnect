@@ -21,7 +21,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse
 from PIL import Image, ImageOps, UnidentifiedImageError
 from PIL.Image import DecompressionBombError
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 from psycopg.rows import dict_row
 from psycopg_pool import ConnectionPool
 
@@ -50,6 +50,7 @@ MESSAGE_REQUEST_LIMIT = 120
 MEDIA_UPLOAD_WINDOW_SECONDS = 15 * 60
 MEDIA_UPLOAD_REQUEST_LIMIT = 30
 MAX_IMAGE_BYTES = 4 * 1024 * 1024
+MAX_BUSINESS_DOCUMENT_BYTES = 10 * 1024 * 1024
 MAX_VIDEO_BYTES = 250 * 1024 * 1024
 MAX_IMAGE_PIXELS = 20_000_000
 MAX_IMAGES_PER_RECORD = 5
@@ -440,6 +441,30 @@ class JobListingInput(StrictModel):
         return value
 
 
+class JobBusinessProfileInput(StrictModel):
+    company_name: str = Field(min_length=1, max_length=120)
+    registration_number: str = Field(min_length=1, max_length=80)
+    business_type: str = Field(min_length=1, max_length=80)
+    business_address: str = Field(min_length=1, max_length=240)
+    contact_phone: str = Field(min_length=5, max_length=40)
+    description: str = Field(min_length=1, max_length=1000)
+
+    @field_validator(
+        "company_name",
+        "registration_number",
+        "business_type",
+        "business_address",
+        "contact_phone",
+        "description",
+    )
+    @classmethod
+    def clean_required_text(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("This field is required.")
+        return value
+
+
 class JobSaveInput(StrictModel):
     saved: bool
 
@@ -482,6 +507,27 @@ def public_video(video: Dict[str, Any]) -> Dict[str, Any]:
             "username": video["username"],
             "image": video.get("profile_image_url"),
         },
+    }
+
+
+def public_job_business_profile(
+    profile: Optional[Dict[str, Any]],
+    document_url: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    if not profile:
+        return None
+    return {
+        "companyName": profile["company_name"],
+        "registrationNumber": profile["registration_number"],
+        "businessType": profile["business_type"],
+        "businessAddress": profile["business_address"],
+        "contactPhone": profile["contact_phone"],
+        "description": profile["description"],
+        "documentContentType": profile["document_content_type"],
+        "documentSize": int(profile["document_size"]),
+        "documentUrl": document_url,
+        "submittedAt": profile["submitted_at"].isoformat(),
+        "updatedAt": profile["updated_at"].isoformat(),
     }
 
 
@@ -605,6 +651,7 @@ def create_app(
         else DEFAULT_MEDIA_DIRECTORY.parent / configured_media_directory
     )
     videos_directory = uploads_directory / "videos"
+    business_documents_directory = uploads_directory / "business-documents"
     cookie_name = "__Host-iconnect.sid" if settings.production else "iconnect.sid"
 
     def publish_realtime(
@@ -731,6 +778,8 @@ def create_app(
                 body_limit = (
                     MAX_IMAGE_BYTES
                     if request.url.path == "/api/media/images"
+                    else MAX_BUSINESS_DOCUMENT_BYTES
+                    if request.url.path == "/api/jobs/business-profile"
                     else MAX_VIDEO_BYTES
                     if request.url.path == "/api/videos"
                     else MAX_REQUEST_BYTES
@@ -1882,6 +1931,40 @@ def create_app(
         publish_realtime({"type": "post.created", "postId": str(post["id"])})
         return {"post": public_social_post(post, admin["id"])}
 
+    @app.put("/api/admin/posts/{post_id}")
+    def update_admin_post(
+        post_id: UUID,
+        input: SocialPostInput,
+        admin: Dict[str, Any] = Depends(require_admin),
+    ) -> Dict[str, Any]:
+        with database.connection() as connection:
+            updated = connection.execute(
+                """UPDATE social_posts
+                   SET body = %s, image_urls = %s
+                   WHERE id = %s
+                   RETURNING id, user_id, created_at""",
+                (input.text, input.image_urls, post_id),
+            ).fetchone()
+            if not updated:
+                raise ApiError(404, "content_not_found", "That post could not be found.")
+            connection.execute(
+                """INSERT INTO admin_audit_log (admin_user_id, subject_user_id, action, details)
+                   VALUES (%s, %s, 'edit_user_post', %s::jsonb)""",
+                (
+                    admin["id"],
+                    updated["user_id"],
+                    json.dumps({"type": "post", "id": str(post_id)}),
+                ),
+            )
+        return {
+            "post": {
+                "id": str(updated["id"]),
+                "text": input.text,
+                "imageUrls": input.image_urls,
+                "createdAt": updated["created_at"].isoformat(),
+            },
+        }
+
     @app.put("/api/admin/products/{product_id}")
     def update_admin_product(
         product_id: UUID,
@@ -2128,7 +2211,7 @@ def create_app(
                 (pattern, pattern, pattern, pattern),
             ).fetchone()
             rows = connection.execute(
-                """SELECT u.id, u.display_name, u.username, u.email, u.bio,
+                """SELECT u.id, u.display_name, u.username, u.email, u.bio, u.profile_image_url,
                           u.interests, u.profile_visible, u.discoverable,
                           u.email_verified_at, u.suspended_at, u.created_at, u.updated_at,
                           (SELECT count(*) FROM social_posts p WHERE p.user_id = u.id) AS posts,
@@ -2155,6 +2238,7 @@ def create_app(
                 "username": user["username"],
                 "email": user["email"],
                 "bio": user["bio"],
+                "profileImageUrl": user.get("profile_image_url"),
                 "interests": user["interests"],
                 "profileVisible": bool(user["profile_visible"]),
                 "discoverable": bool(user["discoverable"]),
@@ -2231,7 +2315,7 @@ def create_app(
     ) -> Dict[str, Any]:
         with database.connection() as connection:
             user = connection.execute(
-                """SELECT id, display_name, username, email, bio, interests,
+                """SELECT id, display_name, username, email, bio, interests, profile_image_url,
                           profile_visible, discoverable, email_verified_at, suspended_at,
                           created_at, updated_at
                    FROM users
@@ -2240,6 +2324,10 @@ def create_app(
             ).fetchone()
             if not user:
                 raise ApiError(404, "user_not_found", "That account could not be found.")
+            business_profile = connection.execute(
+                "SELECT * FROM job_business_profiles WHERE user_id = %s",
+                (user_id,),
+            ).fetchone()
             target_is_admin = user["email"].strip().lower() in settings.admin_emails
             if not target_is_admin:
                 target_is_admin = connection.execute(
@@ -2306,6 +2394,19 @@ def create_app(
                    ORDER BY b.created_at DESC, p.id DESC LIMIT %s OFFSET %s""",
                 (user_id, limit, offset),
             ).fetchall()
+            messages = connection.execute(
+                """SELECT m.id, m.conversation_id, m.body, m.image_url, m.created_at, m.read_at,
+                          sender.id AS sender_id, sender.display_name AS sender_name,
+                          sender.username AS sender_username,
+                          recipient.id AS recipient_id, recipient.display_name AS recipient_name,
+                          recipient.username AS recipient_username
+                   FROM direct_messages m
+                   JOIN users sender ON sender.id = m.sender_id
+                   JOIN users recipient ON recipient.id = m.recipient_id
+                   WHERE m.sender_id = %s OR m.recipient_id = %s
+                   ORDER BY m.created_at DESC, m.id DESC LIMIT %s OFFSET %s""",
+                (user_id, user_id, limit, offset),
+            ).fetchall()
             products = connection.execute(
                 """SELECT id, name, category, price, stock, description, image_url, image_urls,
                           published, created_at
@@ -2368,24 +2469,6 @@ def create_app(
                    ORDER BY f.created_at DESC, follower.id LIMIT %s OFFSET %s""",
                 (user_id, limit, offset),
             ).fetchall()
-            messages = []
-            if admin["role"] == "super_admin":
-                messages = connection.execute(
-                    """SELECT m.id, m.conversation_id, m.body, m.created_at, m.read_at,
-                              sender.id AS sender_id, sender.display_name AS sender_name,
-                              sender.username AS sender_username,
-                              recipient.id AS recipient_id, recipient.display_name AS recipient_name,
-                              recipient.username AS recipient_username
-                       FROM direct_messages m
-                       JOIN direct_conversations conversation ON conversation.id = m.conversation_id
-                       JOIN users sender ON sender.id = m.sender_id
-                       JOIN users recipient ON recipient.id = m.recipient_id
-                       WHERE conversation.participant_one_id = %s
-                          OR conversation.participant_two_id = %s
-                       ORDER BY m.created_at DESC, m.id DESC LIMIT %s OFFSET %s""",
-                    (user_id, user_id, limit, offset),
-                ).fetchall()
-
         def timestamp(row: Dict[str, Any], key: str) -> Optional[str]:
             value = row[key]
             return value.isoformat() if value else None
@@ -2395,6 +2478,7 @@ def create_app(
             "name": user["display_name"],
             "username": user["username"],
             "email": user["email"],
+            "profileImageUrl": user.get("profile_image_url"),
             "role": admin["role"],
             "isAdmin": target_is_admin,
             "bio": user["bio"],
@@ -2406,6 +2490,10 @@ def create_app(
             "emailVerifiedAt": timestamp(user, "email_verified_at"),
             "createdAt": timestamp(user, "created_at"),
             "updatedAt": timestamp(user, "updated_at"),
+            "businessProfile": public_job_business_profile(
+                business_profile,
+                "/api/admin/users/{}/business-document".format(user_id) if business_profile else None,
+            ),
             "counts": {
                 "posts": int(counts["posts"]),
                 "comments": int(counts["comments"]),
@@ -2443,10 +2531,19 @@ def create_app(
                         "id": str(row["id"]),
                         "conversationId": str(row["conversation_id"]),
                         "text": row["body"],
-                        "createdAt": timestamp(row, "created_at"),
+                        "imageUrl": row.get("image_url"),
                         "readAt": timestamp(row, "read_at"),
-                        "sender": {"id": str(row["sender_id"]), "name": row["sender_name"], "username": row["sender_username"]},
-                        "recipient": {"id": str(row["recipient_id"]), "name": row["recipient_name"], "username": row["recipient_username"]},
+                        "sender": {
+                            "id": str(row["sender_id"]),
+                            "name": row["sender_name"],
+                            "username": row["sender_username"],
+                        },
+                        "recipient": {
+                            "id": str(row["recipient_id"]),
+                            "name": row["recipient_name"],
+                            "username": row["recipient_username"],
+                        },
+                        "createdAt": timestamp(row, "created_at"),
                     }
                     for row in messages
                 ],
@@ -2486,6 +2583,34 @@ def create_app(
             "page": {"limit": limit, "offset": offset},
         }
         return {"user": details}
+
+    @app.get("/api/admin/users/{user_id}/business-document")
+    def get_admin_business_document(
+        user_id: UUID,
+        admin: Dict[str, Any] = Depends(require_admin),
+    ) -> Response:
+        with database.connection() as connection:
+            profile = connection.execute(
+                """SELECT document_filename, document_content_type
+                   FROM job_business_profiles WHERE user_id = %s""",
+                (user_id,),
+            ).fetchone()
+            if not profile:
+                raise ApiError(404, "business_document_not_found", "That account has not submitted a CAC document.")
+            connection.execute(
+                """INSERT INTO admin_audit_log (admin_user_id, subject_user_id, action, details)
+                   VALUES (%s, %s, 'view_business_document', %s::jsonb)""",
+                (admin["id"], user_id, json.dumps({"type": "cac_document"})),
+            )
+        document_path = business_documents_directory / profile["document_filename"]
+        if not document_path.is_file():
+            raise ApiError(404, "business_document_not_found", "The submitted CAC document is no longer available.")
+        return FileResponse(
+            document_path,
+            media_type=profile["document_content_type"],
+            headers={"Cache-Control": "private, no-store"},
+            content_disposition_type="inline",
+        )
 
     @app.get("/api/admin/audit-log")
     def get_admin_audit_log(
@@ -3416,6 +3541,153 @@ def create_app(
             ).fetchall()
         return {"jobs": [public_job(row) for row in rows]}
 
+    @app.get("/api/jobs/business-profile")
+    def get_job_business_profile(request: Request) -> Dict[str, Any]:
+        user = require_user(request)
+        with database.connection() as connection:
+            profile = connection.execute(
+                "SELECT * FROM job_business_profiles WHERE user_id = %s",
+                (user["id"],),
+            ).fetchone()
+        document_url = "/api/jobs/business-profile/document" if profile else None
+        return {
+            "businessProfile": public_job_business_profile(profile, document_url),
+        }
+
+    @app.post("/api/jobs/business-profile", status_code=201)
+    async def submit_job_business_profile(request: Request) -> Dict[str, Any]:
+        user = require_user(request)
+        enforce_media_upload_rate_limit(request)
+        content_type = request.headers.get("content-type", "").split(";", 1)[0].strip().lower()
+        supported_signatures = {
+            "application/pdf": lambda value: value.startswith(b"%PDF-"),
+            "image/jpeg": lambda value: value.startswith(b"\xff\xd8\xff"),
+            "image/png": lambda value: value.startswith(b"\x89PNG\r\n\x1a\n"),
+            "image/webp": lambda value: (
+                len(value) >= 12 and value[:4] == b"RIFF" and value[8:12] == b"WEBP"
+            ),
+        }
+        signature_matches = supported_signatures.get(content_type)
+        if not signature_matches:
+            raise ApiError(400, "invalid_business_document", "Upload a CAC document as PDF, JPEG, PNG, or WebP.")
+        try:
+            profile_payload = json.loads(unquote(request.headers.get("x-company-details", ""), errors="strict"))
+            profile_input = JobBusinessProfileInput(**profile_payload)
+        except (UnicodeDecodeError, json.JSONDecodeError, TypeError, ValidationError) as error:
+            raise ApiError(400, "invalid_business_profile", "Complete all company details and try again.") from error
+
+        filename = uuid4().hex + {
+            "application/pdf": ".pdf",
+            "image/jpeg": ".jpg",
+            "image/png": ".png",
+            "image/webp": ".webp",
+        }[content_type]
+        temporary_path = business_documents_directory / (filename + ".uploading")
+        document_path = business_documents_directory / filename
+        total_size = 0
+        signature = bytearray()
+        old_filename = None
+        try:
+            await asyncio.to_thread(business_documents_directory.mkdir, parents=True, exist_ok=True)
+            with temporary_path.open("xb") as output:
+                async for chunk in request.stream():
+                    if not chunk:
+                        continue
+                    total_size += len(chunk)
+                    if total_size > MAX_BUSINESS_DOCUMENT_BYTES:
+                        raise ApiError(413, "business_document_too_large", "CAC documents must be 10 MB or smaller.")
+                    if len(signature) < 16:
+                        signature.extend(chunk[:16 - len(signature)])
+                    output.write(chunk)
+            if not total_size or not signature_matches(bytes(signature)):
+                raise ApiError(400, "invalid_business_document", "The uploaded file does not match its document format.")
+            await asyncio.to_thread(temporary_path.replace, document_path)
+            with database.connection() as connection:
+                existing = connection.execute(
+                    "SELECT document_filename FROM job_business_profiles WHERE user_id = %s",
+                    (user["id"],),
+                ).fetchone()
+                old_filename = existing["document_filename"] if existing else None
+                profile = connection.execute(
+                    """INSERT INTO job_business_profiles
+                           (user_id, company_name, registration_number, business_type,
+                            business_address, contact_phone, description, document_filename,
+                            document_content_type, document_size)
+                       VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                       ON CONFLICT (user_id) DO UPDATE SET
+                           company_name = EXCLUDED.company_name,
+                           registration_number = EXCLUDED.registration_number,
+                           business_type = EXCLUDED.business_type,
+                           business_address = EXCLUDED.business_address,
+                           contact_phone = EXCLUDED.contact_phone,
+                           description = EXCLUDED.description,
+                           document_filename = EXCLUDED.document_filename,
+                           document_content_type = EXCLUDED.document_content_type,
+                           document_size = EXCLUDED.document_size,
+                           updated_at = now()
+                       RETURNING *""",
+                    (
+                        user["id"],
+                        profile_input.company_name,
+                        profile_input.registration_number,
+                        profile_input.business_type,
+                        profile_input.business_address,
+                        profile_input.contact_phone,
+                        profile_input.description,
+                        filename,
+                        content_type,
+                        total_size,
+                    ),
+                ).fetchone()
+        except ApiError:
+            temporary_path.unlink(missing_ok=True)
+            document_path.unlink(missing_ok=True)
+            raise
+        except OSError as error:
+            temporary_path.unlink(missing_ok=True)
+            document_path.unlink(missing_ok=True)
+            logger.exception("Could not save a CAC document for user %s", user["id"])
+            raise ApiError(500, "media_unavailable", "The CAC document could not be saved. Check server media storage.") from error
+        except Exception:
+            temporary_path.unlink(missing_ok=True)
+            document_path.unlink(missing_ok=True)
+            raise
+        if not profile:
+            document_path.unlink(missing_ok=True)
+            raise ApiError(500, "internal_error", "The company profile could not be saved.")
+        if old_filename and old_filename != filename:
+            try:
+                (business_documents_directory / old_filename).unlink(missing_ok=True)
+            except OSError:
+                logger.exception("Could not remove the replaced CAC document for user %s", user["id"])
+        return {
+            "businessProfile": public_job_business_profile(
+                profile,
+                "/api/jobs/business-profile/document",
+            ),
+        }
+
+    @app.get("/api/jobs/business-profile/document")
+    def get_own_business_document(request: Request) -> Response:
+        user = require_user(request)
+        with database.connection() as connection:
+            profile = connection.execute(
+                """SELECT document_filename, document_content_type
+                   FROM job_business_profiles WHERE user_id = %s""",
+                (user["id"],),
+            ).fetchone()
+        if not profile:
+            raise ApiError(404, "business_document_not_found", "No CAC document was submitted.")
+        document_path = business_documents_directory / profile["document_filename"]
+        if not document_path.is_file():
+            raise ApiError(404, "business_document_not_found", "The submitted CAC document is no longer available.")
+        return FileResponse(
+            document_path,
+            media_type=profile["document_content_type"],
+            headers={"Cache-Control": "private, no-store"},
+            content_disposition_type="inline",
+        )
+
     @app.post(
         "/api/jobs",
         status_code=201,
@@ -3427,6 +3699,16 @@ def create_app(
     ) -> Dict[str, Any]:
         user = require_user(request)
         with database.connection() as connection:
+            business_profile = connection.execute(
+                "SELECT user_id FROM job_business_profiles WHERE user_id = %s",
+                (user["id"],),
+            ).fetchone()
+            if not business_profile:
+                raise ApiError(
+                    403,
+                    "business_profile_required",
+                    "Submit your company details and CAC document before posting a job.",
+                )
             inserted = connection.execute(
                 """INSERT INTO job_listings
                        (user_id, title, company, location, employment_type,

@@ -10,6 +10,7 @@ from datetime import datetime, timedelta, timezone
 from io import BytesIO
 from pathlib import Path
 from unittest.mock import patch
+from urllib.parse import quote
 from uuid import uuid4
 
 from fastapi.testclient import TestClient
@@ -56,6 +57,8 @@ class FakeConnection:
                     "update_product",
                     "update_user_status",
                     "create_admin_content",
+                    "edit_user_post",
+                    "view_business_document",
                 ) if name in sql),
                 "unknown",
             )
@@ -73,6 +76,38 @@ class FakeConnection:
             self.state["admin_role_lookups"] += 1
             user_id = str(parameters[0])
             return FakeResult({"user_id": user_id} if user_id in self.state["admin_roles"] else None)
+        if sql.startswith("select * from job_business_profiles"):
+            profile = self.state["business_profiles"].get(str(parameters[0]))
+            return FakeResult(profile.copy() if profile else None)
+        if sql.startswith("select document_filename from job_business_profiles"):
+            profile = self.state["business_profiles"].get(str(parameters[0]))
+            return FakeResult(
+                {"document_filename": profile["document_filename"]}
+                if profile else None
+            )
+        if sql.startswith("select document_filename, document_content_type from job_business_profiles"):
+            profile = self.state["business_profiles"].get(str(parameters[0]))
+            return FakeResult({
+                "document_filename": profile["document_filename"],
+                "document_content_type": profile["document_content_type"],
+            } if profile else None)
+        if sql.startswith("insert into job_business_profiles"):
+            profile = {
+                "user_id": str(parameters[0]),
+                "company_name": parameters[1],
+                "registration_number": parameters[2],
+                "business_type": parameters[3],
+                "business_address": parameters[4],
+                "contact_phone": parameters[5],
+                "description": parameters[6],
+                "document_filename": parameters[7],
+                "document_content_type": parameters[8],
+                "document_size": parameters[9],
+                "submitted_at": datetime.now(timezone.utc),
+                "updated_at": datetime.now(timezone.utc),
+            }
+            self.state["business_profiles"][str(parameters[0])] = profile
+            return FakeResult(profile.copy())
         if "from admin_roles roles" in sql and "creator.display_name" in sql:
             return FakeResult(rows=[])
         if "from admin_audit_log log" in sql:
@@ -120,7 +155,7 @@ class FakeConnection:
         if sql.startswith("select u.id") and "from users u" in sql and "order by u.created_at" in sql:
             return FakeResult(rows=[self._admin_user_row()])
         if (
-            sql.startswith("select id, display_name, username, email, bio, interests, profile_visible")
+            sql.startswith("select id, display_name, username, email, bio, interests,")
             and "from users where id = %s" in sql
         ):
             user = self.state["user"]
@@ -151,6 +186,7 @@ class FakeConnection:
                 "id": "00000000-0000-0000-0000-000000000099",
                 "conversation_id": "00000000-0000-0000-0000-000000000098",
                 "body": "Private test message",
+                "image_url": "/api/media/images/{}".format("f" * 32),
                 "created_at": datetime.now(timezone.utc),
                 "read_at": None,
                 "sender_id": user["id"],
@@ -238,6 +274,18 @@ class FakeConnection:
             self.state["posts"].append(post)
             return FakeResult({"id": post["id"]})
         if sql.startswith("update social_posts set body"):
+            if len(parameters) == 3:
+                text, image_urls, post_id = parameters
+                post = next((item for item in self.state["posts"] if item["id"] == str(post_id)), None)
+                if not post:
+                    return FakeResult()
+                post["body"] = text
+                post["image_urls"] = image_urls
+                return FakeResult({
+                    "id": post["id"],
+                    "user_id": post["user_id"],
+                    "created_at": post["created_at"],
+                })
             text, image_urls, post_id, user_id = parameters
             post = next(
                 (
@@ -274,6 +322,21 @@ class FakeConnection:
                 bookmark for bookmark in self.state["bookmarks"] if bookmark[0] != post_id
             }
             return FakeResult({"id": post_id})
+        if (
+            sql.startswith("select p.id, p.body, p.image_urls, p.created_at")
+            and "where p.user_id = %s" in sql
+        ):
+            user_id, limit, offset = map(str, parameters)
+            posts = [post for post in self.state["posts"] if post["user_id"] == user_id]
+            posts.sort(key=lambda post: post["created_at"], reverse=True)
+            return FakeResult(rows=[
+                {
+                    **post,
+                    "like_count": 0,
+                    "comment_count": 0,
+                }
+                for post in posts[int(offset):int(offset) + int(limit)]
+            ])
         if sql.startswith("insert into marketplace_products"):
             product = {
                 "id": str(uuid4()),
@@ -696,6 +759,7 @@ class FakeConnection:
             "email": user["email"],
             "bio": user["bio"],
             "interests": user["interests"],
+            "profile_image_url": user.get("profile_image_url"),
             "profile_visible": user["profile_visible"],
             "discoverable": user["discoverable"],
             "email_verified_at": user["email_verified_at"],
@@ -729,6 +793,7 @@ class FakePool:
     def __init__(self):
         self.state = {
             "user": None,
+            "business_profiles": {},
             "verification": None,
             "sessions": {},
             "posts": [],
@@ -1287,11 +1352,17 @@ class AuthFlowTests(unittest.TestCase):
         user = users.json()["users"][0]
         self.assertEqual(user["email"], "new@example.com")
         self.assertEqual(user["counts"]["messages"], 1)
+        self.assertIn("profileImageUrl", user)
         self.assertNotIn("password_hash", user)
 
         details = self.client.get("/api/admin/users/{}".format(user["id"]))
         self.assertEqual(details.status_code, 200, details.text)
-        self.assertEqual(details.json()["user"]["activity"]["messages"][0]["text"], "Private test message")
+        message = details.json()["user"]["activity"]["messages"][0]
+        self.assertEqual(message["text"], "Private test message")
+        self.assertEqual(message["sender"]["username"], user["username"])
+        self.assertEqual(message["recipient"]["username"], user["username"])
+        self.assertEqual(message["imageUrl"], "/api/media/images/{}".format("f" * 32))
+        self.assertEqual(details.json()["user"]["counts"]["messages"], 1)
         self.assertEqual(len(self.pool.state["admin_audit"]), 1)
         audit = self.client.get("/api/admin/audit-log")
         self.assertEqual(audit.status_code, 200, audit.text)
@@ -1354,6 +1425,63 @@ class AuthFlowTests(unittest.TestCase):
             self.client.get("/api/social/posts").json()["posts"][0]["text"],
             "An official update for our community.",
         )
+        member_post = self.client.post("/api/social/posts", json={
+            "text": "My original member post",
+            "image_urls": [uploaded_image],
+        })
+        member_post_id = member_post.json()["post"]["id"]
+        edited_post = self.client.put(
+            "/api/admin/posts/{}".format(member_post_id),
+            json={
+                "text": "Admin-edited member post",
+                "image_urls": [uploaded_image],
+            },
+        )
+        self.assertEqual(edited_post.status_code, 200, edited_post.text)
+        self.assertEqual(edited_post.json()["post"]["text"], "Admin-edited member post")
+        self.assertEqual(self.pool.state["posts"][-1]["body"], "Admin-edited member post")
+        self.assertIn("edit_user_post", [event["action"] for event in self.pool.state["admin_audit"]])
+
+        company_details = {
+            "company_name": "Common Ground Ltd",
+            "registration_number": "RC-1234567",
+            "business_type": "Technology",
+            "business_address": "Lagos, Nigeria",
+            "contact_phone": "+2348012345678",
+            "description": "A member company profile.",
+        }
+        cac_file = b"%PDF-1.7\nCAC registration record"
+        company_submission = self.client.post(
+            "/api/jobs/business-profile",
+            content=cac_file,
+            headers={
+                "Content-Type": "application/pdf",
+                "X-Company-Details": quote(json.dumps(company_details)),
+            },
+        )
+        self.assertEqual(company_submission.status_code, 201, company_submission.text)
+        self.assertEqual(company_submission.json()["businessProfile"]["companyName"], "Common Ground Ltd")
+        member_profile = self.client.get("/api/jobs/business-profile")
+        self.assertEqual(member_profile.status_code, 200, member_profile.text)
+        self.assertEqual(member_profile.json()["businessProfile"]["registrationNumber"], "RC-1234567")
+        own_cac = self.client.get("/api/jobs/business-profile/document")
+        self.assertEqual(own_cac.status_code, 200)
+        self.assertEqual(own_cac.content, cac_file)
+        self.assertEqual(
+            not_allowlisted.get(
+                "/api/admin/users/{}/business-document".format(user["id"])
+            ).status_code,
+            403,
+        )
+
+        refreshed_details = self.client.get("/api/admin/users/{}".format(user["id"]))
+        self.assertEqual(refreshed_details.status_code, 200, refreshed_details.text)
+        self.assertEqual(refreshed_details.json()["user"]["businessProfile"]["contactPhone"], "+2348012345678")
+        admin_cac_url = refreshed_details.json()["user"]["businessProfile"]["documentUrl"]
+        admin_cac = self.client.get(admin_cac_url)
+        self.assertEqual(admin_cac.status_code, 200)
+        self.assertEqual(admin_cac.content, cac_file)
+        self.assertIn("view_business_document", [event["action"] for event in self.pool.state["admin_audit"]])
 
         self.pool.state["admin_roles"][user["id"]] = {
             "created_by": user["id"],
@@ -1370,7 +1498,10 @@ class AuthFlowTests(unittest.TestCase):
         self.assertEqual(not_allowlisted.get("/api/admin/me").json()["admin"]["role"], "sub_admin")
         subadmin_details = not_allowlisted.get("/api/admin/users/{}".format(user["id"]))
         self.assertEqual(subadmin_details.status_code, 200, subadmin_details.text)
-        self.assertEqual(subadmin_details.json()["user"]["activity"]["messages"], [])
+        self.assertEqual(
+            subadmin_details.json()["user"]["activity"]["messages"][0]["text"],
+            "Private test message",
+        )
         self.assertEqual(not_allowlisted.get("/api/admin/subadmins").status_code, 403)
 
     def test_marketplace_product_listings_are_persistent(self):
