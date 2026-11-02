@@ -55,6 +55,7 @@ class FakeConnection:
                     "delete_content",
                     "update_product",
                     "update_user_status",
+                    "create_admin_content",
                 ) if name in sql),
                 "unknown",
             )
@@ -229,7 +230,7 @@ class FakeConnection:
                 "image_url": parameters[6],
                 "image_urls": parameters[7],
                 "created_at": datetime.now(timezone.utc),
-                "published": True,
+                "published": parameters[8] if len(parameters) > 8 else True,
             }
             self.state["products"].append(product)
             return FakeResult({"id": product["id"]})
@@ -1148,6 +1149,51 @@ class AuthFlowTests(unittest.TestCase):
                 json={"suspended": True},
             ).status_code,
             409,
+        )
+
+        uploaded_image = "/api/media/images/{}.webp".format("e" * 32)
+        admin_product = self.client.post("/api/admin/products", json={
+            "name": "Admin Home Lamp",
+            "category": "Home",
+            "price": 12500,
+            "stock": 4,
+            "description": "A member-facing sample product.",
+            "image_urls": [uploaded_image],
+            "published": True,
+        })
+        self.assertEqual(admin_product.status_code, 201, admin_product.text)
+        self.assertEqual(admin_product.json()["product"]["imageUrl"], uploaded_image)
+        self.assertEqual(
+            self.client.get("/api/marketplace/products").json()["products"][0]["name"],
+            "Admin Home Lamp",
+        )
+
+        admin_home = self.client.post("/api/admin/local-listings", json={
+            "category": "Homes",
+            "title": "Admin two-bedroom home",
+            "price": "₦1,200,000 / year",
+            "location": "Lagos",
+            "detail": "Two bedrooms · Furnished",
+            "description": "A home listing published by the admin.",
+            "image_url": uploaded_image,
+        })
+        self.assertEqual(admin_home.status_code, 201, admin_home.text)
+        self.assertEqual(admin_home.json()["listing"]["imageUrl"], uploaded_image)
+        self.assertEqual(
+            self.client.get("/api/local-marketplace/listings?category=Homes").json()["listings"][0]["title"],
+            "Admin two-bedroom home",
+        )
+
+        admin_post = self.client.post("/api/admin/posts", json={
+            "text": "An official update for our community.",
+            "image_urls": [uploaded_image],
+        })
+        self.assertEqual(admin_post.status_code, 201, admin_post.text)
+        self.assertEqual(admin_post.json()["post"]["text"], "An official update for our community.")
+        self.assertEqual(admin_post.json()["post"]["imageUrls"], [uploaded_image])
+        self.assertEqual(
+            self.client.get("/api/social/posts").json()["posts"][0]["text"],
+            "An official update for our community.",
         )
 
         self.pool.state["admin_roles"][user["id"]] = {

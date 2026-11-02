@@ -1581,13 +1581,13 @@ def create_app(
             ),
             "local_listings": (
                 "local_marketplace_listings p JOIN users u ON u.id = p.seller_id",
-                "p.id, p.title, concat(p.category, ' · ', p.location, ' · ', p.price, ' · ', p.description) AS description, u.display_name AS owner, p.created_at, ARRAY[]::text[] AS image_urls, p.published",
+                "p.id, p.title, concat(p.category, ' · ', p.location, ' · ', p.price, ' · ', p.description) AS description, u.display_name AS owner, p.created_at, CASE WHEN p.image_url IS NOT NULL THEN ARRAY[p.image_url]::text[] ELSE '{}'::text[] END AS image_urls, p.published",
                 "lower(p.title) LIKE %s ESCAPE E'\\\\' OR lower(p.description) LIKE %s ESCAPE E'\\\\' OR lower(u.display_name) LIKE %s ESCAPE E'\\\\'",
                 "local_marketplace_listings",
             ),
             "jobs": (
                 "job_listings p JOIN users u ON u.id = p.user_id",
-                "p.id, p.title, concat(p.company, ' · ', p.location, ' · ', p.description) AS description, u.display_name AS owner, p.created_at, ARRAY[]::text[] AS image_urls, TRUE AS published",
+                "p.id, p.title, concat(p.company, ' · ', p.location, ' · ', p.description) AS description, u.display_name AS owner, p.created_at, CASE WHEN p.company_image_url IS NOT NULL THEN ARRAY[p.company_image_url]::text[] ELSE '{}'::text[] END AS image_urls, TRUE AS published",
                 "lower(p.title) LIKE %s ESCAPE E'\\\\' OR lower(p.company) LIKE %s ESCAPE E'\\\\' OR lower(u.display_name) LIKE %s ESCAPE E'\\\\'",
                 "job_listings",
             ),
@@ -1681,6 +1681,34 @@ def create_app(
             )
         return Response(status_code=204)
 
+    @app.post("/api/admin/posts", status_code=201)
+    def create_admin_post(
+        input: SocialPostInput,
+        admin: Dict[str, Any] = Depends(require_admin),
+    ) -> Dict[str, Any]:
+        with database.connection() as connection:
+            inserted = connection.execute(
+                """INSERT INTO social_posts (user_id, body, image_urls)
+                   VALUES (%s, %s, %s)
+                   RETURNING id""",
+                (admin["id"], input.text, input.image_urls),
+            ).fetchone()
+            if not inserted:
+                raise ApiError(500, "internal_error", "The post could not be published.")
+            post = social_post(connection, inserted["id"], admin["id"])
+            connection.execute(
+                """INSERT INTO admin_audit_log (admin_user_id, action, details)
+                   VALUES (%s, 'create_admin_content', %s::jsonb)""",
+                (
+                    admin["id"],
+                    json.dumps({"type": "post", "id": str(inserted["id"])}),
+                ),
+            )
+        if not post:
+            raise ApiError(500, "internal_error", "The post could not be loaded.")
+        publish_realtime({"type": "post.created", "postId": str(post["id"])})
+        return {"post": public_social_post(post, admin["id"])}
+
     @app.put("/api/admin/products/{product_id}")
     def update_admin_product(
         product_id: UUID,
@@ -1715,6 +1743,140 @@ def create_app(
                 (admin["id"], json.dumps({"productId": str(product_id), "published": input.published})),
             )
         return {"productId": str(product_id), "published": input.published}
+
+    @app.post("/api/admin/products", status_code=201)
+    def create_admin_product(
+        input: AdminMarketplaceProductInput,
+        admin: Dict[str, Any] = Depends(require_admin),
+    ) -> Dict[str, Any]:
+        image_urls = input.image_urls or ([input.image_url] if input.image_url else [])
+        with database.connection() as connection:
+            inserted = connection.execute(
+                """INSERT INTO marketplace_products
+                       (seller_id, name, category, price, stock, description, image_url, image_urls, published)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                   RETURNING id""",
+                (
+                    admin["id"],
+                    input.name,
+                    input.category,
+                    input.price,
+                    input.stock,
+                    input.description,
+                    image_urls[0] if image_urls else None,
+                    image_urls,
+                    input.published,
+                ),
+            ).fetchone()
+            if not inserted:
+                raise ApiError(500, "internal_error", "The product could not be published.")
+            row = connection.execute(
+                """SELECT p.id, p.name, p.category, p.price, p.stock,
+                          p.description, p.image_url, p.image_urls, p.created_at,
+                          s.id AS seller_id, s.display_name AS seller_name,
+                          s.username AS seller_username
+                   FROM marketplace_products p
+                   JOIN users s ON s.id = p.seller_id
+                   WHERE p.id = %s""",
+                (inserted["id"],),
+            ).fetchone()
+            connection.execute(
+                """INSERT INTO admin_audit_log (admin_user_id, action, details)
+                   VALUES (%s, 'create_admin_content', %s::jsonb)""",
+                (
+                    admin["id"],
+                    json.dumps({"type": "product", "id": str(inserted["id"])}),
+                ),
+            )
+        if not row:
+            raise ApiError(500, "internal_error", "The product could not be loaded.")
+        return {"product": public_marketplace_product(row)}
+
+    @app.post("/api/admin/jobs", status_code=201)
+    def create_admin_job(
+        input: JobListingInput,
+        admin: Dict[str, Any] = Depends(require_admin),
+    ) -> Dict[str, Any]:
+        with database.connection() as connection:
+            inserted = connection.execute(
+                """INSERT INTO job_listings
+                       (user_id, title, company, location, employment_type,
+                        workplace_type, summary, description, company_image_url)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                   RETURNING id""",
+                (
+                    admin["id"],
+                    input.title,
+                    input.company,
+                    input.location,
+                    input.employment_type,
+                    input.workplace_type,
+                    input.summary,
+                    input.description,
+                    input.company_image_url,
+                ),
+            ).fetchone()
+            if not inserted:
+                raise ApiError(500, "internal_error", "The job could not be published.")
+            row = job_record(connection, inserted["id"], admin["id"])
+            connection.execute(
+                """INSERT INTO admin_audit_log (admin_user_id, action, details)
+                   VALUES (%s, 'create_admin_content', %s::jsonb)""",
+                (
+                    admin["id"],
+                    json.dumps({"type": "job", "id": str(inserted["id"])}),
+                ),
+            )
+        if not row:
+            raise ApiError(500, "internal_error", "The job could not be loaded.")
+        return {"job": public_job(row)}
+
+    @app.post("/api/admin/local-listings", status_code=201)
+    def create_admin_local_listing(
+        input: LocalMarketplaceListingInput,
+        admin: Dict[str, Any] = Depends(require_admin),
+    ) -> Dict[str, Any]:
+        with database.connection() as connection:
+            inserted = connection.execute(
+                """INSERT INTO local_marketplace_listings
+                       (seller_id, category, title, price, location, detail,
+                        description, image_url)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                   RETURNING id""",
+                (
+                    admin["id"],
+                    input.category,
+                    input.title,
+                    input.price,
+                    input.location,
+                    input.detail,
+                    input.description,
+                    input.image_url,
+                ),
+            ).fetchone()
+            if not inserted:
+                raise ApiError(500, "internal_error", "The home listing could not be published.")
+            row = connection.execute(
+                """SELECT l.id, l.category, l.title, l.price, l.location,
+                          l.detail, l.description, l.image_url, l.created_at,
+                          s.id AS seller_id, s.display_name AS seller_name,
+                          s.username AS seller_username
+                   FROM local_marketplace_listings l
+                   JOIN users s ON s.id = l.seller_id
+                   WHERE l.id = %s""",
+                (inserted["id"],),
+            ).fetchone()
+            connection.execute(
+                """INSERT INTO admin_audit_log (admin_user_id, action, details)
+                   VALUES (%s, 'create_admin_content', %s::jsonb)""",
+                (
+                    admin["id"],
+                    json.dumps({"type": "local_listing", "id": str(inserted["id"])}),
+                ),
+            )
+        if not row:
+            raise ApiError(500, "internal_error", "The home listing could not be loaded.")
+        return {"listing": public_local_marketplace_listing(row)}
 
     @app.get("/api/admin/overview")
     def get_admin_overview(
@@ -3253,6 +3415,12 @@ def create_app(
                               WHERE block.blocker_id = %s
                                 AND block.blocked_id = other.id
                           ) AS is_blocked_by_me,
+                          EXISTS (
+                              SELECT 1
+                              FROM user_blocks block
+                              WHERE block.blocker_id = other.id
+                                AND block.blocked_id = %s
+                          ) AS is_blocked_by_them,
                           COALESCE(preferences.is_muted, false) AS is_muted,
                           COALESCE(preferences.is_archived, false) AS is_archived,
                           (SELECT count(*)
@@ -3278,7 +3446,15 @@ def create_app(
                     AND preferences.user_id = %s
                    WHERE c.participant_one_id = %s OR c.participant_two_id = %s
                    ORDER BY COALESCE(latest.created_at, c.created_at) DESC""",
-                (user["id"], user["id"], user["id"], user["id"], user["id"], user["id"]),
+                (
+                    user["id"],
+                    user["id"],
+                    user["id"],
+                    user["id"],
+                    user["id"],
+                    user["id"],
+                    user["id"],
+                ),
             ).fetchall()
         return {
             "conversations": [
@@ -3296,6 +3472,7 @@ def create_app(
                     ).isoformat(),
                     "unreadCount": int(row["unread_count"]),
                     "isBlockedByMe": bool(row["is_blocked_by_me"]),
+                    "isBlockedByThem": bool(row["is_blocked_by_them"]),
                     "isMuted": bool(row["is_muted"]),
                     "isArchived": bool(row["is_archived"]),
                 }
@@ -3327,15 +3504,19 @@ def create_app(
                 raise ApiError(404, "user_not_found", "That account could not be found.")
             block = connection.execute(
                 """SELECT EXISTS (
-                       SELECT 1
-                       FROM user_blocks
-                       WHERE (blocker_id = %s AND blocked_id = %s)
-                          OR (blocker_id = %s AND blocked_id = %s)
-                   ) AS blocked""",
+                       SELECT 1 FROM user_blocks
+                       WHERE blocker_id = %s AND blocked_id = %s
+                   ) AS blocked_by_me,
+                   EXISTS (
+                       SELECT 1 FROM user_blocks
+                       WHERE blocker_id = %s AND blocked_id = %s
+                   ) AS blocked_by_them""",
                 (user["id"], input.recipient_id, input.recipient_id, user["id"]),
             ).fetchone()
-            if block and block["blocked"]:
-                raise ApiError(403, "user_blocked", "This conversation is unavailable.")
+            if block and block["blocked_by_me"]:
+                raise ApiError(403, "blocked_by_me", "You blocked this person. Unblock them to send a message.")
+            if block and block["blocked_by_them"]:
+                raise ApiError(403, "blocked_by_them", "You can’t message this person because they blocked you.")
             conversation = connection.execute(
                 """INSERT INTO direct_conversations (participant_one_id, participant_two_id)
                    VALUES (LEAST(%s, %s), GREATEST(%s, %s))
@@ -3506,19 +3687,29 @@ def create_app(
         user = require_user(request)
         with database.connection() as connection:
             block = connection.execute(
-                """SELECT EXISTS (
-                       SELECT 1
-                       FROM direct_conversations c
-                       JOIN user_blocks b
-                         ON (b.blocker_id = c.participant_one_id AND b.blocked_id = c.participant_two_id)
-                         OR (b.blocker_id = c.participant_two_id AND b.blocked_id = c.participant_one_id)
-                       WHERE c.id = %s
-                         AND (c.participant_one_id = %s OR c.participant_two_id = %s)
-                   ) AS blocked""",
-                (conversation_id, user["id"], user["id"]),
+                """SELECT other.id AS recipient_id,
+                          EXISTS (
+                              SELECT 1 FROM user_blocks
+                              WHERE blocker_id = %s AND blocked_id = other.id
+                          ) AS blocked_by_me,
+                          EXISTS (
+                              SELECT 1 FROM user_blocks
+                              WHERE blocker_id = other.id AND blocked_id = %s
+                          ) AS blocked_by_them
+                   FROM direct_conversations c
+                   JOIN users other
+                     ON other.id = CASE
+                         WHEN c.participant_one_id = %s THEN c.participant_two_id
+                         ELSE c.participant_one_id
+                     END
+                   WHERE c.id = %s
+                     AND (c.participant_one_id = %s OR c.participant_two_id = %s)""",
+                (user["id"], user["id"], user["id"], conversation_id, user["id"], user["id"]),
             ).fetchone()
-            if block and block["blocked"]:
-                raise ApiError(403, "user_blocked", "This conversation is unavailable.")
+            if block and block["blocked_by_me"]:
+                raise ApiError(403, "blocked_by_me", "You blocked this person. Unblock them to send a message.")
+            if block and block["blocked_by_them"]:
+                raise ApiError(403, "blocked_by_them", "You can’t message this person because they blocked you.")
             inserted = connection.execute(
                 """INSERT INTO direct_messages
                        (conversation_id, sender_id, recipient_id, body, image_url)

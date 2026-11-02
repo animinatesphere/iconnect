@@ -33,11 +33,16 @@ class FakeJobsConnection:
 
     def execute(self, query, parameters=()):
         sql = re.sub(r"\s+", " ", query).strip().lower()
+        if sql.startswith("insert into admin_audit_log"):
+            return FakeResult({"id": str(uuid4())})
         if sql.startswith("select u.id") and "from auth_sessions" in sql:
             session = self.state["sessions"].get(parameters[0])
             if not session or session["expires_at"] <= datetime.now(timezone.utc):
                 return FakeResult()
             return FakeResult(self.state["users"][session["user_id"]].copy())
+
+        if sql.startswith("select user_id from admin_roles"):
+            return FakeResult()
 
         if sql.startswith("insert into job_listings"):
             (
@@ -243,7 +248,7 @@ class JobsFlowTests(unittest.TestCase):
             session_max_age_days=7,
             session_secret="test-session-secret-that-is-long-enough",
             trust_proxy=0,
-            admin_emails=frozenset(),
+            admin_emails=frozenset({"alice@example.com"}),
         )
         self.clients = {}
         for key in ("alice", "bob", "casey"):
@@ -309,6 +314,29 @@ class JobsFlowTests(unittest.TestCase):
                 "/api/jobs/{}/save".format(uuid4()), json={"saved": True}
             ).status_code,
             404,
+        )
+
+    def test_admin_can_publish_jobs_through_protected_endpoint(self):
+        response = self.clients["alice"].post("/api/admin/jobs", json={
+            "title": "Community Manager",
+            "company": "iConnect",
+            "location": "Remote",
+            "employment_type": "Full-time",
+            "workplace_type": "remote",
+            "summary": "Help members find their community.",
+            "description": "Support and grow the iConnect member community.",
+            "company_image_url": "/api/media/images/{}.webp".format("f" * 32),
+        })
+        self.assertEqual(response.status_code, 201, response.text)
+        self.assertEqual(response.json()["job"]["companyImageUrl"], "/api/media/images/{}.webp".format("f" * 32))
+        self.assertTrue(response.json()["job"]["isOwner"])
+        self.assertEqual(len(self.clients["bob"].get("/api/jobs").json()["jobs"]), 1)
+
+        self.assertEqual(
+            self.clients["bob"].post("/api/admin/jobs", json={
+                "title": "No access",
+            }).status_code,
+            403,
         )
 
     def test_applications_are_repeat_safe_and_private_to_listing_owner(self):
