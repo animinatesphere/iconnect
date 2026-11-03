@@ -47,6 +47,8 @@ export default function JobsPage() {
   const [location, setLocation] = useState('')
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
+  const [externalJobsEnabled, setExternalJobsEnabled] = useState(false)
+  const [externalSourceWarnings, setExternalSourceWarnings] = useState([])
   const [notice, setNotice] = useState('')
   const [showCreateForm, setShowCreateForm] = useState(false)
   const [draft, setDraft] = useState(emptyDraft)
@@ -122,7 +124,9 @@ export default function JobsPage() {
       })
         .then((results) => {
           if (!active) return
-          setJobs(results)
+          setJobs(results.jobs)
+          setExternalJobsEnabled(results.externalJobsEnabled)
+          setExternalSourceWarnings(results.externalSourceWarnings)
           setError('')
         })
         .catch((loadError) => {
@@ -285,7 +289,9 @@ export default function JobsPage() {
           <Plus size={15} /> {businessProfile ? 'Post a role' : 'Set up company to post'}
         </button>
       </AppPageHeader>
-      <div className="jobs-account-banner"><BriefcaseBusiness size={16} /><span><strong>Community job listings</strong> · Members submit company details and a CAC document once before posting roles. Listings, saved roles, and applications are tied to your iConnect account.</span></div>
+      <div className="jobs-account-banner"><BriefcaseBusiness size={16} /><span><strong>Community + employer listings</strong> · Find member-posted roles alongside jobs from configured Greenhouse and SmartRecruiters career boards. External listings link to the employer to apply; member applications stay in iConnect.</span></div>
+      {filter === 'All opportunities' && !externalJobsEnabled && <p className="jobs-source-notice">External job boards are not configured yet. iConnect needs each employer’s public careers-board ID; these providers do not offer one feed for every company.</p>}
+      {filter === 'All opportunities' && externalSourceWarnings.length > 0 && <p className="jobs-source-notice" role="status">Some external career boards could not be reached. Showing the listings that are available.</p>}
       {error && <p className="feed-interaction-notice feed-error" role="alert">{error}</p>}
       {notice && <p className="feed-interaction-notice" role="status">{notice}</p>}
 
@@ -347,15 +353,15 @@ export default function JobsPage() {
       <div className="job-filter-row" role="tablist" aria-label="Job listing filters">
         {filters.map((item) => <button key={item} type="button" role="tab" aria-selected={filter === item} className={filter === item ? 'job-filter-selected' : ''} onClick={() => setFilter(item)}>{item}</button>)}
       </div>
-      <div className="jobs-results-heading"><div><span className="app-page-eyebrow">SHARED BY THE ICONNECT COMMUNITY</span><h2>{resultTitle} <span>{jobs.length}</span></h2></div></div>
+      <div className="jobs-results-heading"><div><span className="app-page-eyebrow">COMMUNITY + EMPLOYER SOURCES</span><h2>{resultTitle} <span>{jobs.length}</span></h2></div></div>
       {loading && <p className="jobs-empty-state" role="status">Loading job listings…</p>}
       {!loading && search.trim().length === 1 && <p className="jobs-empty-state">Enter at least two characters to search.</p>}
       {!loading && search.trim().length !== 1 && jobs.length === 0 && <p className="jobs-empty-state">No roles found. Try another search or share an opportunity with the community.</p>}
       <div className="jobs-list">{jobs.map((job) => (
         <article className="job-card" key={job.id}>
           <div className="job-company-mark">{job.companyImageUrl ? <img src={job.companyImageUrl} alt={`${job.company} logo`} /> : job.company.slice(0, 2).toUpperCase()}</div>
-          <div className="job-info">
-            <span className="job-match-label"><i /> {job.isOwner ? 'Your listing' : `Posted by @${job.poster.username}`}</span>
+            <div className="job-info">
+              <span className="job-match-label"><i /> {job.source ? `${job.source} · External listing` : job.isOwner ? 'Your listing' : `Posted by @${job.poster.username}`}</span>
             <h3>{job.title}</h3>
             <strong>{job.company}</strong>
             <p className="job-summary">{job.summary}</p>
@@ -364,25 +370,27 @@ export default function JobsPage() {
             <details className="job-description"><summary>Role details</summary><p>{job.description}</p></details>
           </div>
           <div className="job-card-actions">
-            {!job.isOwner && <button className={job.isSaved ? 'job-save saved' : 'job-save'} type="button" onClick={() => toggleSaved(job)} disabled={savingJobIds.includes(job.id)} aria-label={job.isSaved ? 'Unsave job' : 'Save job'} aria-pressed={job.isSaved}><Bookmark size={17} fill={job.isSaved ? 'currentColor' : 'none'} /></button>}
-            {job.isOwner
+            {!job.source && !job.isOwner && <button className={job.isSaved ? 'job-save saved' : 'job-save'} type="button" onClick={() => toggleSaved(job)} disabled={savingJobIds.includes(job.id)} aria-label={job.isSaved ? 'Unsave job' : 'Save job'} aria-pressed={job.isSaved}><Bookmark size={17} fill={job.isSaved ? 'currentColor' : 'none'} /></button>}
+            {job.source
+              ? <a className="job-apply" href={job.externalUrl} target="_blank" rel="noreferrer">Apply on {job.source}</a>
+              : job.isOwner
               ? <button className="job-apply" type="button" onClick={() => toggleApplicants(job)}><Users size={14} /> Applicants {job.applicationCount}</button>
               : job.appliedByMe
                 ? <button className="job-apply" type="button" disabled>Applied</button>
                 : <button className="job-apply" type="button" onClick={() => { setApplyingJobId(job.id); setCoverLetter('') }}>Apply</button>}
           </div>
-          {applyingJobId === job.id && <form className="job-application-form" onSubmit={(event) => submitApplication(event, job)}>
+          {!job.source && applyingJobId === job.id && <form className="job-application-form" onSubmit={(event) => submitApplication(event, job)}>
             <label htmlFor={`application-${job.id}`}>Short note to the poster (optional)</label>
             <textarea id={`application-${job.id}`} maxLength={2000} rows={4} value={coverLetter} onChange={(event) => setCoverLetter(event.target.value)} />
             <div><button className="app-primary-button" type="submit" disabled={pendingApplicationId === job.id}>{pendingApplicationId === job.id ? 'Sending…' : 'Send application'}</button><button className="app-secondary-button" type="button" onClick={() => setApplyingJobId('')}>Cancel</button></div>
           </form>}
-          {applicantJobId === job.id && <div className="job-applicants-panel">
+          {!job.source && applicantJobId === job.id && <div className="job-applicants-panel">
             <h4>Applications</h4>
             {loadingApplicants ? <p>Loading applications…</p> : applicantsByJob[job.id]?.length ? applicantsByJob[job.id].map((application) => <article key={application.id}><strong>{application.applicant.name} <span>@{application.applicant.username}</span></strong><p>{application.coverLetter || 'No note included.'}</p></article>) : <p>No applications yet.</p>}
           </div>}
         </article>
       ))}</div>
-      <p className="app-disclaimer">Listings are shared by members and are not independently verified. iConnect applications are stored securely with the listing owner.</p>
+      <p className="app-disclaimer">External openings are retrieved from configured employer career boards and applications are handled on the employer’s site. Member listings are shared by users and are not independently verified; iConnect applications are stored securely with the listing owner.</p>
     </div>
   )
 }

@@ -984,6 +984,7 @@ button, a { -webkit-tap-highlight-color: transparent; }
 .jobs-search-panel { display: grid; grid-template-columns: 1fr .8fr auto; gap: 8px; padding: 11px; border: 1px solid #ecebe5; border-radius: 8px; background: white; }
 .jobs-search-panel label, .connect-search { display: flex; align-items: center; gap: 8px; padding: 0 9px; border: 1px solid #eeede7; border-radius: 6px; color: #99998f; }
 .jobs-search-panel input, .connect-search input { width: 100%; min-width: 0; height: 35px; border: 0; outline: 0; color: #55574f; font-size: 8px; }
+.jobs-source-notice { margin: 8px 0 0; padding: 9px 11px; border: 1px solid #ecebe5; border-radius: 7px; background: #fbfaf6; color: #77786e; font-size: 8px; line-height: 1.5; }
 .job-filter-row { display: flex; flex-wrap: wrap; gap: 7px; margin: 15px 0 22px; }
 .job-filter-row button { padding: 7px 10px; border: 1px solid #e9e8e1; border-radius: 30px; background: white; color: #85867d; font-size: 7px; cursor: pointer; }
 .job-filter-row .job-filter-selected { border-color: #d4dfb6; background: #f1f5e5; color: #657448; font-weight: 700; }
@@ -1009,7 +1010,7 @@ button, a { -webkit-tap-highlight-color: transparent; }
 .job-meta span { display: inline-flex; align-items: center; gap: 4px; }
 .job-card-actions { display: flex; flex-direction: column; align-items: flex-end; gap: 9px; }
 .job-save { border: 0; background: none; color: #92938a; cursor: pointer; }.job-save.saved { color: #829655; }
-.job-apply { display: flex; align-items: center; gap: 7px; padding: 8px 10px; border: 1px solid #e8e7df; border-radius: 5px; background: white; color: #62645b; font-size: 7px; }
+.job-apply { display: flex; align-items: center; gap: 7px; padding: 8px 10px; border: 1px solid #e8e7df; border-radius: 5px; background: white; color: #62645b; font-size: 7px; text-decoration: none; }
 .job-apply:disabled { cursor: default; opacity: .7; }
 .job-description { margin-top: 8px; color: #77786e; font-size: 8px; }
 .job-description summary { color: #75834e; cursor: pointer; font-weight: 700; }
