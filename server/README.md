@@ -205,3 +205,12 @@ location = /api/videos {
 ```
 
 Keep the existing `/api/realtime` WebSocket proxy and other API routes, then run `sudo nginx -t` and reload Nginx. Run the API with `server/.venv/bin/uvicorn server.app.main:app --host 127.0.0.1 --port 10000`. The migration creates the account, verification-code, session, admin audit, social feed/bookmark, messaging, follow, community, job/business-profile, iBuy product/gallery, local marketplace listing, and video tables idempotently. Back up the media directory alongside PostgreSQL, including the private `business-documents` subdirectory. The API does not configure PostgreSQL, DNS, Nginx, TLS, backups, or a process supervisor.
+
+## Job Hub external career boards
+
+`GET /api/jobs` combines iConnect member listings with public employer-board listings from Greenhouse and SmartRecruiters. Configure comma-separated public identifiers in the API environment:
+
+- `GREENHOUSE_BOARD_TOKENS`: the board token in a Greenhouse URL such as `boards.greenhouse.io/<board-token>`.
+- `SMARTRECRUITERS_COMPANY_IDS`: the company identifier used in a SmartRecruiters careers URL such as `jobs.smartrecruiters.com/<company-id>`.
+
+These are public employer identifiers, not API keys. Both providers expose jobs per employer and do not provide a global directory of every company’s jobs. The starter set is Stripe, Figma, Cloudflare, GitLab, MongoDB, Airbnb, Red Bull, and SmartRecruiters; their public boards were checked before configuring them. Set either variable to a comma-separated list to replace its starter set, or set it to `none` to disable that provider. Up to 20 identifiers per provider are accepted. External jobs are cached for five minutes, filtered with the existing title/location/workplace filters, and link to the employer for application; iConnect saves and applications remain limited to member listings. If an external provider is temporarily unavailable, available member and external listings are still returned with a source warning.

@@ -3,6 +3,7 @@ import re
 import unittest
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
+from unittest.mock import patch
 from uuid import uuid4
 
 from fastapi.testclient import TestClient
@@ -327,6 +328,49 @@ class JobsFlowTests(unittest.TestCase):
             ).status_code,
             404,
         )
+
+    def test_job_hub_combines_configured_external_results(self):
+        external_job = {
+            "id": "greenhouse:acme:123",
+            "source": "Greenhouse",
+            "externalUrl": "https://boards.greenhouse.io/acme/jobs/123",
+            "title": "Product Designer",
+            "company": "Acme",
+            "companyImageUrl": None,
+            "location": "Lagos",
+            "employmentType": "See employer listing",
+            "workplaceType": "remote",
+            "summary": "Design useful products.",
+            "description": "Full description.",
+            "createdAt": "2026-11-03T10:00:00+00:00",
+            "poster": None,
+            "isSaved": False,
+            "appliedByMe": False,
+            "isOwner": False,
+            "applicationCount": 0,
+            "applicationStatus": None,
+            "applicationCoverLetter": None,
+        }
+        with patch(
+            "server.app.main.fetch_external_jobs",
+            return_value={
+                "jobs": [external_job],
+                "warnings": [],
+                "enabled": True,
+            },
+        ) as fetch_jobs:
+            response = self.clients["alice"].get(
+                "/api/jobs?query=designer&location=Lagos&workplace_type=remote"
+            )
+
+        self.assertEqual(response.status_code, 200, response.text)
+        payload = response.json()
+        self.assertEqual(payload["jobs"], [external_job])
+        self.assertTrue(payload["externalJobsEnabled"])
+        fetch_jobs.assert_called_once()
+        self.assertEqual(fetch_jobs.call_args.kwargs["query"], "designer")
+        self.assertEqual(fetch_jobs.call_args.kwargs["location"], "Lagos")
+        self.assertEqual(fetch_jobs.call_args.kwargs["workplace_type"], "remote")
 
     def test_admin_can_publish_jobs_through_protected_endpoint(self):
         response = self.clients["alice"].post("/api/admin/jobs", json={

@@ -35,6 +35,7 @@ from .security import (
     secure_hash_equals,
     verify_password,
 )
+from .job_sources import fetch_external_jobs
 
 
 LOGGER = logging.getLogger("iconnect.api")
@@ -3949,7 +3950,37 @@ def create_app(
                    LIMIT %s""".format(" AND ".join(filters) if filters else "TRUE"),
                 tuple(parameters),
             ).fetchall()
-        return {"jobs": [public_job(row) for row in rows]}
+        jobs = [public_job(row) for row in rows]
+        external = {"jobs": [], "warnings": [], "enabled": False}
+        if view == "all":
+            external = fetch_external_jobs(
+                settings.greenhouse_board_tokens,
+                settings.smartrecruiters_company_ids,
+                query=query or "",
+                location=location or "",
+                workplace_type=workplace_type or "",
+                limit=limit,
+            )
+            jobs.extend(external["jobs"])
+
+            def published_timestamp(job: Dict[str, Any]) -> float:
+                try:
+                    published_at = datetime.fromisoformat(
+                        str(job["createdAt"]).replace("Z", "+00:00")
+                    )
+                    if published_at.tzinfo is None:
+                        published_at = published_at.replace(tzinfo=timezone.utc)
+                    return published_at.timestamp()
+                except (KeyError, TypeError, ValueError):
+                    return 0.0
+
+            jobs.sort(key=published_timestamp, reverse=True)
+            jobs = jobs[:limit]
+        return {
+            "jobs": jobs,
+            "externalJobsEnabled": external["enabled"],
+            "externalSourceWarnings": external["warnings"],
+        }
 
     @app.get("/api/jobs/business-profile")
     def get_job_business_profile(request: Request) -> Dict[str, Any]:

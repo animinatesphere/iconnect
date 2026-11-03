@@ -47,7 +47,11 @@ export async function getJobs({ query = '', location = '', workplaceType = '', v
   if (view !== 'all') params.set('view', view)
   const search = params.toString()
   const payload = await apiRequest(`/api/jobs${search ? `?${search}` : ''}`)
-  return payload.jobs
+  return {
+    jobs: payload.jobs,
+    externalJobsEnabled: payload.externalJobsEnabled,
+    externalSourceWarnings: payload.externalSourceWarnings ?? [],
+  }
 }
 
 export async function createJob(input) {

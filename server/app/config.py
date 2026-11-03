@@ -1,10 +1,24 @@
 import os
 import re
 from dataclasses import dataclass
-from typing import FrozenSet
+from typing import FrozenSet, Tuple
 from urllib.parse import urlparse
 
 from dotenv import load_dotenv
+
+
+DEFAULT_GREENHOUSE_BOARD_TOKENS = (
+    "stripe",
+    "figma",
+    "cloudflare",
+    "gitlab",
+    "mongodb",
+    "airbnb",
+)
+DEFAULT_SMARTRECRUITERS_COMPANY_IDS = (
+    "redbull",
+    "smartrecruiters",
+)
 
 
 @dataclass(frozen=True)
@@ -22,6 +36,8 @@ class Settings:
     session_secret: str
     trust_proxy: int
     admin_emails: FrozenSet[str]
+    greenhouse_board_tokens: Tuple[str, ...] = ()
+    smartrecruiters_company_ids: Tuple[str, ...] = ()
 
 
 def _required_secret(name: str) -> str:
@@ -29,6 +45,27 @@ def _required_secret(name: str) -> str:
     if len(value) < 32:
         raise RuntimeError("{} must be set to at least 32 characters.".format(name))
     return value
+
+
+def _job_source_ids(name: str, defaults: Tuple[str, ...]) -> Tuple[str, ...]:
+    configured = os.getenv(name, "").strip()
+    if not configured:
+        return defaults
+    if configured.casefold() == "none":
+        return ()
+    values = tuple(dict.fromkeys(
+        value.strip()
+        for value in configured.split(",")
+        if value.strip()
+    ))
+    if len(values) > 20 or any(
+        not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,79}", value)
+        for value in values
+    ):
+        raise RuntimeError(
+            "{} must contain up to 20 comma-separated public company identifiers.".format(name)
+        )
+    return values
 
 
 def load_settings() -> Settings:
@@ -98,4 +135,12 @@ def load_settings() -> Settings:
         session_secret=_required_secret("SESSION_SECRET"),
         trust_proxy=trust_proxy,
         admin_emails=admin_emails,
+        greenhouse_board_tokens=_job_source_ids(
+            "GREENHOUSE_BOARD_TOKENS",
+            DEFAULT_GREENHOUSE_BOARD_TOKENS,
+        ),
+        smartrecruiters_company_ids=_job_source_ids(
+            "SMARTRECRUITERS_COMPANY_IDS",
+            DEFAULT_SMARTRECRUITERS_COMPANY_IDS,
+        ),
     )
