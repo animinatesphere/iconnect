@@ -291,7 +291,6 @@ class FakeMessagingConnection:
                     not message
                     or message["conversation_id"] != str(conversation_id)
                     or message["sender_id"] != str(sender_id)
-                    or message["created_at"] < datetime.now(timezone.utc) - timedelta(minutes=15)
                 ):
                     return FakeResult()
                 message["body"] = body
@@ -617,7 +616,7 @@ class MessagingFlowTests(unittest.TestCase):
             json={"text": "Edited photo"},
         ).status_code, 400)
 
-    def test_text_messages_can_be_edited_only_by_the_sender_within_15_minutes(self):
+    def test_text_messages_can_be_edited_only_by_the_sender_even_after_15_minutes(self):
         created = self.client.post("/api/messages/conversations", json={
             "recipient_id": self.user_ids["bob"],
         })
@@ -641,16 +640,18 @@ class MessagingFlowTests(unittest.TestCase):
         )
         self.assertEqual(not_sender.status_code, 404)
 
-        expired_message = self.client.post(message_url, json={"text": "Too old to edit"})
-        expired_id = expired_message.json()["message"]["id"]
-        self.pool.state["messages"][expired_id]["created_at"] = (
+        older_message = self.client.post(message_url, json={"text": "Older message"})
+        older_id = older_message.json()["message"]["id"]
+        self.pool.state["messages"][older_id]["created_at"] = (
             datetime.now(timezone.utc) - timedelta(minutes=16)
         )
-        expired = self.client.put(
-            "{}/{}".format(message_url, expired_id),
+        older_edit = self.client.put(
+            "{}/{}".format(message_url, older_id),
             json={"text": "Late correction"},
         )
-        self.assertEqual(expired.status_code, 403)
+        self.assertEqual(older_edit.status_code, 200, older_edit.text)
+        self.assertEqual(older_edit.json()["message"]["text"], "Late correction")
+        self.assertTrue(older_edit.json()["message"]["canEdit"])
 
     def test_voice_notes_are_private_to_participants_and_audited_for_admin_access(self):
         created = self.client.post("/api/messages/conversations", json={

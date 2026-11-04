@@ -69,6 +69,7 @@ export default function InboxPage() {
   const voiceChunks = useRef([])
   const recordingTimer = useRef(null)
   const recordingStarted = useRef(0)
+  const sendAfterRecording = useRef(false)
   const audioContext = useRef(null)
   const mutedConversationIds = useRef(new Set())
   const requestedConversationId = useRef(location.state?.conversationId ?? '')
@@ -318,6 +319,13 @@ export default function InboxPage() {
   }, [activeId, messages.length])
 
   useEffect(() => {
+    if (!recordingVoice && voiceNote && sendAfterRecording.current) {
+      sendAfterRecording.current = false
+      deliverMessage()
+    }
+  }, [recordingVoice, voiceNote])
+
+  useEffect(() => {
     if (!messageImage) {
       setMessageImagePreview('')
       return undefined
@@ -365,6 +373,16 @@ export default function InboxPage() {
 
   async function sendMessage(event) {
     event.preventDefault()
+    if (!activeRemote) return
+    if (recordingVoice) {
+      sendAfterRecording.current = true
+      stopVoiceRecording()
+      return
+    }
+    await deliverMessage()
+  }
+
+  async function deliverMessage() {
     const trimmed = message.trim()
     if ((!trimmed && !messageImage && !voiceNote) || !activeRemote) return
     setSending(true)
@@ -417,6 +435,7 @@ export default function InboxPage() {
           setVoiceNote(recording)
           setMessageImage(null)
         } else {
+          sendAfterRecording.current = false
           setError('The voice recording was empty. Please record again.')
         }
         voiceChunks.current = []
@@ -427,6 +446,7 @@ export default function InboxPage() {
         setRecordingVoice(false)
       }, { once: true })
       recorder.addEventListener('error', () => {
+        sendAfterRecording.current = false
         setError('The voice recording failed. Please try again.')
         if (recorder.state === 'recording') recorder.stop()
       }, { once: true })
@@ -621,9 +641,9 @@ export default function InboxPage() {
                 {recordingVoice
                   ? <button className="chat-composer-tool chat-recording-stop" type="button" onClick={stopVoiceRecording} aria-label="Stop voice recording"><Square size={15} fill="currentColor" /></button>
                   : <button className={`chat-composer-tool ${voiceNote ? 'chat-composer-tool-active' : ''}`} type="button" onClick={voiceNote ? () => setVoiceNote(null) : startVoiceRecording} aria-label={voiceNote ? 'Discard voice note' : 'Record voice note'} disabled={sending || loadingMessages || activeRemote.isBlockedByThem}><Mic size={17} /></button>}
-                <button className="chat-send" type="submit" aria-label="Send message" disabled={(!message.trim() && !messageImage && !voiceNote) || sending || loadingMessages || activeRemote.isBlockedByThem || recordingVoice}><Send size={16} /></button>
+                <button className="chat-send" type="submit" aria-label={recordingVoice ? 'Stop recording and send voice note' : 'Send message'} disabled={(!recordingVoice && !message.trim() && !messageImage && !voiceNote) || sending || loadingMessages || activeRemote.isBlockedByThem}>{recordingVoice ? <Square size={15} fill="currentColor" /> : <Send size={16} />}</button>
               </form>}
-              <p className="chat-account-footnote">Private messages, photos, and voice notes are stored in your account. Text messages can be edited for 15 minutes after sending.</p>
+              <p className="chat-account-footnote">Private messages, photos, and voice notes are stored in your account. You can edit your sent text messages at any time.</p>
             </>}
         </section>
       </div>

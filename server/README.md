@@ -132,7 +132,7 @@ All messaging routes require a verified account and return only participants' pu
 - `POST /api/media/voice-notes` uploads an authenticated WebM, Ogg, or MP4 audio recording (up to 10 MB).
 - `GET /api/media/voice-notes/{filename}` plays a voice note for a participant in the conversation containing it.
 - `POST /api/messages/conversations/{conversation_id}/messages` sends text (`{"text":"..."}`, up to 2,000 characters), one uploaded photo (`{"image_url":"/api/media/images/<id>.webp"}`), one uploaded voice note (`{"audio_url":"/api/media/voice-notes/<id>.webm"}`), or text with a photo.
-- `PUT /api/messages/conversations/{conversation_id}/messages/{message_id}` edits the sender's text message for up to 15 minutes after sending; photo and voice-note messages cannot be edited.
+- `PUT /api/messages/conversations/{conversation_id}/messages/{message_id}` edits the sender's text message at any time; photo and voice-note messages cannot be edited.
 - `PUT /api/messages/conversations/{conversation_id}/block` blocks or unblocks the other participant (`{"blocked":true}`); either participant's block prevents both people from sending.
 - `PUT /api/messages/conversations/{conversation_id}/preferences` saves that member's mute and archive settings (`{"is_muted":true,"is_archived":false}`).
 
@@ -208,6 +208,19 @@ Set `NODE_ENV=production`, `API_HOST=127.0.0.1`, `API_PORT=10000`, `APP_ORIGIN=h
 On the VPS, create the environment with `python3 -m venv server/.venv`, install runtime packages with `server/.venv/bin/pip install -r server/requirements.txt`, and run `npm run db:migrate`. The API virtual host must allow request bodies up to 260 MB for 250 MiB video uploads and 12 MB for CAC documents. Add these exact-match locations to its HTTPS `server` block so Nginx streams upload bodies to the API instead of buffering the entire upload first:
 
 ```nginx
+location = /api/media/voice-notes {
+    client_max_body_size 10m;
+    client_body_timeout 120s;
+    proxy_request_buffering off;
+    proxy_send_timeout 120s;
+    proxy_pass http://127.0.0.1:10000;
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+}
+
 location = /api/jobs/business-profile {
     client_max_body_size 12M;
     client_body_timeout 120s;
