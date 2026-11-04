@@ -10,7 +10,7 @@ import urllib.error
 import urllib.request
 from collections import defaultdict, deque
 from contextlib import asynccontextmanager
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from io import BytesIO
 from pathlib import Path
 from typing import Any, Callable, Deque, Dict, List, Literal, Optional, Tuple
@@ -227,6 +227,132 @@ class SocialLikeInput(StrictModel):
 
 class SocialBookmarkInput(StrictModel):
     bookmarked: bool
+
+
+class UserStatusInput(StrictModel):
+    image_url: str = Field(min_length=1, max_length=2048)
+    caption: str = Field(default="", max_length=500)
+
+    @field_validator("image_url")
+    @classmethod
+    def valid_status_image(cls, value: str) -> str:
+        return validate_image_reference(value)
+
+    @field_validator("caption")
+    @classmethod
+    def clean_status_caption(cls, value: str) -> str:
+        return value.strip()
+
+
+class SavingsPlanInput(StrictModel):
+    name: str = Field(min_length=1, max_length=100)
+    target_amount: int = Field(ge=1, le=1_000_000_000_000)
+    contribution_amount: int = Field(ge=1, le=1_000_000_000)
+    frequency: Literal["daily", "weekly", "monthly"]
+    target_date: Optional[date] = None
+
+    @field_validator("target_date", mode="before")
+    @classmethod
+    def parse_target_date(cls, value: Any) -> Optional[date]:
+        if value is None or isinstance(value, date):
+            return value
+        if not isinstance(value, str):
+            raise ValueError("Target date is invalid.")
+        try:
+            return date.fromisoformat(value)
+        except ValueError as error:
+            raise ValueError("Target date is invalid.") from error
+
+    @field_validator("name")
+    @classmethod
+    def clean_savings_name(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("A savings plan name is required.")
+        return value
+
+
+class SavingsContributionInput(StrictModel):
+    amount: int = Field(ge=1, le=1_000_000_000)
+    note: str = Field(default="", max_length=240)
+
+    @field_validator("note")
+    @classmethod
+    def clean_savings_note(cls, value: str) -> str:
+        return value.strip()
+
+
+class DatingProfileInput(StrictModel):
+    birth_date: Optional[date] = None
+    gender: Literal["woman", "man", "non_binary"]
+    seeking: Literal["women", "men", "non_binary", "everyone"]
+    location: str = Field(min_length=1, max_length=120)
+    bio: str = Field(min_length=1, max_length=500)
+    interests: List[str] = Field(default_factory=list, max_length=10)
+    image_urls: List[str] = Field(min_length=1, max_length=5)
+    active: bool = True
+    agree_to_adult_terms: bool
+
+    @field_validator("birth_date", mode="before")
+    @classmethod
+    def parse_birth_date(cls, value: Any) -> Optional[date]:
+        if value is None or isinstance(value, date):
+            return value
+        if not isinstance(value, str):
+            raise ValueError("Date of birth is invalid.")
+        try:
+            return date.fromisoformat(value)
+        except ValueError as error:
+            raise ValueError("Date of birth is invalid.") from error
+
+    @field_validator("location", "bio")
+    @classmethod
+    def clean_dating_text(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("Location and bio are required.")
+        return value
+
+    @field_validator("interests")
+    @classmethod
+    def clean_dating_interests(cls, values: List[str]) -> List[str]:
+        cleaned = [value.strip() for value in values]
+        if any(not value or len(value) > 40 for value in cleaned):
+            raise ValueError("Dating interests must be 1–40 characters.")
+        if len({value.casefold() for value in cleaned}) != len(cleaned):
+            raise ValueError("Dating interests must be unique.")
+        return cleaned
+
+    @field_validator("image_urls")
+    @classmethod
+    def validate_dating_images(cls, values: List[str]) -> List[str]:
+        return validate_image_urls(values)
+
+
+class DatingLikeInput(StrictModel):
+    liked: bool
+
+
+class DatingMessageInput(StrictModel):
+    text: str = Field(min_length=1, max_length=2000)
+
+    @field_validator("text")
+    @classmethod
+    def clean_dating_message(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("A message is required.")
+        return value
+
+
+class DatingReportInput(StrictModel):
+    reason: Literal["inappropriate", "fake_profile", "harassment", "other"]
+    details: str = Field(default="", max_length=1000)
+
+    @field_validator("details")
+    @classmethod
+    def clean_dating_report_details(cls, value: str) -> str:
+        return value.strip()
 
 
 class MarketplaceProductInput(StrictModel):
@@ -971,6 +1097,25 @@ def create_app(
                 "name": row["seller_name"],
                 "username": row["seller_username"],
             },
+        }
+
+    def public_status(row: Dict[str, Any]) -> Dict[str, Any]:
+        return {
+            "id": str(row["id"]),
+            "imageUrl": row["image_url"],
+            "caption": row["caption"],
+            "createdAt": row["created_at"].isoformat(),
+            "expiresAt": row["expires_at"].isoformat(),
+            "viewedByMe": bool(row.get("viewed_by_me")),
+            "isMine": bool(row["is_mine"]),
+            "viewCount": int(row.get("view_count") or 0),
+            "author": {
+                "id": str(row["user_id"]),
+                "name": row["display_name"],
+                "username": row["username"],
+                "avatar": row.get("profile_image_url"),
+            },
+            "viewers": row.get("viewers", []),
         }
 
     def public_local_marketplace_listing(row: Dict[str, Any]) -> Dict[str, Any]:
@@ -2721,6 +2866,215 @@ def create_app(
             ],
         }
 
+    @app.get("/api/statuses")
+    def list_user_statuses(
+        request: Request,
+        user_id: Optional[UUID] = None,
+    ) -> Dict[str, Any]:
+        user = require_user(request)
+        with database.connection() as connection:
+            connection.execute(
+                "DELETE FROM user_statuses WHERE expires_at <= now()"
+            )
+            rows = connection.execute(
+                """SELECT status.id, status.user_id, status.image_url, status.caption,
+                          status.created_at, status.expires_at,
+                          author.display_name, author.username,
+                          author.profile_image_url,
+                          EXISTS (
+                              SELECT 1 FROM user_status_views mine
+                              WHERE mine.status_id = status.id
+                                AND mine.viewer_id = %s
+                          ) AS viewed_by_me,
+                          status.user_id = %s AS is_mine,
+                          (SELECT count(*) FROM user_status_views views
+                           WHERE views.status_id = status.id) AS view_count
+                   FROM user_statuses status
+                   JOIN users author ON author.id = status.user_id
+                   WHERE status.expires_at > now()
+                     AND (%s::uuid IS NULL OR status.user_id = %s)
+                     AND (
+                         status.user_id = %s
+                         OR EXISTS (
+                             SELECT 1 FROM user_follows followed
+                             WHERE followed.follower_id = %s
+                               AND followed.following_id = status.user_id
+                         )
+                         OR EXISTS (
+                             SELECT 1 FROM direct_conversations conversation
+                             WHERE (conversation.participant_one_id = %s
+                                    AND conversation.participant_two_id = status.user_id)
+                                OR (conversation.participant_two_id = %s
+                                    AND conversation.participant_one_id = status.user_id)
+                         )
+                     )
+                     AND NOT EXISTS (
+                         SELECT 1 FROM user_blocks blocked
+                         WHERE (blocked.blocker_id = %s AND blocked.blocked_id = status.user_id)
+                            OR (blocked.blocker_id = status.user_id AND blocked.blocked_id = %s)
+                     )
+                   ORDER BY status.created_at DESC
+                   LIMIT 200""",
+                (
+                    user["id"],
+                    user["id"],
+                    user_id,
+                    user_id,
+                    user["id"],
+                    user["id"],
+                    user["id"],
+                    user["id"],
+                    user["id"],
+                    user["id"],
+                ),
+            ).fetchall()
+        return {"statuses": [public_status(row) for row in rows]}
+
+    @app.post(
+        "/api/statuses",
+        status_code=201,
+        dependencies=[Depends(enforce_social_rate_limit)],
+    )
+    def create_user_status(
+        input: UserStatusInput,
+        user: Dict[str, Any] = Depends(require_user),
+    ) -> Dict[str, Any]:
+        with database.connection() as connection:
+            inserted = connection.execute(
+                """INSERT INTO user_statuses (user_id, image_url, caption)
+                   VALUES (%s, %s, %s)
+                   RETURNING id""",
+                (user["id"], input.image_url, input.caption),
+            ).fetchone()
+            if not inserted:
+                raise ApiError(500, "internal_error", "Your status could not be posted.")
+            row = connection.execute(
+                """SELECT status.id, status.user_id, status.image_url, status.caption,
+                          status.created_at, status.expires_at,
+                          author.display_name, author.username,
+                          author.profile_image_url,
+                          false AS viewed_by_me,
+                          true AS is_mine,
+                          0 AS view_count
+                   FROM user_statuses status
+                   JOIN users author ON author.id = status.user_id
+                   WHERE status.id = %s AND status.user_id = %s""",
+                (inserted["id"], user["id"]),
+            ).fetchone()
+        if not row:
+            raise ApiError(500, "internal_error", "Your status could not be loaded.")
+        return {"status": public_status(row)}
+
+    @app.get("/api/statuses/{status_id}")
+    def get_user_status(
+        status_id: UUID,
+        request: Request,
+    ) -> Dict[str, Any]:
+        user = require_user(request)
+        with database.connection() as connection:
+            row = connection.execute(
+                """SELECT status.id, status.user_id, status.image_url, status.caption,
+                          status.created_at, status.expires_at,
+                          author.display_name, author.username,
+                          author.profile_image_url,
+                          EXISTS (
+                              SELECT 1 FROM user_status_views mine
+                              WHERE mine.status_id = status.id
+                                AND mine.viewer_id = %s
+                          ) AS viewed_by_me,
+                          status.user_id = %s AS is_mine,
+                          (SELECT count(*) FROM user_status_views views
+                           WHERE views.status_id = status.id) AS view_count
+                   FROM user_statuses status
+                   JOIN users author ON author.id = status.user_id
+                   WHERE status.id = %s
+                     AND status.expires_at > now()
+                     AND (
+                         status.user_id = %s
+                         OR EXISTS (
+                             SELECT 1 FROM user_follows followed
+                             WHERE followed.follower_id = %s
+                               AND followed.following_id = status.user_id
+                         )
+                         OR EXISTS (
+                             SELECT 1 FROM direct_conversations conversation
+                             WHERE (conversation.participant_one_id = %s
+                                    AND conversation.participant_two_id = status.user_id)
+                                OR (conversation.participant_two_id = %s
+                                    AND conversation.participant_one_id = status.user_id)
+                         )
+                     )
+                     AND NOT EXISTS (
+                         SELECT 1 FROM user_blocks blocked
+                         WHERE (blocked.blocker_id = %s AND blocked.blocked_id = status.user_id)
+                            OR (blocked.blocker_id = status.user_id AND blocked.blocked_id = %s)
+                     )""",
+                (
+                    user["id"],
+                    user["id"],
+                    status_id,
+                    user["id"],
+                    user["id"],
+                    user["id"],
+                    user["id"],
+                    user["id"],
+                    user["id"],
+                ),
+            ).fetchone()
+            if not row:
+                raise ApiError(404, "status_not_found", "That status is unavailable or has expired.")
+            is_mine = bool(row["is_mine"])
+            if not is_mine:
+                if not row["viewed_by_me"]:
+                    inserted_view = connection.execute(
+                        """INSERT INTO user_status_views (status_id, viewer_id)
+                           VALUES (%s, %s)
+                           ON CONFLICT (status_id, viewer_id) DO NOTHING
+                           RETURNING status_id""",
+                        (status_id, user["id"]),
+                    ).fetchone()
+                    if inserted_view:
+                        row["view_count"] = int(row["view_count"]) + 1
+                row["viewed_by_me"] = True
+            if is_mine:
+                viewers = connection.execute(
+                    """SELECT viewer.id, viewer.display_name, viewer.username,
+                              viewer.profile_image_url, status_view.viewed_at
+                       FROM user_status_views status_view
+                       JOIN users viewer ON viewer.id = status_view.viewer_id
+                       WHERE status_view.status_id = %s
+                       ORDER BY status_view.viewed_at DESC""",
+                    (status_id,),
+                ).fetchall()
+                row["viewers"] = [
+                    {
+                        "id": str(viewer["id"]),
+                        "name": viewer["display_name"],
+                        "username": viewer["username"],
+                        "avatar": viewer.get("profile_image_url"),
+                        "viewedAt": viewer["viewed_at"].isoformat(),
+                    }
+                    for viewer in viewers
+                ]
+        return {"status": public_status(row)}
+
+    @app.delete("/api/statuses/{status_id}")
+    def delete_user_status(
+        status_id: UUID,
+        request: Request,
+    ) -> Dict[str, Any]:
+        user = require_user(request)
+        with database.connection() as connection:
+            deleted = connection.execute(
+                """DELETE FROM user_statuses
+                   WHERE id = %s AND user_id = %s
+                   RETURNING id""",
+                (status_id, user["id"]),
+            ).fetchone()
+        if not deleted:
+            raise ApiError(404, "status_not_found", "That status could not be found.")
+        return {"deleted": True}
+
     @app.get("/api/social/posts")
     def list_social_posts(
         user: Dict[str, Any] = Depends(require_user),
@@ -3084,6 +3438,65 @@ def create_app(
         if not row:
             raise ApiError(500, "internal_error", "The product listing could not be loaded.")
         return {"product": public_marketplace_product(row)}
+
+    @app.put("/api/marketplace/products/{product_id}")
+    def update_marketplace_product(
+        product_id: UUID,
+        input: MarketplaceProductInput,
+        user: Dict[str, Any] = Depends(require_user),
+    ) -> Dict[str, Any]:
+        image_urls = input.image_urls or ([input.image_url] if input.image_url else [])
+        with database.connection() as connection:
+            updated = connection.execute(
+                """UPDATE marketplace_products
+                   SET name = %s, category = %s, price = %s, stock = %s,
+                       description = %s, image_url = %s, image_urls = %s
+                   WHERE id = %s AND seller_id = %s
+                   RETURNING id""",
+                (
+                    input.name,
+                    input.category,
+                    input.price,
+                    input.stock,
+                    input.description,
+                    input.image_url or (image_urls[0] if image_urls else None),
+                    image_urls,
+                    product_id,
+                    user["id"],
+                ),
+            ).fetchone()
+            if not updated:
+                raise ApiError(404, "product_not_found", "That product listing could not be found.")
+            row = connection.execute(
+                """SELECT p.id, p.name, p.category, p.price, p.stock,
+                          p.description, p.image_url, p.image_urls, p.created_at,
+                          s.id AS seller_id, s.display_name AS seller_name,
+                          s.username AS seller_username
+                   FROM marketplace_products p
+                   JOIN users s ON s.id = p.seller_id
+                   WHERE p.id = %s AND p.published""",
+                (product_id,),
+            ).fetchone()
+        if not row:
+            raise ApiError(500, "internal_error", "The updated product could not be loaded.")
+        return {"product": public_marketplace_product(row)}
+
+    @app.delete("/api/marketplace/products/{product_id}")
+    def delete_marketplace_product(
+        product_id: UUID,
+        request: Request,
+    ) -> Dict[str, Any]:
+        user = require_user(request)
+        with database.connection() as connection:
+            deleted = connection.execute(
+                """DELETE FROM marketplace_products
+                   WHERE id = %s AND seller_id = %s
+                   RETURNING id""",
+                (product_id, user["id"]),
+            ).fetchone()
+        if not deleted:
+            raise ApiError(404, "product_not_found", "That product listing could not be found.")
+        return {"deleted": True}
 
     @app.get("/api/marketplace/products/{product_id}")
     def get_marketplace_product(
@@ -4302,6 +4715,11 @@ def create_app(
                           other.display_name AS recipient_name,
                           other.username AS recipient_username,
                           other.profile_image_url AS recipient_avatar,
+                          EXISTS (
+                              SELECT 1 FROM user_statuses active_status
+                              WHERE active_status.user_id = other.id
+                                AND active_status.expires_at > now()
+                          ) AS has_active_status,
                           latest.body AS last_message,
                           latest.image_url AS last_image_url,
                           latest.created_at AS last_message_at,
@@ -4361,6 +4779,7 @@ def create_app(
                         "name": row["recipient_name"],
                         "username": row["recipient_username"],
                         "avatar": row.get("recipient_avatar"),
+                        "hasActiveStatus": bool(row.get("has_active_status")),
                     },
                     "lastMessage": row["last_message"] or ("Photo" if row.get("last_image_url") else ""),
                     "lastMessageAt": (
@@ -4652,6 +5071,573 @@ def create_app(
             [row["recipient_id"]],
         )
         return {"message": public_direct_message(row, user["id"])}
+
+    def public_dating_profile(row: Dict[str, Any]) -> Dict[str, Any]:
+        today = date.today()
+        birth_date = row["birth_date"]
+        age = today.year - birth_date.year - ((today.month, today.day) < (birth_date.month, birth_date.day))
+        return {
+            "user_id": row["user_id"],
+            "name": row["display_name"],
+            "username": row["username"],
+            "age": age,
+            "gender": row["gender"],
+            "seeking": row["seeking"],
+            "location": row["location"],
+            "bio": row["bio"],
+            "interests": row["interests"],
+            "image_urls": row["image_urls"],
+            "active": row["active"],
+        }
+
+    def get_dating_profile(connection: Any, user_id: Any) -> Optional[Dict[str, Any]]:
+        return connection.execute(
+            """SELECT profile.user_id, profile.birth_date, profile.gender, profile.seeking,
+                      profile.location, profile.bio, profile.interests, profile.image_urls,
+                      profile.active, account.display_name, account.username
+               FROM dating_profiles profile
+               JOIN users account ON account.id = profile.user_id
+               WHERE profile.user_id = %s""",
+            (user_id,),
+        ).fetchone()
+
+    def require_active_dating_profile(connection: Any, user_id: Any) -> Dict[str, Any]:
+        row = get_dating_profile(connection, user_id)
+        if not row:
+            raise ApiError(403, "dating_profile_required", "Create your dating profile before using this feature.")
+        if not row["active"]:
+            raise ApiError(403, "dating_profile_paused", "Activate your dating profile to use dating.")
+        today = date.today()
+        age = today.year - row["birth_date"].year - (
+            (today.month, today.day) < (row["birth_date"].month, row["birth_date"].day)
+        )
+        if age < 18:
+            raise ApiError(403, "adult_only", "Dating is available only to adults aged 18 or older.")
+        return row
+
+    def require_dating_match(connection: Any, match_id: UUID, user_id: Any) -> Dict[str, Any]:
+        match = connection.execute(
+            """SELECT id, participant_one_id, participant_two_id
+               FROM dating_matches
+               WHERE id = %s AND (participant_one_id = %s OR participant_two_id = %s)""",
+            (match_id, user_id, user_id),
+        ).fetchone()
+        if not match:
+            raise ApiError(404, "dating_match_not_found", "That dating match could not be found.")
+        other_id = (
+            match["participant_two_id"]
+            if str(match["participant_one_id"]) == str(user_id)
+            else match["participant_one_id"]
+        )
+        blocked = connection.execute(
+            """SELECT 1 FROM dating_blocks
+               WHERE (blocker_id = %s AND blocked_id = %s)
+                  OR (blocker_id = %s AND blocked_id = %s)
+               LIMIT 1""",
+            (user_id, other_id, other_id, user_id),
+        ).fetchone()
+        if blocked:
+            raise ApiError(403, "dating_match_unavailable", "This dating conversation is no longer available.")
+        return {**match, "other_user_id": other_id}
+
+    @app.get("/api/savings/plans")
+    def list_savings_plans(user: Dict[str, Any] = Depends(require_user)) -> Dict[str, Any]:
+        with database.connection() as connection:
+            rows = connection.execute(
+                """SELECT plan.id, plan.name, plan.target_amount, plan.contribution_amount,
+                          plan.frequency, plan.target_date, plan.active, plan.created_at,
+                          COALESCE((
+                              SELECT sum(contribution.amount)
+                              FROM savings_contributions contribution
+                              WHERE contribution.plan_id = plan.id AND contribution.user_id = plan.user_id
+                          ), 0) AS saved_amount
+                   FROM savings_plans plan
+                   WHERE plan.user_id = %s
+                   ORDER BY plan.created_at DESC""",
+                (user["id"],),
+            ).fetchall()
+        return {"plans": rows}
+
+    @app.post(
+        "/api/savings/plans",
+        status_code=201,
+        dependencies=[Depends(enforce_social_rate_limit)],
+    )
+    def create_savings_plan(
+        input: SavingsPlanInput,
+        user: Dict[str, Any] = Depends(require_user),
+    ) -> Dict[str, Any]:
+        if input.target_date and input.target_date < date.today():
+            raise ApiError(400, "invalid_target_date", "The target date cannot be in the past.")
+        with database.connection() as connection:
+            row = connection.execute(
+                """INSERT INTO savings_plans
+                       (user_id, name, target_amount, contribution_amount, frequency, target_date)
+                   VALUES (%s, %s, %s, %s, %s, %s)
+                   RETURNING id, name, target_amount, contribution_amount, frequency,
+                             target_date, active, created_at""",
+                (
+                    user["id"], input.name, input.target_amount, input.contribution_amount,
+                    input.frequency, input.target_date,
+                ),
+            ).fetchone()
+        if not row:
+            raise ApiError(500, "internal_error", "The savings plan could not be created.")
+        return {"plan": {**row, "saved_amount": 0}}
+
+    @app.post(
+        "/api/savings/plans/{plan_id}/contributions",
+        status_code=201,
+        dependencies=[Depends(enforce_social_rate_limit)],
+    )
+    def add_savings_contribution(
+        plan_id: UUID,
+        input: SavingsContributionInput,
+        user: Dict[str, Any] = Depends(require_user),
+    ) -> Dict[str, Any]:
+        with database.connection() as connection:
+            row = connection.execute(
+                """INSERT INTO savings_contributions (plan_id, user_id, amount, note)
+                   SELECT id, user_id, %s, %s
+                   FROM savings_plans
+                   WHERE id = %s AND user_id = %s AND active
+                   RETURNING id, plan_id, amount, note, contributed_at""",
+                (input.amount, input.note, plan_id, user["id"]),
+            ).fetchone()
+        if not row:
+            raise ApiError(404, "savings_plan_not_found", "That active savings plan could not be found.")
+        return {"contribution": row}
+
+    @app.get("/api/savings/plans/{plan_id}/contributions")
+    def list_savings_contributions(
+        plan_id: UUID,
+        limit: int = Query(default=50, ge=1, le=100),
+        user: Dict[str, Any] = Depends(require_user),
+    ) -> Dict[str, Any]:
+        with database.connection() as connection:
+            plan = connection.execute(
+                "SELECT id FROM savings_plans WHERE id = %s AND user_id = %s",
+                (plan_id, user["id"]),
+            ).fetchone()
+            if not plan:
+                raise ApiError(404, "savings_plan_not_found", "That savings plan could not be found.")
+            rows = connection.execute(
+                """SELECT id, amount, note, contributed_at
+                   FROM savings_contributions
+                   WHERE plan_id = %s AND user_id = %s
+                   ORDER BY contributed_at DESC, id DESC
+                   LIMIT %s""",
+                (plan_id, user["id"], limit),
+            ).fetchall()
+        return {"contributions": rows}
+
+    @app.put(
+        "/api/savings/plans/{plan_id}/active",
+        dependencies=[Depends(enforce_social_rate_limit)],
+    )
+    def set_savings_plan_active(
+        plan_id: UUID,
+        active: bool,
+        user: Dict[str, Any] = Depends(require_user),
+    ) -> Dict[str, Any]:
+        with database.connection() as connection:
+            row = connection.execute(
+                """UPDATE savings_plans SET active = %s, updated_at = now()
+                   WHERE id = %s AND user_id = %s
+                   RETURNING id, active""",
+                (active, plan_id, user["id"]),
+            ).fetchone()
+        if not row:
+            raise ApiError(404, "savings_plan_not_found", "That savings plan could not be found.")
+        return {"plan": row}
+
+    @app.delete(
+        "/api/savings/plans/{plan_id}",
+        status_code=204,
+        dependencies=[Depends(enforce_social_rate_limit)],
+    )
+    def delete_savings_plan(
+        plan_id: UUID,
+        user: Dict[str, Any] = Depends(require_user),
+    ) -> Response:
+        with database.connection() as connection:
+            row = connection.execute(
+                "DELETE FROM savings_plans WHERE id = %s AND user_id = %s RETURNING id",
+                (plan_id, user["id"]),
+            ).fetchone()
+        if not row:
+            raise ApiError(404, "savings_plan_not_found", "That savings plan could not be found.")
+        return Response(status_code=204)
+
+    @app.get("/api/dating/profile")
+    def read_dating_profile(user: Dict[str, Any] = Depends(require_user)) -> Dict[str, Any]:
+        with database.connection() as connection:
+            row = get_dating_profile(connection, user["id"])
+        return {"profile": public_dating_profile(row) if row else None}
+
+    @app.put(
+        "/api/dating/profile",
+        dependencies=[Depends(enforce_social_rate_limit)],
+    )
+    def save_dating_profile(
+        input: DatingProfileInput,
+        user: Dict[str, Any] = Depends(require_user),
+    ) -> Dict[str, Any]:
+        if not input.agree_to_adult_terms:
+            raise ApiError(400, "adult_terms_required", "Confirm that you are 18 or older to continue.")
+        with database.connection() as connection:
+            existing = connection.execute(
+                "SELECT birth_date FROM dating_profiles WHERE user_id = %s",
+                (user["id"],),
+            ).fetchone()
+        birth_date = input.birth_date or (existing["birth_date"] if existing else None)
+        if not birth_date:
+            raise ApiError(400, "birth_date_required", "Enter your date of birth to create a dating profile.")
+        today = date.today()
+        age = today.year - birth_date.year - (
+            (today.month, today.day) < (birth_date.month, birth_date.day)
+        )
+        if age < 18:
+            raise ApiError(403, "adult_only", "Dating is available only to adults aged 18 or older.")
+        if age > 120 or birth_date > today:
+            raise ApiError(400, "invalid_birth_date", "Enter a valid date of birth.")
+        with database.connection() as connection:
+            connection.execute(
+                """INSERT INTO dating_profiles
+                       (user_id, birth_date, gender, seeking, location, bio, interests, image_urls, active)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                   ON CONFLICT (user_id) DO UPDATE SET
+                       birth_date = EXCLUDED.birth_date,
+                       gender = EXCLUDED.gender,
+                       seeking = EXCLUDED.seeking,
+                       location = EXCLUDED.location,
+                       bio = EXCLUDED.bio,
+                       interests = EXCLUDED.interests,
+                       image_urls = EXCLUDED.image_urls,
+                       active = EXCLUDED.active,
+                       terms_accepted_at = now(),
+                       updated_at = now()""",
+                (
+                    user["id"], birth_date, input.gender, input.seeking, input.location,
+                    input.bio, input.interests, input.image_urls, input.active,
+                ),
+            )
+            row = get_dating_profile(connection, user["id"])
+        if not row:
+            raise ApiError(500, "internal_error", "The dating profile could not be loaded.")
+        return {"profile": public_dating_profile(row)}
+
+    @app.get("/api/dating/discovery")
+    def discover_dating_profiles(
+        limit: int = Query(default=20, ge=1, le=50),
+        user: Dict[str, Any] = Depends(require_user),
+    ) -> Dict[str, Any]:
+        with database.connection() as connection:
+            own = require_active_dating_profile(connection, user["id"])
+            rows = connection.execute(
+                """SELECT profile.user_id, profile.birth_date, profile.gender, profile.seeking,
+                          profile.location, profile.bio, profile.interests, profile.image_urls,
+                          profile.active, account.display_name, account.username
+                   FROM dating_profiles profile
+                   JOIN users account ON account.id = profile.user_id
+                   WHERE profile.active
+                     AND account.email_verified_at IS NOT NULL
+                     AND account.profile_visible AND account.discoverable
+                     AND profile.user_id <> %s
+                     AND (
+                         profile.seeking = 'everyone'
+                         OR (profile.seeking = 'women' AND %s = 'woman')
+                         OR (profile.seeking = 'men' AND %s = 'man')
+                         OR (profile.seeking = 'non_binary' AND %s = 'non_binary')
+                     )
+                     AND (
+                         %s = 'everyone'
+                         OR (%s = 'women' AND profile.gender = 'woman')
+                         OR (%s = 'men' AND profile.gender = 'man')
+                         OR (%s = 'non_binary' AND profile.gender = 'non_binary')
+                     )
+                     AND NOT EXISTS (
+                         SELECT 1 FROM dating_swipes swipe
+                         WHERE swipe.user_id = %s AND swipe.target_user_id = profile.user_id
+                     )
+                     AND NOT EXISTS (
+                         SELECT 1 FROM dating_blocks dating_block
+                         WHERE (dating_block.blocker_id = %s AND dating_block.blocked_id = profile.user_id)
+                            OR (dating_block.blocker_id = profile.user_id AND dating_block.blocked_id = %s)
+                     )
+                   ORDER BY profile.updated_at DESC, profile.user_id
+                   LIMIT %s""",
+                (
+                    user["id"], own["gender"], own["gender"], own["gender"],
+                    own["seeking"], own["seeking"], own["seeking"], own["seeking"],
+                    user["id"], user["id"], user["id"], limit,
+                ),
+            ).fetchall()
+        return {"profiles": [public_dating_profile(row) for row in rows]}
+
+    @app.post(
+        "/api/dating/profiles/{target_user_id}/swipe",
+        dependencies=[Depends(enforce_social_rate_limit)],
+    )
+    def swipe_dating_profile(
+        target_user_id: UUID,
+        input: DatingLikeInput,
+        user: Dict[str, Any] = Depends(require_user),
+    ) -> Dict[str, Any]:
+        if str(target_user_id) == str(user["id"]):
+            raise ApiError(400, "invalid_dating_target", "You cannot swipe on your own profile.")
+        with database.connection() as connection:
+            connection.execute(
+                """SELECT user_id FROM dating_profiles
+                   WHERE user_id IN (%s, %s)
+                   ORDER BY user_id
+                   FOR UPDATE""",
+                (user["id"], target_user_id),
+            )
+            own = require_active_dating_profile(connection, user["id"])
+            target = connection.execute(
+                """SELECT profile.user_id, profile.gender, profile.seeking, profile.active
+                   FROM dating_profiles profile
+                   JOIN users account ON account.id = profile.user_id
+                   WHERE profile.user_id = %s AND profile.active
+                     AND account.email_verified_at IS NOT NULL
+                     AND account.profile_visible AND account.discoverable""",
+                (target_user_id,),
+            ).fetchone()
+            if not target:
+                raise ApiError(404, "dating_profile_not_found", "That dating profile could not be found.")
+            own_accepts_target = own["seeking"] == "everyone" or (
+                own["seeking"] == "women" and target["gender"] == "woman"
+            ) or (own["seeking"] == "men" and target["gender"] == "man") or (
+                own["seeking"] == "non_binary" and target["gender"] == "non_binary"
+            )
+            target_accepts_own = target["seeking"] == "everyone" or (
+                target["seeking"] == "women" and own["gender"] == "woman"
+            ) or (target["seeking"] == "men" and own["gender"] == "man") or (
+                target["seeking"] == "non_binary" and own["gender"] == "non_binary"
+            )
+            if not own_accepts_target or not target_accepts_own:
+                raise ApiError(404, "dating_profile_not_found", "That dating profile could not be found.")
+            blocked = connection.execute(
+                """SELECT 1 FROM dating_blocks
+                   WHERE (blocker_id = %s AND blocked_id = %s)
+                      OR (blocker_id = %s AND blocked_id = %s)
+                   LIMIT 1""",
+                (user["id"], target_user_id, target_user_id, user["id"]),
+            ).fetchone()
+            if blocked:
+                raise ApiError(404, "dating_profile_not_found", "That dating profile could not be found.")
+            connection.execute(
+                """INSERT INTO dating_swipes (user_id, target_user_id, liked)
+                   VALUES (%s, %s, %s)
+                   ON CONFLICT (user_id, target_user_id) DO UPDATE
+                   SET liked = EXCLUDED.liked, created_at = now()""",
+                (user["id"], target_user_id, input.liked),
+            )
+            mutual_match = connection.execute(
+                """SELECT 1 FROM dating_swipes
+                   WHERE user_id = %s AND target_user_id = %s AND liked""",
+                (target_user_id, user["id"]),
+            ).fetchone() if input.liked else None
+            match_id = None
+            if mutual_match:
+                match_row = connection.execute(
+                    """INSERT INTO dating_matches (participant_one_id, participant_two_id)
+                       VALUES (LEAST(%s, %s), GREATEST(%s, %s))
+                       ON CONFLICT (participant_one_id, participant_two_id) DO NOTHING
+                       RETURNING id""",
+                    (user["id"], target_user_id, user["id"], target_user_id),
+                ).fetchone()
+                if match_row:
+                    match_id = match_row["id"]
+                else:
+                    existing = connection.execute(
+                        """SELECT id FROM dating_matches
+                           WHERE participant_one_id = LEAST(%s, %s)
+                             AND participant_two_id = GREATEST(%s, %s)""",
+                        (user["id"], target_user_id, user["id"], target_user_id),
+                    ).fetchone()
+                    match_id = existing["id"] if existing else None
+        return {"liked": input.liked, "matched": bool(mutual_match), "match_id": match_id}
+
+    @app.get("/api/dating/matches")
+    def list_dating_matches(user: Dict[str, Any] = Depends(require_user)) -> Dict[str, Any]:
+        with database.connection() as connection:
+            own = get_dating_profile(connection, user["id"])
+            if not own:
+                raise ApiError(403, "dating_profile_required", "Create your dating profile before using this feature.")
+            today = date.today()
+            age = today.year - own["birth_date"].year - (
+                (today.month, today.day) < (own["birth_date"].month, own["birth_date"].day)
+            )
+            if age < 18:
+                raise ApiError(403, "adult_only", "Dating is available only to adults aged 18 or older.")
+            rows = connection.execute(
+                """SELECT dating_match.id, dating_match.created_at,
+                          other.id AS user_id, other.display_name, other.username,
+                          profile.birth_date, profile.gender, profile.seeking,
+                          profile.location, profile.bio, profile.interests, profile.image_urls,
+                          profile.active,
+                          latest.body AS last_message, latest.created_at AS last_message_at
+                   FROM dating_matches dating_match
+                   JOIN users other ON other.id = CASE
+                       WHEN dating_match.participant_one_id = %s THEN dating_match.participant_two_id
+                       ELSE dating_match.participant_one_id
+                   END
+                   JOIN dating_profiles profile ON profile.user_id = other.id
+                   LEFT JOIN LATERAL (
+                       SELECT body, created_at FROM dating_messages
+                       WHERE match_id = dating_match.id
+                       ORDER BY created_at DESC, id DESC LIMIT 1
+                   ) latest ON true
+                   WHERE (dating_match.participant_one_id = %s OR dating_match.participant_two_id = %s)
+                     AND NOT EXISTS (
+                         SELECT 1 FROM dating_blocks dating_block
+                         WHERE (dating_block.blocker_id = %s AND dating_block.blocked_id = other.id)
+                            OR (dating_block.blocker_id = other.id AND dating_block.blocked_id = %s)
+                     )
+                   ORDER BY COALESCE(latest.created_at, dating_match.created_at) DESC""",
+                (user["id"], user["id"], user["id"], user["id"], user["id"]),
+            ).fetchall()
+        matches = []
+        for row in rows:
+            match_profile = public_dating_profile({
+                **row,
+                "user_id": row["user_id"],
+            })
+            matches.append({
+                "id": row["id"],
+                "created_at": row["created_at"],
+                "profile": match_profile,
+                "last_message": row["last_message"],
+                "last_message_at": row["last_message_at"],
+            })
+        return {"matches": matches}
+
+    @app.get("/api/dating/matches/{match_id}/messages")
+    def list_dating_messages(
+        match_id: UUID,
+        limit: int = Query(default=100, ge=1, le=200),
+        user: Dict[str, Any] = Depends(require_user),
+    ) -> Dict[str, Any]:
+        with database.connection() as connection:
+            match = require_dating_match(connection, match_id, user["id"])
+            rows = connection.execute(
+                """SELECT message.id, message.sender_id, message.body, message.created_at,
+                          account.display_name AS sender_name
+                   FROM (
+                       SELECT id, sender_id, body, created_at
+                       FROM dating_messages WHERE match_id = %s
+                       ORDER BY created_at DESC, id DESC LIMIT %s
+                   ) message
+                   JOIN users account ON account.id = message.sender_id
+                   ORDER BY message.created_at, message.id""",
+                (match_id, limit),
+            ).fetchall()
+            connection.execute(
+                """UPDATE dating_messages SET read_at = now()
+                   WHERE match_id = %s AND sender_id = %s AND read_at IS NULL""",
+                (match_id, match["other_user_id"]),
+            )
+        return {"messages": rows}
+
+    @app.post(
+        "/api/dating/matches/{match_id}/messages",
+        status_code=201,
+        dependencies=[Depends(enforce_message_rate_limit)],
+    )
+    def send_dating_message(
+        match_id: UUID,
+        input: DatingMessageInput,
+        user: Dict[str, Any] = Depends(require_user),
+    ) -> Dict[str, Any]:
+        with database.connection() as connection:
+            require_dating_match(connection, match_id, user["id"])
+            inserted = connection.execute(
+                """INSERT INTO dating_messages (match_id, sender_id, body)
+                   VALUES (%s, %s, %s)
+                   RETURNING id, sender_id, body, created_at""",
+                (match_id, user["id"], input.text),
+            ).fetchone()
+        if not inserted:
+            raise ApiError(500, "internal_error", "The dating message could not be sent.")
+        return {"message": inserted}
+
+    @app.delete(
+        "/api/dating/matches/{match_id}",
+        status_code=204,
+        dependencies=[Depends(enforce_social_rate_limit)],
+    )
+    def unmatch_dating_user(
+        match_id: UUID,
+        user: Dict[str, Any] = Depends(require_user),
+    ) -> Response:
+        with database.connection() as connection:
+            row = connection.execute(
+                """DELETE FROM dating_matches
+                   WHERE id = %s AND (participant_one_id = %s OR participant_two_id = %s)
+                   RETURNING id""",
+                (match_id, user["id"], user["id"]),
+            ).fetchone()
+        if not row:
+            raise ApiError(404, "dating_match_not_found", "That dating match could not be found.")
+        return Response(status_code=204)
+
+    @app.post(
+        "/api/dating/users/{target_user_id}/block",
+        dependencies=[Depends(enforce_social_rate_limit)],
+    )
+    def block_dating_user(
+        target_user_id: UUID,
+        user: Dict[str, Any] = Depends(require_user),
+    ) -> Dict[str, bool]:
+        if str(target_user_id) == str(user["id"]):
+            raise ApiError(400, "invalid_dating_target", "You cannot block your own profile.")
+        with database.connection() as connection:
+            target = connection.execute(
+                "SELECT user_id FROM dating_profiles WHERE user_id = %s",
+                (target_user_id,),
+            ).fetchone()
+            if not target:
+                raise ApiError(404, "dating_profile_not_found", "That dating profile could not be found.")
+            connection.execute(
+                """INSERT INTO dating_blocks (blocker_id, blocked_id)
+                   VALUES (%s, %s) ON CONFLICT DO NOTHING""",
+                (user["id"], target_user_id),
+            )
+            connection.execute(
+                """DELETE FROM dating_matches
+                   WHERE (participant_one_id = %s AND participant_two_id = %s)
+                      OR (participant_one_id = %s AND participant_two_id = %s)""",
+                (user["id"], target_user_id, target_user_id, user["id"]),
+            )
+        return {"blocked": True}
+
+    @app.post(
+        "/api/dating/users/{target_user_id}/report",
+        status_code=201,
+        dependencies=[Depends(enforce_social_rate_limit)],
+    )
+    def report_dating_user(
+        target_user_id: UUID,
+        input: DatingReportInput,
+        user: Dict[str, Any] = Depends(require_user),
+    ) -> Dict[str, bool]:
+        if str(target_user_id) == str(user["id"]):
+            raise ApiError(400, "invalid_dating_target", "You cannot report your own profile.")
+        with database.connection() as connection:
+            target = connection.execute(
+                "SELECT user_id FROM dating_profiles WHERE user_id = %s",
+                (target_user_id,),
+            ).fetchone()
+            if not target:
+                raise ApiError(404, "dating_profile_not_found", "That dating profile could not be found.")
+            connection.execute(
+                """INSERT INTO dating_reports (reporter_id, reported_id, reason, details)
+                   VALUES (%s, %s, %s, %s)""",
+                (user["id"], target_user_id, input.reason, input.details),
+            )
+        return {"reported": True}
 
     return app
 

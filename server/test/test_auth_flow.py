@@ -6,7 +6,7 @@ import unittest
 import tempfile
 from contextlib import contextmanager
 from dataclasses import replace
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from io import BytesIO
 from pathlib import Path
 from unittest.mock import patch
@@ -359,6 +359,112 @@ class FakeConnection:
             }
             self.state["products"].append(product)
             return FakeResult({"id": product["id"]})
+        if sql.startswith("update marketplace_products"):
+            name, category, price, stock, description, image_url, image_urls, product_id, seller_id = parameters
+            product = next(
+                (item for item in self.state["products"]
+                 if item["id"] == str(product_id) and item["seller_id"] == str(seller_id)),
+                None,
+            )
+            if not product:
+                return FakeResult()
+            product.update({
+                "name": name,
+                "category": category,
+                "price": price,
+                "stock": stock,
+                "description": description,
+                "image_url": image_url,
+                "image_urls": image_urls,
+            })
+            return FakeResult({"id": product["id"]})
+        if sql.startswith("delete from marketplace_products"):
+            product_id, seller_id = map(str, parameters)
+            product = next(
+                (item for item in self.state["products"]
+                 if item["id"] == product_id and item["seller_id"] == seller_id),
+                None,
+            )
+            if not product:
+                return FakeResult()
+            self.state["products"].remove(product)
+            return FakeResult({"id": product_id})
+        if sql.startswith("insert into user_statuses"):
+            status = {
+                "id": str(uuid4()),
+                "user_id": str(parameters[0]),
+                "image_url": parameters[1],
+                "caption": parameters[2],
+                "created_at": datetime.now(timezone.utc),
+                "expires_at": datetime.now(timezone.utc) + timedelta(hours=24),
+            }
+            self.state["statuses"].append(status)
+            return FakeResult({"id": status["id"]})
+        if sql.startswith("select status.id") and "from user_statuses status" in sql:
+            if "false as viewed_by_me" in sql:
+                status = next(
+                    (item for item in self.state["statuses"]
+                     if item["id"] == str(parameters[0])
+                     and item["user_id"] == str(parameters[1])),
+                    None,
+                )
+                if not status:
+                    return FakeResult()
+                row = self._status_row(status, parameters[1])
+                row["viewed_by_me"] = False
+                row["is_mine"] = True
+                row["view_count"] = 0
+                return FakeResult(row)
+            viewer_id = str(parameters[0])
+            if "where status.id = %s" in sql:
+                status = next(
+                    (item for item in self.state["statuses"]
+                     if item["id"] == str(parameters[2])),
+                    None,
+                )
+                return FakeResult(self._status_row(status, viewer_id) if status else None)
+            user_id_filter = str(parameters[2]) if parameters[2] else None
+            statuses = [
+                item for item in self.state["statuses"]
+                if item["expires_at"] > datetime.now(timezone.utc)
+                and (user_id_filter is None or item["user_id"] == user_id_filter)
+            ]
+            return FakeResult(rows=[self._status_row(item, viewer_id) for item in statuses])
+        if sql.startswith("select viewer.id") and "from user_status_views" in sql:
+            return FakeResult(rows=[])
+        if sql.startswith("insert into user_status_views"):
+            status_id, viewer_id = map(str, parameters)
+            if not any(
+                item["status_id"] == status_id and item["viewer_id"] == viewer_id
+                for item in self.state["status_views"]
+            ):
+                self.state["status_views"].append({
+                    "status_id": status_id,
+                    "viewer_id": viewer_id,
+                    "viewed_at": datetime.now(timezone.utc),
+                })
+            return FakeResult()
+        if sql.startswith("delete from user_statuses where expires_at <= now()"):
+            self.state["statuses"] = [
+                status for status in self.state["statuses"]
+                if status["expires_at"] > datetime.now(timezone.utc)
+            ]
+            return FakeResult()
+        if sql.startswith("delete from user_statuses"):
+            status_id, owner_id = map(str, parameters)
+            status = next(
+                (item for item in self.state["statuses"]
+                 if item["id"] == status_id and item["user_id"] == owner_id),
+                None,
+            )
+            if not status:
+                return FakeResult()
+            self.state["statuses"].remove(status)
+            self.state["status_views"] = [
+                view for view in self.state["status_views"]
+                if view["status_id"] != status_id
+            ]
+            return FakeResult({"id": status_id})
         if sql.startswith("insert into local_marketplace_listings"):
             listing = {
                 "id": str(uuid4()),
@@ -865,6 +971,84 @@ class FakeConnection:
         if sql.startswith("delete from auth_sessions"):
             self.state["sessions"].pop(parameters[0], None)
             return FakeResult(rowcount=1)
+        if sql.startswith("select birth_date from dating_profiles"):
+            profile = self.state["dating_profiles"].get(str(parameters[0]))
+            return FakeResult({"birth_date": profile["birth_date"]} if profile else None)
+        if sql.startswith("select profile.user_id, profile.birth_date") and "from dating_profiles profile" in sql:
+            profile = self.state["dating_profiles"].get(str(parameters[0]))
+            user = self.state["user"]
+            return FakeResult({
+                **profile,
+                "display_name": user["display_name"],
+                "username": user["username"],
+            } if profile and user else None)
+        if sql.startswith("insert into dating_profiles"):
+            user_id, birth_date, gender, seeking, location, bio, interests, image_urls, active = parameters
+            profile = {
+                "user_id": str(user_id),
+                "birth_date": birth_date,
+                "gender": gender,
+                "seeking": seeking,
+                "location": location,
+                "bio": bio,
+                "interests": interests,
+                "image_urls": image_urls,
+                "active": active,
+            }
+            self.state["dating_profiles"][str(user_id)] = profile
+            return FakeResult(rowcount=1)
+        if sql.startswith("select plan.id") and "from savings_plans plan" in sql:
+            plans = []
+            for plan in self.state["savings_plans"].values():
+                if plan["user_id"] != str(parameters[0]):
+                    continue
+                saved_amount = sum(
+                    item["amount"] for item in self.state["savings_contributions"]
+                    if item["plan_id"] == plan["id"] and item["user_id"] == plan["user_id"]
+                )
+                plans.append({**plan, "saved_amount": saved_amount})
+            return FakeResult(rows=plans)
+        if sql.startswith("insert into savings_plans"):
+            user_id, name, target_amount, contribution_amount, frequency, target_date = parameters
+            plan = {
+                "id": str(uuid4()),
+                "user_id": str(user_id),
+                "name": name,
+                "target_amount": target_amount,
+                "contribution_amount": contribution_amount,
+                "frequency": frequency,
+                "target_date": target_date,
+                "active": True,
+                "created_at": datetime.now(timezone.utc),
+            }
+            self.state["savings_plans"][plan["id"]] = plan
+            return FakeResult({key: value for key, value in plan.items() if key != "user_id"})
+        if sql.startswith("insert into savings_contributions"):
+            amount, note, plan_id, user_id = parameters
+            plan = self.state["savings_plans"].get(str(plan_id))
+            if not plan or plan["user_id"] != str(user_id) or not plan["active"]:
+                return FakeResult()
+            contribution = {
+                "id": str(uuid4()),
+                "plan_id": str(plan_id),
+                "user_id": str(user_id),
+                "amount": amount,
+                "note": note,
+                "contributed_at": datetime.now(timezone.utc),
+            }
+            self.state["savings_contributions"].append(contribution)
+            return FakeResult({key: value for key, value in contribution.items() if key != "user_id"})
+        if sql.startswith("select id from savings_plans"):
+            plan = self.state["savings_plans"].get(str(parameters[0]))
+            return FakeResult({"id": plan["id"]} if plan and plan["user_id"] == str(parameters[1]) else None)
+        if sql.startswith("select id, amount, note, contributed_at from savings_contributions"):
+            plan_id, user_id, limit = parameters
+            rows = [
+                {key: value for key, value in item.items() if key not in {"plan_id", "user_id"}}
+                for item in self.state["savings_contributions"]
+                if item["plan_id"] == str(plan_id) and item["user_id"] == str(user_id)
+            ]
+            return FakeResult(rows=list(reversed(rows))[:limit])
         if sql.startswith("select 1"):
             return FakeResult({"?column?": 1})
         raise AssertionError("Unexpected database query: {}".format(query))
@@ -910,6 +1094,19 @@ class FakeConnection:
             "seller_id": user["id"],
             "seller_name": user["display_name"],
             "seller_username": user["username"],
+        }
+
+    def _status_row(self, status, viewer_id=None):
+        user = self.state["user"]
+        views = [view for view in self.state["status_views"] if view["status_id"] == status["id"]]
+        return {
+            **status,
+            "display_name": user["display_name"],
+            "username": user["username"],
+            "profile_image_url": user.get("profile_image_url"),
+            "viewed_by_me": any(view["viewer_id"] == str(viewer_id) for view in views),
+            "is_mine": status["user_id"] == str(viewer_id),
+            "view_count": len(views),
         }
 
     def _local_marketplace_listing_row(self, listing):
@@ -1006,6 +1203,8 @@ class FakePool:
             "posts": [],
             "videos": [],
             "products": [],
+            "statuses": [],
+            "status_views": [],
             "local_listings": [],
             "communities": [],
             "community_memberships": set(),
@@ -1014,6 +1213,9 @@ class FakePool:
             "admin_audit": [],
             "admin_roles": {},
             "admin_role_lookups": 0,
+            "dating_profiles": {},
+            "savings_plans": {},
+            "savings_contributions": [],
             "likes": set(),
             "bookmarks": set(),
             "comments": [],
@@ -1057,6 +1259,19 @@ class AuthFlowTests(unittest.TestCase):
             send_otp_email=send_email,
             media_directory=Path(self.media_tmp.name),
         ))
+
+    def authenticate_test_user(self):
+        signup = self.client.post("/api/auth/register", json={
+            "name": "New User",
+            "email": "new@example.com",
+            "password": "a long test password",
+        })
+        self.assertEqual(signup.status_code, 202)
+        verified = self.client.post("/api/auth/verify-email", json={
+            "email": "new@example.com",
+            "code": self.delivered_code,
+        })
+        self.assertEqual(verified.status_code, 200)
 
     def test_resend_request_identifies_the_api_client(self):
         settings = Settings(
@@ -1172,6 +1387,58 @@ class AuthFlowTests(unittest.TestCase):
         logout = self.client.post("/api/auth/logout")
         self.assertEqual(logout.status_code, 204)
         self.assertEqual(self.client.get("/api/auth/me").status_code, 401)
+
+    def test_savings_tracking_and_adult_dating_profile_privacy(self):
+        self.authenticate_test_user()
+        plan_response = self.client.post("/api/savings/plans", json={
+            "name": "Emergency fund",
+            "target_amount": 500000,
+            "contribution_amount": 10000,
+            "frequency": "weekly",
+            "target_date": (date.today() + timedelta(days=30)).isoformat(),
+        })
+        self.assertEqual(plan_response.status_code, 201, plan_response.text)
+        plan_id = plan_response.json()["plan"]["id"]
+        self.assertEqual(plan_response.json()["plan"]["saved_amount"], 0)
+
+        contribution = self.client.post(
+            "/api/savings/plans/{}/contributions".format(plan_id),
+            json={"amount": 10000, "note": "First entry"},
+        )
+        self.assertEqual(contribution.status_code, 201, contribution.text)
+        self.assertEqual(contribution.json()["contribution"]["amount"], 10000)
+        plans = self.client.get("/api/savings/plans").json()["plans"]
+        self.assertEqual(plans[0]["saved_amount"], 10000)
+        history = self.client.get(
+            "/api/savings/plans/{}/contributions".format(plan_id)
+        ).json()["contributions"]
+        self.assertEqual(len(history), 1)
+
+        photo_url = "/api/media/images/{}.webp".format("a" * 32)
+        underage = date.today().replace(year=date.today().year - 17).isoformat()
+        profile_data = {
+            "birth_date": underage,
+            "gender": "woman",
+            "seeking": "everyone",
+            "location": "Lagos",
+            "bio": "I enjoy reading and music.",
+            "interests": ["Reading"],
+            "image_urls": [photo_url],
+            "active": True,
+            "agree_to_adult_terms": True,
+        }
+        rejected = self.client.put("/api/dating/profile", json=profile_data)
+        self.assertEqual(rejected.status_code, 403, rejected.text)
+        self.assertEqual(rejected.json()["error"]["code"], "adult_only")
+
+        profile_data["birth_date"] = date.today().replace(year=date.today().year - 18).isoformat()
+        accepted = self.client.put("/api/dating/profile", json=profile_data)
+        self.assertEqual(accepted.status_code, 200, accepted.text)
+        public_profile = accepted.json()["profile"]
+        self.assertEqual(public_profile["age"], 18)
+        self.assertNotIn("birth_date", public_profile)
+        self.assertNotIn("birthDate", public_profile)
+        self.assertEqual(self.client.get("/api/dating/profile").json()["profile"]["age"], 18)
 
     def test_signed_in_members_upload_images_for_posts_and_products(self):
         image_buffer = BytesIO()
@@ -1780,6 +2047,77 @@ class AuthFlowTests(unittest.TestCase):
             self.client.get("/api/marketplace/products?query=x").status_code,
             400,
         )
+        updated = self.client.put(
+            "/api/marketplace/products/{}".format(product["id"]),
+            json={
+                "name": "Updated lamp",
+                "category": "Home",
+                "price": 14000,
+                "stock": 2,
+                "description": "Updated product details.",
+                "image_urls": [],
+            },
+        )
+        self.assertEqual(updated.status_code, 200, updated.text)
+        self.assertEqual(updated.json()["product"]["name"], "Updated lamp")
+        self.assertEqual(updated.json()["product"]["price"], 14000)
+        self.assertEqual(updated.json()["product"]["imageUrls"], [])
+        self.assertEqual(
+            self.client.delete("/api/marketplace/products/{}".format(product["id"])).json(),
+            {"deleted": True},
+        )
+        self.assertEqual(self.client.get("/api/marketplace/products").json()["products"], [])
+        self.assertEqual(
+            self.client.delete("/api/marketplace/products/{}".format(product["id"])).status_code,
+            404,
+        )
+
+    def test_member_statuses_expire_and_are_removed_by_the_owner(self):
+        signup = self.client.post("/api/auth/register", json={
+            "name": "Status Member",
+            "email": "new@example.com",
+            "password": "a long test password",
+        })
+        self.assertEqual(signup.status_code, 202)
+        self.assertEqual(self.client.post("/api/auth/verify-email", json={
+            "email": "new@example.com",
+            "code": self.delivered_code,
+        }).status_code, 200)
+
+        invalid = self.client.post("/api/statuses", json={
+            "image_url": "javascript:alert(1)",
+            "caption": "Not a valid status photo",
+        })
+        self.assertEqual(invalid.status_code, 400)
+        posted = self.client.post("/api/statuses", json={
+            "image_url": "/api/media/images/{}.webp".format("a" * 32),
+            "caption": "A moment from today",
+        })
+        self.assertEqual(posted.status_code, 201, posted.text)
+        status = posted.json()["status"]
+        self.assertEqual(status["caption"], "A moment from today")
+        self.assertTrue(status["isMine"])
+        self.assertEqual(status["viewCount"], 0)
+        self.assertEqual(status["author"]["username"], "new")
+
+        expired = {
+            **self.pool.state["statuses"][0],
+            "id": str(uuid4()),
+            "expires_at": datetime.now(timezone.utc) - timedelta(seconds=1),
+        }
+        self.pool.state["statuses"].append(expired)
+        listed = self.client.get("/api/statuses")
+        self.assertEqual(listed.status_code, 200, listed.text)
+        self.assertEqual([item["id"] for item in listed.json()["statuses"]], [status["id"]])
+        self.assertNotIn(expired, self.pool.state["statuses"])
+        opened = self.client.get("/api/statuses/{}".format(status["id"]))
+        self.assertEqual(opened.status_code, 200, opened.text)
+        self.assertEqual(opened.json()["status"]["viewers"], [])
+        self.assertEqual(
+            self.client.delete("/api/statuses/{}".format(status["id"])).json(),
+            {"deleted": True},
+        )
+        self.assertEqual(self.client.get("/api/statuses/{}".format(status["id"])).status_code, 404)
 
     def test_communities_are_persistent_and_membership_is_account_bound(self):
         self.assertEqual(self.client.get("/api/communities").status_code, 401)

@@ -355,6 +355,130 @@ CREATE INDEX IF NOT EXISTS marketplace_products_published_created_at_idx
 CREATE INDEX IF NOT EXISTS marketplace_products_seller_id_idx
   ON marketplace_products(seller_id, created_at DESC);
 
+CREATE TABLE IF NOT EXISTS user_statuses (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  image_url varchar(2048) NOT NULL,
+  caption varchar(500) NOT NULL DEFAULT '',
+  created_at timestamptz NOT NULL DEFAULT now(),
+  expires_at timestamptz NOT NULL DEFAULT now() + interval '24 hours'
+);
+
+CREATE INDEX IF NOT EXISTS user_statuses_active_user_created_idx
+  ON user_statuses(user_id, expires_at, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS user_status_views (
+  status_id uuid NOT NULL REFERENCES user_statuses(id) ON DELETE CASCADE,
+  viewer_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  viewed_at timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (status_id, viewer_id)
+);
+
+CREATE INDEX IF NOT EXISTS user_status_views_viewer_idx
+  ON user_status_views(viewer_id, viewed_at DESC);
+
+CREATE TABLE IF NOT EXISTS savings_plans (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  name varchar(100) NOT NULL,
+  target_amount bigint NOT NULL CHECK (target_amount > 0),
+  contribution_amount bigint NOT NULL CHECK (contribution_amount > 0),
+  frequency varchar(8) NOT NULL CHECK (frequency IN ('daily', 'weekly', 'monthly')),
+  target_date date,
+  active boolean NOT NULL DEFAULT true,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS savings_plans_user_created_idx
+  ON savings_plans(user_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS savings_contributions (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  plan_id uuid NOT NULL REFERENCES savings_plans(id) ON DELETE CASCADE,
+  user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  amount bigint NOT NULL CHECK (amount > 0),
+  note varchar(240) NOT NULL DEFAULT '',
+  contributed_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS savings_contributions_plan_created_idx
+  ON savings_contributions(plan_id, contributed_at DESC);
+
+CREATE TABLE IF NOT EXISTS dating_profiles (
+  user_id uuid PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+  birth_date date NOT NULL,
+  gender varchar(20) NOT NULL CHECK (gender IN ('woman', 'man', 'non_binary')),
+  seeking varchar(20) NOT NULL CHECK (seeking IN ('women', 'men', 'non_binary', 'everyone')),
+  location varchar(120) NOT NULL,
+  bio varchar(500) NOT NULL,
+  interests text[] NOT NULL DEFAULT '{}',
+  image_urls text[] NOT NULL,
+  active boolean NOT NULL DEFAULT true,
+  terms_accepted_at timestamptz NOT NULL DEFAULT now(),
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS dating_profiles_active_idx
+  ON dating_profiles(active, updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS dating_swipes (
+  user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  target_user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  liked boolean NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  CONSTRAINT dating_swipes_distinct_users CHECK (user_id <> target_user_id),
+  PRIMARY KEY (user_id, target_user_id)
+);
+
+CREATE TABLE IF NOT EXISTS dating_matches (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  participant_one_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  participant_two_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  CONSTRAINT dating_matches_distinct_participants CHECK (participant_one_id < participant_two_id),
+  CONSTRAINT dating_matches_unique_pair UNIQUE (participant_one_id, participant_two_id)
+);
+
+CREATE INDEX IF NOT EXISTS dating_matches_participant_one_idx
+  ON dating_matches(participant_one_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS dating_matches_participant_two_idx
+  ON dating_matches(participant_two_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS dating_messages (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  match_id uuid NOT NULL REFERENCES dating_matches(id) ON DELETE CASCADE,
+  sender_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  body varchar(2000) NOT NULL CHECK (char_length(btrim(body)) BETWEEN 1 AND 2000),
+  created_at timestamptz NOT NULL DEFAULT now(),
+  read_at timestamptz
+);
+
+CREATE INDEX IF NOT EXISTS dating_messages_match_created_idx
+  ON dating_messages(match_id, created_at DESC, id DESC);
+
+CREATE TABLE IF NOT EXISTS dating_blocks (
+  blocker_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  blocked_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  CONSTRAINT dating_blocks_distinct_users CHECK (blocker_id <> blocked_id),
+  PRIMARY KEY (blocker_id, blocked_id)
+);
+
+CREATE TABLE IF NOT EXISTS dating_reports (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  reporter_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  reported_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  reason varchar(24) NOT NULL CHECK (reason IN ('inappropriate', 'fake_profile', 'harassment', 'other')),
+  details varchar(1000) NOT NULL DEFAULT '',
+  created_at timestamptz NOT NULL DEFAULT now(),
+  CONSTRAINT dating_reports_distinct_users CHECK (reporter_id <> reported_id)
+);
+
+CREATE INDEX IF NOT EXISTS dating_reports_created_idx
+  ON dating_reports(created_at DESC);
+
 CREATE TABLE IF NOT EXISTS local_marketplace_listings (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   seller_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
