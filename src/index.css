@@ -1212,6 +1212,204 @@ button, a { -webkit-tap-highlight-color: transparent; }
 .community-join-prompt h2 { margin: 10px 0 5px; color: #41433b; font: 600 18px 'Manrope', sans-serif; }
 .community-join-prompt p { max-width: 400px; margin: 0 0 15px; color: #85877c; font-size: 11px; line-height: 1.6; }
 .community-join-prompt .app-primary-button { min-height: 38px; font-size: 10px; }
+.savings-page, .dating-page, .dating-inbox-page { max-width: 1080px; }
+.savings-disclaimer { display: flex; align-items: flex-start; gap: 11px; margin: 0 0 18px; padding: 14px 16px; border: 1px solid #e8e4d7; border-radius: 9px; background: #f8f7ef; color: #7b806b; font-size: 11px; line-height: 1.6; }
+.savings-disclaimer > svg { flex: 0 0 auto; margin-top: 1px; color: #82915a; }
+.savings-disclaimer strong { color: #464b38; }
+.savings-feedback, .dating-feedback { padding: 11px 13px; border-radius: 8px; font-size: 12px; line-height: 1.5; }
+.savings-error, .dating-error { border: 1px solid #f0d7d1; background: #fff7f5; color: #9c4c3b; }
+.savings-notice, .dating-notice { border: 1px solid #dce8d1; background: #f5faef; color: #526b3e; }
+.savings-summary { display: flex; align-items: center; gap: 15px; margin-bottom: 25px; padding: 21px; border: 1px solid #e9e9df; border-radius: 12px; background: linear-gradient(120deg, #fff, #f8f9f2); }
+.savings-summary-icon, .dating-icon-tile { width: 44px; height: 44px; display: grid; flex: 0 0 auto; place-items: center; border-radius: 12px; background: #edf1e4; color: #7f9055; }
+.savings-summary > div:nth-child(2) { display: grid; gap: 4px; }
+.savings-summary > div:nth-child(2) > span { color: #85877c; font-size: 9px; font-weight: 700; letter-spacing: 1px; }
+.savings-summary > div:nth-child(2) > strong { color: #383b32; font: 700 25px 'Manrope', sans-serif; letter-spacing: -.7px; }
+.savings-summary > div:nth-child(2) > small { color: #8d8f85; font-size: 10px; }
+.savings-plan-count { display: grid; justify-items: end; gap: 1px; margin-left: auto; color: #85877c; font-size: 10px; }
+.savings-plan-count strong { color: #525548; font-size: 17px; }
+.savings-layout { display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(270px, .75fr); align-items: start; gap: 22px; }
+.savings-section-heading { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+.savings-section-heading h2, .savings-create-card h2 { margin: 6px 0 0; color: #3f4138; font: 650 20px 'Manrope', sans-serif; letter-spacing: -.5px; }
+.savings-count, .dating-inbox-list-heading > span { display: grid; min-width: 25px; height: 25px; place-items: center; padding: 0 7px; border-radius: 20px; background: #eef0e7; color: #737c5c; font-size: 10px; }
+.savings-plan-cards { display: grid; gap: 11px; }
+.savings-plan-card, .savings-create-card, .dating-profile-form, .dating-person-card, .dating-own-profile, .dating-paused-card, .dating-inbox-layout { border: 1px solid #e9e9e2; border-radius: 11px; background: #fff; }
+.savings-plan-card { padding: 16px; }
+.savings-plan-paused { opacity: .76; }
+.savings-plan-card-top, .savings-amount-row, .savings-plan-meta, .savings-plan-actions { display: flex; align-items: center; }
+.savings-plan-card-top { justify-content: space-between; gap: 10px; }
+.savings-plan-frequency { display: flex; align-items: center; gap: 5px; color: #879264; font-size: 9px; text-transform: capitalize; }
+.savings-plan-card h3 { margin: 5px 0 0; color: #42443b; font: 650 15px 'Manrope', sans-serif; }
+.savings-active-pill { padding: 5px 8px; border-radius: 20px; background: #f3f2ed; color: #88887e; font-size: 9px; }
+.savings-active-pill.is-active { background: #eef4e8; color: #657b4c; }
+.savings-amount-row { align-items: baseline; gap: 6px; margin-top: 17px; }
+.savings-amount-row strong { color: #41443a; font: 700 21px 'Manrope', sans-serif; }
+.savings-amount-row span { color: #919187; font-size: 10px; }
+.savings-progress-track { height: 6px; overflow: hidden; margin-top: 9px; border-radius: 9px; background: #efefe9; }
+.savings-progress-track span { display: block; height: 100%; min-width: 0; border-radius: inherit; background: linear-gradient(90deg, #99a972, #73854c); transition: width .3s ease; }
+.savings-plan-meta { justify-content: space-between; gap: 10px; margin-top: 7px; color: #85877d; font-size: 9px; }
+.savings-plan-date { display: flex; align-items: center; gap: 6px; margin-top: 13px; color: #81837a; font-size: 10px; }
+.savings-plan-actions { flex-wrap: wrap; gap: 7px; margin-top: 15px; }
+.savings-plan-actions .app-primary-button { min-height: 34px; padding: 0 10px; font-size: 10px; }
+.savings-quiet-button, .savings-icon-button, .dating-text-button { display: inline-flex; min-height: 32px; align-items: center; justify-content: center; gap: 5px; padding: 0 9px; border: 1px solid #e9e9e2; border-radius: 6px; background: #fff; color: #73756b; font-size: 9px; }
+.savings-icon-button { margin-left: auto; }
+.savings-delete-button { min-width: 31px; padding: 0 7px; color: #a26d61; }
+.savings-icon-button:disabled { opacity: .5; }
+.savings-history { display: grid; gap: 8px; margin-top: 14px; padding-top: 12px; border-top: 1px solid #efefe9; color: #85877d; font-size: 10px; }
+.savings-history > div { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.savings-history strong { color: #484b41; }
+.savings-empty { display: grid; justify-items: center; gap: 8px; padding: 34px 22px; border: 1px dashed #dedfd4; border-radius: 10px; color: #879264; text-align: center; }
+.savings-empty strong { color: #4c4e44; font-size: 13px; }
+.savings-empty span { max-width: 300px; color: #85877e; font-size: 10px; line-height: 1.6; }
+.savings-create-card { padding: 19px; }
+.savings-create-icon { display: grid; width: 35px; height: 35px; place-items: center; margin-bottom: 13px; border-radius: 10px; background: #eef1e6; color: #7c8e50; }
+.savings-create-card > p { margin: 7px 0 18px; color: #85877d; font-size: 10px; line-height: 1.6; }
+.savings-form { display: grid; gap: 12px; }
+.savings-form label, .dating-form-grid label, .dating-full-label { display: grid; gap: 6px; color: #62645a; font-size: 10px; font-weight: 600; }
+.savings-form input, .savings-form select, .dating-form-grid input, .dating-form-grid select, .dating-full-label input, .dating-full-label textarea { width: 100%; min-height: 38px; padding: 9px 10px; border: 1px solid #e4e5dc; border-radius: 6px; outline: 0; background: white; color: #44463d; font: inherit; font-size: 11px; }
+.savings-form input:focus, .savings-form select:focus, .dating-profile-form input:focus, .dating-profile-form select:focus, .dating-profile-form textarea:focus { border-color: #9ca97b; box-shadow: 0 0 0 3px #8b9b5b1c; }
+.savings-form .app-primary-button { min-height: 39px; margin-top: 3px; font-size: 10px; }
+.savings-optional { color: #999a91; font-weight: 400; }
+.dating-page > .app-page-header { margin-bottom: 20px; }
+.dating-tabs { display: flex; align-items: center; gap: 5px; margin-bottom: 18px; padding: 6px; border: 1px solid #e9e9e2; border-radius: 9px; background: #fff; }
+.dating-tabs > button, .dating-inbox-link { display: flex; min-height: 36px; align-items: center; justify-content: center; gap: 7px; padding: 0 12px; border: 0; border-radius: 6px; background: transparent; color: #77796f; font-size: 10px; text-decoration: none; }
+.dating-tabs > button.is-selected { background: #edf1e5; color: #65784a; font-weight: 700; }
+.dating-inbox-link { margin-left: auto; border: 1px solid #e9e9e2; color: #626c4b; }
+.dating-profile-form { max-width: 800px; margin: 0 auto 30px; padding: clamp(18px, 3vw, 29px); }
+.dating-form-heading { display: flex; align-items: center; gap: 12px; margin-bottom: 22px; }
+.dating-form-heading h2 { margin: 5px 0 3px; color: #3f4138; font: 650 21px 'Manrope', sans-serif; }
+.dating-form-heading p { margin: 0; color: #85877e; font-size: 10px; line-height: 1.5; }
+.dating-photo-editor { margin-bottom: 17px; }
+.dating-photo-strip { display: flex; flex-wrap: wrap; gap: 9px; }
+.dating-photo-thumb { position: relative; width: 74px; height: 88px; overflow: hidden; border-radius: 7px; background: #f1f1ec; }
+.dating-photo-thumb img { width: 100%; height: 100%; object-fit: cover; }
+.dating-photo-thumb button { position: absolute; top: 4px; right: 4px; display: grid; width: 22px; height: 22px; place-items: center; border: 0; border-radius: 50%; background: #252820b8; color: white; }
+.dating-add-photo { display: grid; width: 74px; height: 88px; place-items: center; border: 1px dashed #cfd2c4; border-radius: 7px; color: #737f55; font-size: 9px; cursor: pointer; }
+.dating-add-photo input { display: none; }
+.dating-photo-editor > small, .dating-form-grid label small { color: #93958a; font-size: 9px; font-weight: 400; }
+.dating-form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 13px; }
+.dating-full-label { margin-top: 14px; }
+.dating-full-label > span { color: #92948a; font-weight: 400; }
+.dating-full-label textarea { min-height: 96px; resize: vertical; }
+.dating-consent { display: flex; align-items: flex-start; gap: 9px; margin-top: 16px; color: #66695e; font-size: 10px; line-height: 1.5; }
+.dating-consent input { accent-color: #7d8e54; }
+.dating-privacy-note { display: flex; align-items: flex-start; gap: 7px; margin: 13px 0 0; color: #8b8d82; font-size: 9px; line-height: 1.6; }
+.dating-privacy-note svg { flex: 0 0 auto; color: #82915d; }
+.dating-form-actions { display: flex; align-items: center; gap: 12px; margin-top: 17px; }
+.dating-form-actions .app-primary-button { min-height: 38px; font-size: 10px; }
+.dating-text-button { border: 0; background: transparent; color: #77796f; font-size: 10px; }
+.dating-paused-card { display: flex; align-items: flex-start; gap: 14px; padding: 23px; color: #859260; }
+.dating-paused-card h2 { margin: 0 0 5px; color: #45483c; font: 650 17px 'Manrope', sans-serif; }
+.dating-paused-card p { margin: 0 0 13px; color: #85877e; font-size: 10px; }
+.dating-paused-card .app-primary-button { min-height: 35px; font-size: 10px; }
+.dating-card-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(245px, 1fr)); gap: 16px; }
+.dating-person-card { overflow: hidden; }
+.dating-person-photo { position: relative; height: 255px; overflow: hidden; background: #efefe9; }
+.dating-person-photo img { width: 100%; height: 100%; object-fit: cover; }
+.dating-photo-count { position: absolute; right: 9px; bottom: 9px; padding: 5px 8px; border-radius: 20px; background: #171913a8; color: white; font-size: 9px; }
+.dating-person-copy { padding: 14px; }
+.dating-person-copy h2 { margin: 0 0 5px; color: #3f4138; font: 650 18px 'Manrope', sans-serif; }
+.dating-location, .dating-own-copy > p:first-of-type { display: flex; align-items: center; gap: 5px; color: #85877d; font-size: 10px; }
+.dating-person-bio { display: -webkit-box; min-height: 42px; overflow: hidden; margin: 10px 0; color: #6e7066; font-size: 10px; line-height: 1.55; -webkit-box-orient: vertical; -webkit-line-clamp: 3; }
+.dating-interest-list { display: flex; flex-wrap: wrap; gap: 5px; margin: 10px 0; }
+.dating-interest-list span { padding: 5px 8px; border-radius: 20px; background: #f0f2e9; color: #727d58; font-size: 9px; }
+.dating-person-actions { display: flex; justify-content: center; gap: 10px; margin-top: 15px; }
+.dating-skip-button, .dating-like-button { display: inline-flex; min-height: 39px; align-items: center; justify-content: center; gap: 7px; border-radius: 22px; font-size: 11px; }
+.dating-skip-button { width: 42px; border: 1px solid #e8e8e2; background: white; color: #8d817a; }
+.dating-like-button { min-width: 118px; padding: 0 17px; border: 0; background: #71824e; color: white; }
+.dating-person-actions button:disabled { opacity: .55; }
+.dating-safety-actions { display: flex; justify-content: center; gap: 16px; margin-top: 12px; }
+.dating-safety-actions button { display: inline-flex; align-items: center; gap: 4px; border: 0; background: transparent; color: #92948a; font-size: 9px; }
+.dating-empty, .dating-chat-placeholder { display: grid; justify-items: center; gap: 8px; padding: 48px 20px; color: #84905d; text-align: center; }
+.dating-empty h2, .dating-chat-placeholder h2 { margin: 3px 0 0; color: #484a40; font: 650 17px 'Manrope', sans-serif; }
+.dating-empty p, .dating-chat-placeholder p { max-width: 360px; margin: 0; color: #898b81; font-size: 10px; line-height: 1.6; }
+.dating-empty a, .dating-chat-placeholder a { color: #73824f; font-size: 10px; }
+.dating-own-profile { display: grid; grid-template-columns: minmax(180px, 270px) 1fr; gap: 22px; overflow: hidden; padding: 16px; }
+.dating-own-photo { height: 300px; overflow: hidden; border-radius: 8px; background: #f0f0eb; }
+.dating-own-photo img { width: 100%; height: 100%; object-fit: cover; }
+.dating-own-copy { align-self: center; }
+.dating-own-copy h2 { margin: 7px 0; color: #41433a; font: 650 22px 'Manrope', sans-serif; }
+.dating-own-copy > p:not(:first-of-type) { color: #696b61; font-size: 11px; line-height: 1.6; }
+.dating-profile-actions { display: flex; gap: 10px; margin-top: 15px; }
+.dating-profile-actions .app-primary-button { min-height: 35px; font-size: 10px; }
+.dating-match-list { display: grid; gap: 9px; }
+.dating-match-card { display: flex; align-items: center; gap: 12px; padding: 12px; border: 1px solid #e9e9e2; border-radius: 9px; background: #fff; }
+.dating-match-info { display: grid; min-width: 0; flex: 1; gap: 4px; }
+.dating-match-info strong { color: #45473e; font-size: 11px; }
+.dating-match-info span { overflow: hidden; color: #888a80; font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
+.dating-match-card .app-primary-button { min-height: 33px; padding: 0 10px; font-size: 9px; text-decoration: none; }
+.dating-match-remove { border: 0; background: transparent; color: #898b82; font-size: 9px; }
+.dating-match-remove:last-child { color: #a26d61; }
+.dating-inbox-heading { display: flex; align-items: center; justify-content: space-between; gap: 15px; margin-bottom: 16px; }
+.dating-inbox-heading h1 { margin: 4px 0; color: #3f4138; font: 650 25px 'Manrope', sans-serif; }
+.dating-inbox-heading p { margin: 0; color: #86887d; font-size: 10px; }
+.dating-inbox-heading > a { display: flex; align-items: center; gap: 6px; color: #73824f; font-size: 10px; text-decoration: none; }
+.dating-inbox-layout { display: grid; min-height: 530px; grid-template-columns: minmax(230px, .72fr) 1.6fr; overflow: hidden; }
+.dating-inbox-matches { border-right: 1px solid #ecece5; }
+.dating-inbox-list-heading { display: flex; align-items: center; justify-content: space-between; padding: 14px; border-bottom: 1px solid #efefe9; color: #4b4d43; font-size: 11px; }
+.dating-inbox-person { display: flex; align-items: center; gap: 10px; padding: 11px 13px; border-bottom: 1px solid #f0f0eb; color: inherit; text-decoration: none; }
+.dating-inbox-person.is-selected { background: #f5f6ef; }
+.dating-inbox-person > span:last-child { display: grid; min-width: 0; flex: 1; gap: 4px; }
+.dating-inbox-person strong { color: #4a4c42; font-size: 10px; }
+.dating-inbox-person small { overflow: hidden; color: #898b81; font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
+.dating-inbox-empty { display: grid; justify-items: center; gap: 9px; padding: 28px 15px; color: #858f60; font-size: 10px; text-align: center; }
+.dating-inbox-empty a { color: #75834e; }
+.dating-chat-panel { display: flex; min-width: 0; flex-direction: column; }
+.dating-chat-placeholder { flex: 1; }
+.dating-chat-header { display: flex; min-height: 66px; align-items: center; gap: 10px; padding: 10px 14px; border-bottom: 1px solid #ecece5; }
+.dating-chat-header > div:nth-last-child(2) { display: grid; gap: 4px; }
+.dating-chat-header strong { color: #474940; font-size: 11px; }
+.dating-chat-header span { color: #89907a; font-size: 9px; }
+.dating-chat-back { display: none; color: #76796e; }
+.dating-chat-safety { display: flex; align-items: center; gap: 8px; margin-left: auto; }
+.dating-chat-safety button { display: inline-flex; align-items: center; gap: 5px; border: 0; background: transparent; color: #85877d; font-size: 9px; }
+.dating-chat-safety button:last-child { color: #9d665b; }
+.dating-chat-messages { display: flex; min-height: 390px; flex: 1; flex-direction: column; align-items: flex-start; gap: 10px; overflow-y: auto; padding: 16px; background: #fafaf7; }
+.dating-message { display: grid; max-width: min(78%, 430px); gap: 4px; }
+.dating-message > span { padding: 10px 12px; border-radius: 12px 12px 12px 3px; background: white; color: #4b4d43; font-size: 11px; line-height: 1.5; overflow-wrap: anywhere; }
+.dating-message > small { color: #999a91; font-size: 8px; }
+.dating-message-own { align-self: flex-end; justify-items: end; }
+.dating-message-own > span { border-radius: 12px 12px 3px 12px; background: #e8eddd; }
+.dating-chat-intro { display: grid; justify-items: center; gap: 5px; margin: auto; color: #88945f; font-size: 10px; }
+.dating-chat-intro strong { color: #4d5044; font-size: 13px; }
+.dating-chat-intro span { color: #888a80; }
+.dating-chat-composer { display: flex; gap: 8px; padding: 11px; border-top: 1px solid #ecece5; }
+.dating-chat-composer input { min-width: 0; flex: 1; height: 38px; padding: 0 12px; border: 1px solid #e6e7df; border-radius: 21px; outline: 0; font-size: 10px; }
+.dating-chat-composer button { display: grid; width: 38px; height: 38px; place-items: center; border: 0; border-radius: 50%; background: #71824e; color: white; }
+.dating-chat-composer button:disabled { opacity: .5; }
+@media (max-width: 760px) {
+  .savings-layout { grid-template-columns: 1fr; }
+  .savings-create-card { order: -1; }
+  .dating-card-grid { grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); }
+  .dating-person-photo { height: 235px; }
+  .dating-own-profile { grid-template-columns: minmax(120px, .75fr) 1.25fr; gap: 14px; }
+  .dating-own-photo { height: 240px; }
+  .dating-inbox-layout { min-height: 480px; grid-template-columns: minmax(190px, .75fr) 1.4fr; }
+}
+@media (max-width: 560px) {
+  .savings-summary { gap: 10px; padding: 15px; }
+  .savings-summary-icon { width: 38px; height: 38px; }
+  .savings-summary > div:nth-child(2) > strong { font-size: 20px; }
+  .savings-summary > div:nth-child(2) > small { max-width: 190px; font-size: 9px; }
+  .savings-plan-meta { align-items: flex-start; flex-direction: column; gap: 4px; }
+  .dating-tabs { flex-wrap: wrap; }
+  .dating-tabs > button, .dating-inbox-link { flex: 1; padding: 0 7px; font-size: 9px; }
+  .dating-inbox-link { margin-left: 0; }
+  .dating-form-grid { grid-template-columns: 1fr; }
+  .dating-card-grid { grid-template-columns: 1fr; }
+  .dating-person-photo { height: 300px; }
+  .dating-own-profile { grid-template-columns: 1fr; }
+  .dating-own-photo { height: 290px; }
+  .dating-match-card { flex-wrap: wrap; }
+  .dating-match-info { flex-basis: calc(100% - 60px); }
+  .dating-match-card .app-primary-button { margin-left: 45px; }
+  .dating-inbox-heading { align-items: flex-start; }
+  .dating-inbox-heading h1 { font-size: 22px; }
+  .dating-inbox-layout { min-height: 500px; grid-template-columns: 1fr; }
+  .dating-inbox-matches-mobile-hidden { display: none; }
+  .dating-chat-back { display: inline-flex; }
+  .dating-chat-panel { min-height: 500px; }
+  .dating-chat-messages { min-height: 350px; }
+}
 @media (max-width: 760px) {
   .community-hero { min-height: 300px; border-radius: 12px; }
   .community-hero-content { padding: 24px 18px; }

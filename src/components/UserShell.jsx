@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react'
-import { Banknote, Bell, Bitcoin, Bot, BriefcaseBusiness, ChevronDown, CircleEllipsis, Clapperboard, Home, Menu, MessageCircle, PenLine, Plane, Plus, Search, ShoppingBag, Store, UserRound, Users, Video, WalletCards, X } from 'lucide-react'
+import { Banknote, Bell, Bitcoin, Bot, BriefcaseBusiness, ChevronDown, CircleEllipsis, Clapperboard, Heart, Home, Menu, MessageCircle, PenLine, Plane, Plus, Search, ShoppingBag, Store, UserRound, Users, Video, WalletCards, X } from 'lucide-react'
 import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import Avatar from './Avatar.jsx'
 import Brand from './Brand.jsx'
@@ -34,7 +34,8 @@ const exploreLinks = [
   { to: '/app/ibook', label: 'iBook journeys', icon: Plane },
   { to: '/app/jobs', label: 'Job hub', icon: BriefcaseBusiness },
   { to: '/app/connect', label: 'Connect', icon: Users },
-  { to: '/app/invest', label: 'Invest', icon: WalletCards },
+  { to: '/app/invest', label: 'Invest & save', icon: WalletCards },
+  { to: '/app/dating', label: 'Dating', icon: Heart },
   { to: '/app/assistant', label: 'AI assistant', icon: Bot },
 ]
 
@@ -69,6 +70,8 @@ export default function UserShell() {
   const navigate = useNavigate()
   const currentLabel = location.pathname.startsWith('/app/marketplace')
     ? 'Homes & local services'
+    : location.pathname.startsWith('/app/dating/messages')
+      ? 'Dating inbox'
     : [...primaryLinks, ...exploreLinks].find((item) => item.to === location.pathname)?.label ?? 'Home'
   const normalizedSearch = searchTerm.trim().toLowerCase()
 

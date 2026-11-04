@@ -31,6 +31,8 @@ import IBookPage from './pages/app/IBookPage.jsx'
 import IBuyPage from './pages/app/IBuyPage.jsx'
 import LocalMarketplacePage from './pages/app/LocalMarketplacePage.jsx'
 import SocialPage from './pages/app/SocialPage.jsx'
+import DatingPage from './pages/app/DatingPage.jsx'
+import DatingInboxPage from './pages/app/DatingInboxPage.jsx'
 import AdminLoginPage from './pages/admin/AdminLoginPage.jsx'
 import AdminDashboardPage from './pages/admin/AdminDashboardPage.jsx'
 import { apiRequest } from './utils/api.js'
@@ -155,6 +157,9 @@ function AppRoutes() {
               <Route path="connect" element={<ConnectPage />} />
               <Route path="communities/:communityId" element={<CommunityPage />} />
               <Route path="invest" element={<InvestPage />} />
+              <Route path="dating" element={<DatingPage />} />
+              <Route path="dating/messages" element={<DatingInboxPage />} />
+              <Route path="dating/messages/:matchId" element={<DatingInboxPage />} />
               <Route path="assistant" element={<AssistantPage />} />
               <Route path="profile" element={<AccountPage />} />
             </Route>

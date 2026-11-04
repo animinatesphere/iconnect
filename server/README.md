@@ -137,6 +137,28 @@ Message responses include `readAt`; senders can show a read receipt after the re
 
 Administrators can publish official content using admin-only routes: `POST /api/admin/posts`, `POST /api/admin/products`, `POST /api/admin/jobs`, and `POST /api/admin/local-listings`. They validate the same content fields and uploaded image references as member posts and listings, publish directly into the user-visible feed and marketplaces, and record a `create_admin_content` audit event. The admin Publishing section creates posts, jobs, and housing listings; Products manages iBuy items. Members can continue publishing through their existing routes.
 
+## Savings tracker and dating
+
+The personal savings tracker is record-keeping only. It does not collect, transfer, hold, or verify money; members manually log contributions they make elsewhere. Amounts are whole Nigerian naira values.
+
+- `GET /api/savings/plans` lists the signed-in member's plans and manually recorded totals.
+- `POST /api/savings/plans` creates a goal with a target amount, contribution amount, daily/weekly/monthly frequency, and optional target date.
+- `POST /api/savings/plans/{plan_id}/contributions` records a contribution for an active plan.
+- `GET /api/savings/plans/{plan_id}/contributions` lists that member's contribution history.
+- `PUT /api/savings/plans/{plan_id}/active?active=false` pauses or resumes a plan.
+- `DELETE /api/savings/plans/{plan_id}` deletes the plan and its history.
+
+Dating has a private profile separate from the regular member profile. The API checks the submitted birth date on the server and rejects users under 18; it returns age but never the birth date. This is self-reported and is not identity or age verification. Discovery respects both members' gender preferences and account discoverability settings. Pausing hides a profile from discovery but keeps existing mutual-match conversations available.
+
+- `GET /api/dating/profile` and `PUT /api/dating/profile` read or save the member's dating profile.
+- `GET /api/dating/discovery` returns compatible, undiscovered profiles.
+- `POST /api/dating/profiles/{user_id}/swipe` records a like or pass; a match is created only after both people like each other.
+- `GET /api/dating/matches` lists mutual matches.
+- `GET /api/dating/matches/{match_id}/messages` and `POST /api/dating/matches/{match_id}/messages` provide the separate dating inbox; every request verifies match membership and blocks.
+- `DELETE /api/dating/matches/{match_id}` ends a match; `POST /api/dating/users/{user_id}/block` and `/report` provide dating-specific safety actions.
+
+Dating profiles, likes, matches, messages, blocks, and reports are stored separately from standard messages and social follows/blocks. Dating profile photos use the existing authenticated image upload API. Run `npm run db:migrate` when deploying these tables.
+
 ## Live updates
 
 The authenticated WebSocket endpoint at `/api/realtime` streams message-created and read-receipt events to the conversation participants, and post/comment changes to connected members. Events contain identifiers and metadata, not message or comment text. The web app reconnects automatically, refreshes on reconnect, and keeps a 60-second polling fallback for inbox recovery.
@@ -145,7 +167,7 @@ The API currently fans out events in process memory, so deploy it as a single Uv
 
 ## Unconnected product areas
 
-The app does not currently have provider-backed APIs for travel bookings, wallet balances or transfers, payments, trading, video storage or streaming, notifications, or external social account connections. The AI assistant uses static example text and is not connected to an AI service. These areas are presented as unavailable or informational in the app; they do not create reservations, financial transactions, uploads, or persistent activity.
+The app does not currently have provider-backed APIs for travel bookings, wallet balances or transfers, payments, trading, video storage or streaming, notifications, or external social account connections. Savings plans only track member-entered records; no money moves through iConnect. Dating is limited to 18+ self-reported profiles and mutual matches, without identity verification. The AI assistant uses static example text and is not connected to an AI service.
 
 ## Admin API
 
