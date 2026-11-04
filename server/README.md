@@ -39,7 +39,7 @@ All social routes require a verified, signed-in account and use the existing sec
 - `GET /api/statuses/{status_id}` opens a status and records one view per account. Only the status owner receives the names and timestamps of viewers.
 - `DELETE /api/statuses/{status_id}` removes the signed-in member’s status.
 
-`POST /api/media/images` accepts one authenticated JPEG, PNG, or WebP image (maximum 4 MB and 20 megapixels); uploaded files are validated, resized, and stored as WebP. The web app automatically optimizes larger selected photos before upload. Image files are stored on the API host in `ICONNECT_MEDIA_DIR` (default: `./uploads` relative to the repository root), not in PostgreSQL; production should point this variable at a persistent VPS directory and make it writable by the API service account. Images are served to signed-in members at the returned URL. Upload controls are available for posts, profile photos, private-message attachments, iBuy products, local listings, community covers, and job/company photos. Post creation, likes, comments, bookmarks, and media uploads are rate-limited per client IP. `GET /api/social/posts?following_only=true` limits results to authors the current user follows. Stories and live video are not implemented.
+`POST /api/media/images` accepts one authenticated JPEG, PNG, or WebP image (maximum 4 MB and 20 megapixels); uploaded files are validated, resized, and stored as WebP. The web app automatically optimizes larger selected photos before upload. Image files are stored on the API host in `ICONNECT_MEDIA_DIR` (default: `./uploads` relative to the repository root), not in PostgreSQL; production should point this variable at a persistent VPS directory and make it writable by the API service account. Images are served to signed-in members at the returned URL. Upload controls are available for posts, profile photos, private-message attachments, iBuy products, local listings, community covers, and job/company photos. Post creation, likes, comments, bookmarks, and media uploads are rate-limited per client IP. `GET /api/social/posts?following_only=true` limits results to authors the current user follows.
 
 ## Video Hub and Studio
 
@@ -50,7 +50,58 @@ All video routes require a verified, signed-in member. Videos are stored as file
 - `GET /api/videos/{video_id}/stream` streams a video to signed-in members.
 - `DELETE /api/videos/{video_id}` permanently removes the uploader's video and its media file.
 
-The Studio accepts MP4 and WebM, validates their file signatures, and reports upload progress. Browser playback depends on the codecs used to encode the file (H.264/AAC MP4 and VP8/VP9 WebM are recommended). Video files count toward VPS disk usage; monitor free space and back up the `videos` media directory. The API does not transcode videos, enforce a global storage quota, or provide live streaming.
+The Studio accepts MP4 and WebM, validates their file signatures, and reports upload progress. Browser playback depends on the codecs used to encode the file (H.264/AAC MP4 and VP8/VP9 WebM are recommended). Video files count toward VPS disk usage; monitor free space and back up the `videos` media directory. The API does not transcode uploaded videos or enforce a global storage quota.
+
+### Live video
+
+Live broadcasts use a separately self-hosted LiveKit server for WebRTC media. Members can start a camera-and-microphone broadcast, join a current stream as viewers, and use live text chat. Viewers receive subscribe-only media tokens; the host receives a publish token. Streams are not recorded or stored as video files. LiveKit credentials remain server-side.
+
+The API requires all three settings before it enables live-stream endpoints:
+
+- `LIVEKIT_URL=wss://live.iconnectdworld.com` (the secure WebSocket URL exposed by the LiveKit reverse proxy).
+- `LIVEKIT_API_KEY` (the key configured in LiveKit).
+- `LIVEKIT_API_SECRET` (matching secret, at least 32 characters).
+
+For a single-node VPS deployment:
+
+1. Point `live.iconnectdworld.com` to the VPS and obtain a trusted TLS certificate for it. Browser camera access and WebRTC signaling require secure origins in production.
+2. Copy `server/livekit.example.yaml` to `/etc/iconnect/livekit.yaml`. Replace the sample key and secret with a generated API key and a random secret of at least 32 characters. Keep this file readable only by the LiveKit service administrator (`chmod 600`); never commit the real config or place the secret in frontend variables.
+3. Run LiveKit using host networking so its WebRTC UDP ports are reachable, for example: `docker run --network host --name iconnect-livekit --restart unless-stopped -v /etc/iconnect/livekit.yaml:/etc/livekit.yaml:ro livekit/livekit-server:latest --config /etc/livekit.yaml`. Pin a tested image tag when adopting upgrades.
+4. Configure the VPS firewall/security group to allow TCP 443 for the secure signaling proxy, TCP 7881, and UDP 50000–60000 for WebRTC media. The sample config enables external-IP discovery; verify it advertises the VPS public address.
+5. Add an HTTPS Nginx virtual host for `live.iconnectdworld.com` that forwards all paths to `http://127.0.0.1:7880`, supports WebSocket `Upgrade`/`Connection` headers, and uses long proxy read/send timeouts. Do not route the LiveKit WebSocket through the frontend application.
+6. Set the three `LIVEKIT_*` variables in the API service environment to the same key/secret and public `wss://` URL, then restart the API and run `npm run db:migrate`.
+
+The LiveKit Nginx virtual host should use the certificate for `live.iconnectdworld.com` and proxy WebSocket upgrades to the local LiveKit listener:
+
+```nginx
+server {
+    listen 443 ssl;
+    server_name live.iconnectdworld.com;
+
+    ssl_certificate /etc/letsencrypt/live/live.iconnectdworld.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/live.iconnectdworld.com/privkey.pem;
+
+    location / {
+        proxy_pass http://127.0.0.1:7880;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host $host;
+        proxy_read_timeout 3600s;
+        proxy_send_timeout 3600s;
+        proxy_buffering off;
+    }
+}
+```
+
+The WebRTC media path uses the VPS public UDP ports directly; reverse-proxying HTTPS alone is not enough. Some restrictive client networks may require an additional TURN/TLS endpoint. Self-hosting has no LiveKit subscription fee, but stream traffic consumes VPS bandwidth and capacity.
+
+Live-stream API routes (all require a signed-in, verified member):
+
+- `GET /api/live` lists active broadcasts.
+- `POST /api/live` starts a stream with `{"title":"..."}` and returns a short-lived host token.
+- `POST /api/live/{stream_id}/join` returns a host-reconnect or viewer token for an active broadcast.
+- `POST /api/live/{stream_id}/end` ends the host's broadcast.
 
 - `PUT /api/auth/profile/photo` updates or removes the signed-in member's photo (`{"image_url":"/api/media/images/<id>.webp"}` or `{"image_url":null}`).
 
@@ -203,7 +254,7 @@ The Vercel rewrite must only be deployed after the API hostname has DNS, a worki
 
 ## Production environment
 
-Set `NODE_ENV=production`, `API_HOST=127.0.0.1`, `API_PORT=10000`, `APP_ORIGIN=https://www.iconnectdworld.com`, `DATABASE_URL`, `SESSION_SECRET`, `OTP_HASH_SECRET`, `RESEND_API_KEY`, `EMAIL_FROM`, `SESSION_MAX_AGE_DAYS=7`, `TRUST_PROXY=1`, the intended server-only `ADMIN_EMAILS`, and `ICONNECT_MEDIA_DIR=/var/lib/iconnect/uploads` in the VPS environment. Create the media directory and make it writable by the API service account before starting the API. Keep secrets out of source control and never put them in `VITE_*` variables.
+Set `NODE_ENV=production`, `API_HOST=127.0.0.1`, `API_PORT=10000`, `APP_ORIGIN=https://www.iconnectdworld.com`, `DATABASE_URL`, `SESSION_SECRET`, `OTP_HASH_SECRET`, `RESEND_API_KEY`, `EMAIL_FROM`, `SESSION_MAX_AGE_DAYS=7`, `TRUST_PROXY=1`, the intended server-only `ADMIN_EMAILS`, `ICONNECT_MEDIA_DIR=/var/lib/iconnect/uploads`, and the three `LIVEKIT_*` settings described below in the VPS environment. Create the media directory and make it writable by the API service account before starting the API. Keep secrets out of source control and never put them in `VITE_*` variables.
 
 On the VPS, create the environment with `python3 -m venv server/.venv`, install runtime packages with `server/.venv/bin/pip install -r server/requirements.txt`, and run `npm run db:migrate`. The API virtual host must allow request bodies up to 260 MB for 250 MiB video uploads and 12 MB for CAC documents. Add these exact-match locations to its HTTPS `server` block so Nginx streams upload bodies to the API instead of buffering the entire upload first:
 

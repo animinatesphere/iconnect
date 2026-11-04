@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react'
-import { Clapperboard, Film, Search, Trash2, Upload } from 'lucide-react'
+import { Clapperboard, Film, Radio, Search, Trash2, Upload } from 'lucide-react'
 import { Link, useSearchParams } from 'react-router-dom'
 import AppPageHeader from '../../components/AppPageHeader.jsx'
 import Avatar from '../../components/Avatar.jsx'
@@ -77,6 +77,7 @@ export default function VideoHubPage() {
         title="Watch & share"
         description="A member video library for short clips and longer stories."
       >
+        <Link className="app-secondary-button" to="/app/live"><Radio size={15} /> Go live</Link>
         <Link className="app-primary-button video-studio-link" to="/app/studio"><Upload size={15} /> Open Studio</Link>
       </AppPageHeader>
 

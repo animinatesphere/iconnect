@@ -1,4 +1,7 @@
 import asyncio
+import base64
+import hashlib
+import hmac
 import html
 import json
 import logging
@@ -570,6 +573,18 @@ class DirectMessageEditInput(StrictModel):
         return value
 
 
+class LiveStreamInput(StrictModel):
+    title: str = Field(min_length=1, max_length=100)
+
+    @field_validator("title")
+    @classmethod
+    def clean_live_title(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("A live title is required.")
+        return value
+
+
 class UserFollowInput(StrictModel):
     following: bool
 
@@ -670,6 +685,58 @@ def public_video(video: Dict[str, Any]) -> Dict[str, Any]:
             "name": video["display_name"],
             "username": video["username"],
             "image": video.get("profile_image_url"),
+        },
+    }
+
+
+def live_stream_access_token(
+    settings: Settings,
+    user_id: Any,
+    display_name: str,
+    room_name: str,
+    can_publish: bool,
+) -> str:
+    now = int(time.time())
+    header = {"alg": "HS256", "typ": "JWT"}
+    claims = {
+        "iss": settings.livekit_api_key,
+        "sub": str(user_id),
+        "name": display_name,
+        "nbf": now,
+        "exp": now + 6 * 60 * 60,
+        "video": {
+            "roomJoin": True,
+            "room": room_name,
+            "canPublish": can_publish,
+            "canSubscribe": True,
+            "canPublishData": True,
+        },
+    }
+
+    def encode_part(value: Dict[str, Any]) -> str:
+        serialized = json.dumps(value, separators=(",", ":"), ensure_ascii=True).encode("utf-8")
+        return base64.urlsafe_b64encode(serialized).rstrip(b"=").decode("ascii")
+
+    unsigned_token = "{}.{}".format(encode_part(header), encode_part(claims))
+    signature = hmac.new(
+        settings.livekit_api_secret.encode("utf-8"),
+        unsigned_token.encode("ascii"),
+        hashlib.sha256,
+    ).digest()
+    encoded_signature = base64.urlsafe_b64encode(signature).rstrip(b"=").decode("ascii")
+    return "{}.{}".format(unsigned_token, encoded_signature)
+
+
+def public_live_stream(row: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "id": str(row["id"]),
+        "title": row["title"],
+        "createdAt": row["created_at"].isoformat(),
+        "host": {
+            "id": str(row["host_id"]),
+            "name": row["display_name"],
+            "username": row["username"],
+            "image": row.get("profile_image_url"),
         },
     }
 
@@ -1587,6 +1654,142 @@ def create_app(
             media_type=media_type,
             headers={"Cache-Control": "private, no-store"},
         )
+
+    def require_livekit() -> None:
+        if not (
+            settings.livekit_url
+            and settings.livekit_api_key
+            and settings.livekit_api_secret
+        ):
+            raise ApiError(
+                503,
+                "live_video_not_configured",
+                "Live video is not configured on this server yet.",
+            )
+
+    @app.get("/api/live")
+    def list_live_streams(request: Request) -> Dict[str, Any]:
+        require_user(request)
+        with database.connection() as connection:
+            rows = connection.execute(
+                """SELECT stream.id, stream.title, stream.created_at, stream.host_id,
+                          host.display_name, host.username, host.profile_image_url
+                   FROM live_streams stream
+                   JOIN users host ON host.id = stream.host_id
+                   WHERE stream.status = 'live'
+                     AND stream.last_heartbeat_at > now() - interval '90 seconds'
+                   ORDER BY stream.created_at DESC, stream.id DESC
+                   LIMIT 100"""
+            ).fetchall()
+        return {"streams": [public_live_stream(row) for row in rows]}
+
+    @app.post("/api/live", status_code=201)
+    def create_live_stream(
+        input: LiveStreamInput,
+        request: Request,
+    ) -> Dict[str, Any]:
+        user = require_user(request)
+        require_livekit()
+        room_name = uuid4().hex
+        with database.connection() as connection:
+            connection.execute(
+                """UPDATE live_streams
+                   SET status = 'ended', ended_at = now()
+                   WHERE host_id = %s AND status = 'live'
+                     AND last_heartbeat_at <= now() - interval '90 seconds'""",
+                (user["id"],),
+            )
+            existing = connection.execute(
+                "SELECT id FROM live_streams WHERE host_id = %s AND status = 'live'",
+                (user["id"],),
+            ).fetchone()
+            if existing:
+                raise ApiError(409, "live_stream_already_active", "End your current live stream before starting another.")
+            row = connection.execute(
+                """INSERT INTO live_streams (host_id, title, room_name)
+                   VALUES (%s, %s, %s)
+                   RETURNING id, title, created_at, host_id""",
+                (user["id"], input.title, room_name),
+            ).fetchone()
+        if not row:
+            raise ApiError(500, "internal_error", "Your live stream could not be started.")
+        row = {
+            **row,
+            "display_name": user["display_name"],
+            "username": user["username"],
+            "profile_image_url": user.get("profile_image_url"),
+        }
+        return {
+            "stream": public_live_stream(row),
+            "serverUrl": settings.livekit_url,
+            "token": live_stream_access_token(
+                settings,
+                user["id"],
+                user["display_name"],
+                room_name,
+                True,
+            ),
+        }
+
+    @app.post("/api/live/{stream_id}/join")
+    def join_live_stream(stream_id: UUID, request: Request) -> Dict[str, Any]:
+        user = require_user(request)
+        require_livekit()
+        with database.connection() as connection:
+            row = connection.execute(
+                """SELECT stream.id, stream.title, stream.room_name, stream.created_at,
+                          stream.host_id, host.display_name, host.username, host.profile_image_url
+                   FROM live_streams stream
+                   JOIN users host ON host.id = stream.host_id
+                   WHERE stream.id = %s AND stream.status = 'live'
+                     AND stream.last_heartbeat_at > now() - interval '90 seconds'""",
+                (stream_id,),
+            ).fetchone()
+        if not row:
+            raise ApiError(404, "live_stream_not_found", "That live stream has ended or could not be found.")
+        return {
+            "stream": public_live_stream(row),
+            "serverUrl": settings.livekit_url,
+            "token": live_stream_access_token(
+                settings,
+                user["id"],
+                user["display_name"],
+                row["room_name"],
+                str(row["host_id"]) == str(user["id"]),
+            ),
+            "isHost": str(row["host_id"]) == str(user["id"]),
+        }
+
+    @app.post("/api/live/{stream_id}/end", status_code=204)
+    def end_live_stream(stream_id: UUID, request: Request) -> Response:
+        user = require_user(request)
+        with database.connection() as connection:
+            ended = connection.execute(
+                """UPDATE live_streams
+                   SET status = 'ended', ended_at = now()
+                   WHERE id = %s AND host_id = %s AND status = 'live'
+                   RETURNING id""",
+                (stream_id, user["id"]),
+            ).fetchone()
+        if not ended:
+            raise ApiError(404, "live_stream_not_found", "That live stream could not be found.")
+        publish_realtime({"type": "live.ended", "streamId": str(stream_id)})
+        return Response(status_code=204)
+
+    @app.post("/api/live/{stream_id}/heartbeat", status_code=204)
+    def heartbeat_live_stream(stream_id: UUID, request: Request) -> Response:
+        user = require_user(request)
+        with database.connection() as connection:
+            heartbeat = connection.execute(
+                """UPDATE live_streams
+                   SET last_heartbeat_at = now()
+                   WHERE id = %s AND host_id = %s AND status = 'live'
+                   RETURNING id""",
+                (stream_id, user["id"]),
+            ).fetchone()
+        if not heartbeat:
+            raise ApiError(404, "live_stream_not_found", "That live stream could not be found.")
+        return Response(status_code=204)
 
     @app.post("/api/videos", status_code=201)
     async def create_video(request: Request) -> Dict[str, Any]:
