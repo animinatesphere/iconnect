@@ -67,7 +67,7 @@ function formatRecord(key, item) {
     case 'bookmarks':
       return `Saved @${item.author.username}’s post: ${item.postText}`
     case 'messages':
-      return `${item.sender.name} (@${item.sender.username}) → ${item.recipient.name} (@${item.recipient.username}): ${item.text}${item.readAt ? ' · Read' : ' · Unread'}`
+      return `${item.sender.name} (@${item.sender.username}) → ${item.recipient.name} (@${item.recipient.username}): ${item.audioUrl ? '[Voice note]' : item.text}${item.editedAt ? ' · Edited' : ''}${item.readAt ? ' · Read' : ' · Unread'}`
     case 'products':
       return `${item.name} · ${item.category} · ₦${new Intl.NumberFormat('en-NG').format(item.price)} · Stock ${item.stock} · ${item.published ? 'Published' : 'Unpublished'} · ${item.description}`
     case 'localListings':
@@ -110,24 +110,47 @@ function UserDetails({ user, loading, error, onClose, onLoadOlder, loadingOlder,
   return (
     <div className="admin-detail-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose() }}>
       <section className="admin-detail-panel" role="dialog" aria-modal="true" aria-labelledby="admin-user-detail-title">
+        <div className="admin-detail-cover" aria-hidden="true" />
         <header className="admin-detail-header">
           <Avatar person={{ name: user.name, image: user.profileImageUrl }} className="admin-detail-avatar" />
-          <div className="admin-detail-heading-copy"><span className="app-page-eyebrow">ACCOUNT DETAILS</span><h2 id="admin-user-detail-title">{user.name}</h2><p>@{user.username} · <a href={`mailto:${user.email}`}>{user.email}</a></p></div>
+          <div className="admin-detail-heading-copy">
+            <span className="app-page-eyebrow">MEMBER PROFILE · ACCOUNT #{user.id.slice(0, 8).toUpperCase()}</span>
+            <h2 id="admin-user-detail-title">{user.name}</h2>
+            <p>@{user.username} <span>·</span> <a href={`mailto:${user.email}`}>{user.email}</a></p>
+            <div className="admin-detail-header-badges">
+              <span className={user.emailVerified ? 'is-verified' : 'is-review'}>{user.emailVerified ? 'Verified email' : 'Email not verified'}</span>
+              <span className={user.suspended ? 'is-suspended' : 'is-active'}>{user.isAdmin ? 'Administrator' : user.suspended ? 'Suspended' : 'Active member'}</span>
+            </div>
+          </div>
+          <div className="admin-detail-header-actions">
+            {!user.isAdmin && <button type="button" className={`admin-row-action ${user.suspended ? '' : 'admin-danger-action'}`} onClick={onToggleSuspension} disabled={updatingStatus}>{updatingStatus ? 'Updating…' : user.suspended ? 'Restore account' : 'Suspend account'}</button>}
           <button type="button" className="admin-detail-close" aria-label="Close user details" onClick={onClose}><X size={18} /></button>
+          </div>
         </header>
         {error && <p className="feed-interaction-notice feed-error" role="alert">{error}</p>}
-        <div className="admin-detail-profile">
-          <p>{user.bio || 'No bio provided.'}</p>
-          <div><span>{user.emailVerified ? 'Email verified' : 'Email not verified'}</span><span>{user.profileVisible ? 'Profile visible' : 'Profile hidden'}</span><span>{user.discoverable ? 'Discoverable' : 'Not discoverable'}</span></div>
-          <div className="admin-account-status"><span className={user.isAdmin ? 'admin-role-chip' : user.suspended ? 'admin-hidden-status' : 'admin-visible-status'}>{user.isAdmin ? 'Administrator account' : user.suspended ? 'Suspended account' : 'Account active'}</span>{user.isAdmin ? <small>Administrator access is managed through role controls.</small> : <button type="button" className={`admin-row-action ${user.suspended ? '' : 'admin-danger-action'}`} onClick={onToggleSuspension} disabled={updatingStatus}>{updatingStatus ? 'Updating…' : user.suspended ? 'Restore account' : 'Suspend account'}</button>}</div>
-          <p>Joined {formatDate(user.createdAt)} · Last profile update {formatDate(user.updatedAt)}</p>
-          {!!user.interests?.length && <p>Interests: {user.interests.join(', ')}</p>}
-          <p>Account ID: {user.id}</p>
-        </div>
-        <section className="admin-detail-counts" aria-label="Account activity totals">
-          {activityLabels.map(([key, label]) => <div key={key}><strong>{user.counts[key] ?? 0}</strong><span>{label}</span></div>)}
-        </section>
-        <div className="admin-detail-privacy-note"><ShieldAlert size={16} /><p>Message history, including text and photos, is available to admins. Account-detail and document access is recorded in the audit log.</p></div>
+        <div className="admin-detail-content-grid">
+          <div className="admin-detail-main-column">
+            <section className="admin-detail-profile admin-profile-card">
+              <div className="admin-profile-section-heading"><div><span className="app-page-eyebrow">ABOUT THIS MEMBER</span><h3>Profile information</h3></div></div>
+              <p className="admin-profile-bio">{user.bio || 'This member has not added a bio yet.'}</p>
+              <dl className="admin-profile-fields">
+                <div><dt>Email address</dt><dd><a href={`mailto:${user.email}`}>{user.email}</a></dd></div>
+                <div><dt>Username</dt><dd>@{user.username}</dd></div>
+                <div><dt>Account created</dt><dd>{formatDate(user.createdAt)}</dd></div>
+                <div><dt>Last profile update</dt><dd>{formatDate(user.updatedAt)}</dd></div>
+                <div><dt>Profile visibility</dt><dd>{user.profileVisible ? 'Visible to members' : 'Hidden from members'}</dd></div>
+                <div><dt>People discovery</dt><dd>{user.discoverable ? 'Discoverable' : 'Not discoverable'}</dd></div>
+              </dl>
+              <div className="admin-profile-interests"><strong>Interests</strong>{user.interests?.length ? <div>{user.interests.map((interest) => <span key={interest}>{interest}</span>)}</div> : <small>No interests added</small>}</div>
+            </section>
+            <section className="admin-detail-counts admin-profile-card" aria-label="Account activity totals">
+              <div className="admin-profile-section-heading"><div><span className="app-page-eyebrow">ACCOUNT OVERVIEW</span><h3>Activity at a glance</h3></div></div>
+              <div className="admin-profile-stat-grid">{activityLabels.map(([key, label]) => <div key={key}><strong>{formatCount(user.counts[key] ?? 0)}</strong><span>{label}</span></div>)}</div>
+            </section>
+            <div className="admin-detail-privacy-note"><ShieldAlert size={16} /><p>Private message history, photos, and voice notes are available to admins. Account-detail and document access is recorded in the audit log.</p></div>
+          </div>
+          <aside className="admin-detail-side-column">
+            <section className="admin-profile-card admin-profile-status-card"><span className="app-page-eyebrow">ACCOUNT STATUS</span><strong>{user.isAdmin ? 'Administrator account' : user.suspended ? 'Suspended account' : 'Member account'}</strong><div><span>{user.emailVerified ? 'Verified email' : 'Unverified email'}</span><span>{user.profileVisible ? 'Profile visible' : 'Profile hidden'}</span><span>{user.discoverable ? 'Discoverable' : 'Not discoverable'}</span></div>{user.isAdmin && <small>Administrator access is managed through role controls.</small>}</section>
         {user.businessProfile && <section className="admin-business-profile">
           <div><span className="app-page-eyebrow">JOB POSTER COMPANY DETAILS</span><h3>{user.businessProfile.companyName}</h3></div>
           <dl>
@@ -140,6 +163,8 @@ function UserDetails({ user, loading, error, onClose, onLoadOlder, loadingOlder,
           </dl>
           <a className="admin-business-document-link" href={user.businessProfile.documentUrl} target="_blank" rel="noreferrer"><FileText size={15} /> Open CAC document ({user.businessProfile.documentContentType}, {formatCount(user.businessProfile.documentSize)} bytes)</a>
         </section>}
+          </aside>
+        </div>
         {loading && <p className="admin-detail-loading">Loading all account activity…</p>}
         {!loading && user.activity && <div className="admin-detail-activity">
           {activityLabels.map(([key, label]) => {
@@ -158,6 +183,7 @@ function UserDetails({ user, loading, error, onClose, onLoadOlder, loadingOlder,
                 <div><button type="submit" className="admin-row-action" disabled={savingPostId === item.id}>{savingPostId === item.id ? 'Saving…' : 'Save post'}</button><button type="button" className="admin-row-action" onClick={() => setEditingPostId('')} disabled={savingPostId === item.id}>Cancel</button></div>
               </form> : <p>{formatRecord(key, item)}</p>}
               {(item.imageUrls?.length > 0 || item.imageUrl) && <div className="admin-activity-images">{(item.imageUrls ?? (item.imageUrl ? [item.imageUrl] : [])).map((image, imageIndex) => <img key={`${image}-${imageIndex}`} src={image} alt={`${key === 'messages' ? 'Message' : 'User activity'} photo ${imageIndex + 1}`} loading="lazy" />)}</div>}
+              {item.audioUrl && <audio className="admin-user-voice-note" controls preload="none" src={item.audioUrl}>This voice note cannot be played in this browser.</audio>}
               <time>{formatDate(item.createdAt ?? item.joinedAt)}</time>
               {key === 'posts' && editingPostId !== item.id && <button type="button" className="admin-row-action admin-edit-post-trigger" onClick={() => {
                 setPostDraft({ text: item.text, imageUrls: (item.imageUrls ?? []).join('\n') })

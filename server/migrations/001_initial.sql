@@ -158,6 +158,8 @@ CREATE TABLE IF NOT EXISTS direct_messages (
 );
 
 ALTER TABLE direct_messages ADD COLUMN IF NOT EXISTS image_url varchar(2048);
+ALTER TABLE direct_messages ADD COLUMN IF NOT EXISTS audio_url varchar(2048);
+ALTER TABLE direct_messages ADD COLUMN IF NOT EXISTS edited_at timestamptz;
 
 CREATE INDEX IF NOT EXISTS direct_conversations_participant_one_idx
   ON direct_conversations(participant_one_id);

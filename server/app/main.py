@@ -51,6 +51,7 @@ MESSAGE_REQUEST_LIMIT = 120
 MEDIA_UPLOAD_WINDOW_SECONDS = 15 * 60
 MEDIA_UPLOAD_REQUEST_LIMIT = 30
 MAX_IMAGE_BYTES = 4 * 1024 * 1024
+MAX_VOICE_NOTE_BYTES = 10 * 1024 * 1024
 MAX_BUSINESS_DOCUMENT_BYTES = 10 * 1024 * 1024
 MAX_VIDEO_BYTES = 250 * 1024 * 1024
 MAX_IMAGE_PIXELS = 20_000_000
@@ -525,6 +526,7 @@ class DirectConversationPreferencesInput(StrictModel):
 class DirectMessageInput(StrictModel):
     text: Optional[str] = Field(default=None, max_length=2000)
     image_url: Optional[str] = Field(default=None, max_length=2048)
+    audio_url: Optional[str] = Field(default=None, max_length=2048)
 
     @field_validator("text")
     @classmethod
@@ -538,11 +540,34 @@ class DirectMessageInput(StrictModel):
             return None
         return validate_image_reference(value)
 
+    @field_validator("audio_url")
+    @classmethod
+    def valid_audio_url(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        if not re.fullmatch(r"/api/media/voice-notes/[a-f0-9]{32}\.(webm|ogg|mp4)", value):
+            raise ValueError("Voice note reference is invalid.")
+        return value
+
     @model_validator(mode="after")
     def require_message_content(self) -> "DirectMessageInput":
-        if not self.text and not self.image_url:
-            raise ValueError("Add a message or photo.")
+        if not self.text and not self.image_url and not self.audio_url:
+            raise ValueError("Add a message, photo, or voice note.")
+        if self.image_url and self.audio_url:
+            raise ValueError("Send a photo or a voice note, not both.")
         return self
+
+
+class DirectMessageEditInput(StrictModel):
+    text: str = Field(min_length=1, max_length=2000)
+
+    @field_validator("text")
+    @classmethod
+    def clean_edit_text(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("Message text is required.")
+        return value
 
 
 class UserFollowInput(StrictModel):
@@ -917,6 +942,8 @@ def create_app(
                 body_limit = (
                     MAX_IMAGE_BYTES
                     if request.url.path == "/api/media/images"
+                    else MAX_VOICE_NOTE_BYTES
+                    if request.url.path == "/api/media/voice-notes"
                     else MAX_BUSINESS_DOCUMENT_BYTES
                     if request.url.path == "/api/jobs/business-profile"
                     else MAX_VIDEO_BYTES
@@ -1225,9 +1252,17 @@ def create_app(
             "id": str(row["id"]),
             "text": "" if row.get("image_url") and row["body"] == "Photo" else row["body"],
             "imageUrl": row.get("image_url"),
+            "audioUrl": row.get("audio_url"),
             "createdAt": row["created_at"].isoformat(),
             "readAt": row["read_at"].isoformat() if row.get("read_at") else None,
             "isMine": str(row["sender_id"]) == str(viewer_id),
+            "editedAt": row["edited_at"].isoformat() if row.get("edited_at") else None,
+            "canEdit": (
+                str(row["sender_id"]) == str(viewer_id)
+                and not row.get("image_url")
+                and not row.get("audio_url")
+                and row["created_at"] >= datetime.now(timezone.utc) - timedelta(minutes=15)
+            ),
             "sender": {
                 "id": str(row["sender_id"]),
                 "name": row["display_name"],
@@ -1491,6 +1526,67 @@ def create_app(
             image_path,
             media_type="image/webp",
             headers={"Cache-Control": "public, max-age=31536000, immutable"},
+        )
+
+    @app.post("/api/media/voice-notes", status_code=201)
+    async def upload_voice_note(
+        request: Request,
+        user: Dict[str, Any] = Depends(require_user),
+    ) -> Dict[str, str]:
+        enforce_media_upload_rate_limit(request)
+        media_types = {
+            "audio/webm": ("webm", "audio/webm"),
+            "audio/ogg": ("ogg", "audio/ogg"),
+            "audio/mp4": ("mp4", "audio/mp4"),
+        }
+        media_type = request.headers.get("content-type", "").split(";", 1)[0].strip().lower()
+        media_file = media_types.get(media_type)
+        if not media_file:
+            raise ApiError(400, "invalid_voice_note", "Choose a supported WebM, Ogg, or MP4 audio recording.")
+        content = bytearray()
+        async for chunk in request.stream():
+            content.extend(chunk)
+            if len(content) > MAX_VOICE_NOTE_BYTES:
+                raise ApiError(413, "voice_note_too_large", "Voice notes must be 10 MB or smaller.")
+        if len(content) < 128:
+            raise ApiError(400, "invalid_voice_note", "This voice recording is empty or incomplete.")
+        extension, response_type = media_file
+        filename = uuid4().hex + "." + extension
+        voice_directory = uploads_directory / "voice-notes"
+        try:
+            await asyncio.to_thread(voice_directory.mkdir, parents=True, exist_ok=True)
+            await asyncio.to_thread((voice_directory / filename).write_bytes, bytes(content))
+        except OSError as error:
+            logger.exception("Could not save an uploaded voice note for user %s", user["id"])
+            raise ApiError(500, "media_unavailable", "The voice note could not be saved. Try again later.") from error
+        return {"url": "/api/media/voice-notes/{}".format(filename), "contentType": response_type}
+
+    @app.get("/api/media/voice-notes/{filename}")
+    def get_voice_note(filename: str, request: Request) -> Response:
+        user = require_user(request)
+        if not re.fullmatch(r"[a-f0-9]{32}\.(webm|ogg|mp4)", filename):
+            raise ApiError(404, "voice_note_not_found", "That voice note could not be found.")
+        audio_url = "/api/media/voice-notes/{}".format(filename)
+        with database.connection() as connection:
+            authorized = connection.execute(
+                """SELECT message.id
+                   FROM direct_messages message
+                   JOIN direct_conversations conversation ON conversation.id = message.conversation_id
+                   WHERE message.audio_url = %s
+                     AND (conversation.participant_one_id = %s OR conversation.participant_two_id = %s)
+                   LIMIT 1""",
+                (audio_url, user["id"], user["id"]),
+            ).fetchone()
+        if not authorized:
+            raise ApiError(404, "voice_note_not_found", "That voice note could not be found.")
+        media_type = {"webm": "audio/webm", "ogg": "audio/ogg", "mp4": "audio/mp4"}[filename.rsplit(".", 1)[1]]
+        audio_path = uploads_directory / "voice-notes" / filename
+        if not audio_path.is_file():
+            raise ApiError(404, "voice_note_not_found", "That voice note could not be found.")
+        return FileResponse(
+            audio_path,
+            media_type=media_type,
+            headers={"Cache-Control": "private, no-store"},
         )
 
     @app.post("/api/videos", status_code=201)
@@ -2612,7 +2708,7 @@ def create_app(
                 (user_id, limit, offset),
             ).fetchall()
             messages = connection.execute(
-                """SELECT m.id, m.conversation_id, m.body, m.image_url, m.created_at, m.read_at,
+                """SELECT m.id, m.conversation_id, m.body, m.image_url, m.audio_url, m.edited_at, m.created_at, m.read_at,
                           sender.id AS sender_id, sender.display_name AS sender_name,
                           sender.username AS sender_username,
                           recipient.id AS recipient_id, recipient.display_name AS recipient_name,
@@ -2687,7 +2783,7 @@ def create_app(
                 (user_id, limit, offset),
             ).fetchall()
         def timestamp(row: Dict[str, Any], key: str) -> Optional[str]:
-            value = row[key]
+            value = row.get(key)
             return value.isoformat() if value else None
 
         details = {
@@ -2749,6 +2845,15 @@ def create_app(
                         "conversationId": str(row["conversation_id"]),
                         "text": row["body"],
                         "imageUrl": row.get("image_url"),
+                        "audioUrl": (
+                            "/api/admin/users/{}/voice-notes/{}".format(
+                                user_id,
+                                row["audio_url"].rsplit("/", 1)[-1],
+                            )
+                            if row.get("audio_url")
+                            else None
+                        ),
+                        "editedAt": timestamp(row, "edited_at"),
                         "readAt": timestamp(row, "read_at"),
                         "sender": {
                             "id": str(row["sender_id"]),
@@ -2827,6 +2932,41 @@ def create_app(
             media_type=profile["document_content_type"],
             headers={"Cache-Control": "private, no-store"},
             content_disposition_type="inline",
+        )
+
+    @app.get("/api/admin/users/{user_id}/voice-notes/{filename}")
+    def get_admin_user_voice_note(
+        user_id: UUID,
+        filename: str,
+        admin: Dict[str, Any] = Depends(require_admin),
+    ) -> Response:
+        if not re.fullmatch(r"[a-f0-9]{32}\.(webm|ogg|mp4)", filename):
+            raise ApiError(404, "voice_note_not_found", "That voice note could not be found.")
+        audio_url = "/api/media/voice-notes/{}".format(filename)
+        with database.connection() as connection:
+            message = connection.execute(
+                """SELECT id
+                   FROM direct_messages
+                   WHERE audio_url = %s
+                     AND (sender_id = %s OR recipient_id = %s)
+                   LIMIT 1""",
+                (audio_url, user_id, user_id),
+            ).fetchone()
+            if not message:
+                raise ApiError(404, "voice_note_not_found", "That voice note could not be found.")
+            connection.execute(
+                """INSERT INTO admin_audit_log (admin_user_id, subject_user_id, action, details)
+                   VALUES (%s, %s, 'view_user_voice_note', %s::jsonb)""",
+                (admin["id"], user_id, json.dumps({"type": "voice_note"})),
+            )
+        audio_path = uploads_directory / "voice-notes" / filename
+        if not audio_path.is_file():
+            raise ApiError(404, "voice_note_not_found", "That voice note could not be found.")
+        media_type = {"webm": "audio/webm", "ogg": "audio/ogg", "mp4": "audio/mp4"}[filename.rsplit(".", 1)[1]]
+        return FileResponse(
+            audio_path,
+            media_type=media_type,
+            headers={"Cache-Control": "private, no-store"},
         )
 
     @app.get("/api/admin/audit-log")
@@ -4936,11 +5076,12 @@ def create_app(
             if query:
                 read_messages = []
                 rows = connection.execute(
-                    """SELECT message.id, message.body, message.image_url, message.created_at, message.read_at,
+                    """SELECT message.id, message.body, message.image_url, message.audio_url,
+                              message.edited_at, message.created_at, message.read_at,
                               message.sender_id,
                               sender.display_name, sender.username
                        FROM (
-                           SELECT id, body, image_url, created_at, read_at, sender_id
+                           SELECT id, body, image_url, audio_url, edited_at, created_at, read_at, sender_id
                            FROM direct_messages
                            WHERE conversation_id = %s
                              AND strpos(lower(body), lower(%s)) > 0
@@ -4962,11 +5103,12 @@ def create_app(
                     (conversation_id, user["id"]),
                 ).fetchall()
                 rows = connection.execute(
-                    """SELECT message.id, message.body, message.image_url, message.created_at, message.read_at,
+                    """SELECT message.id, message.body, message.image_url, message.audio_url,
+                              message.edited_at, message.created_at, message.read_at,
                               message.sender_id,
                               sender.display_name, sender.username
                        FROM (
-                           SELECT id, body, image_url, created_at, read_at, sender_id
+                           SELECT id, body, image_url, audio_url, edited_at, created_at, read_at, sender_id
                            FROM direct_messages
                            WHERE conversation_id = %s
                            ORDER BY created_at DESC, id DESC
@@ -5027,13 +5169,14 @@ def create_app(
                 raise ApiError(403, "blocked_by_them", "You can’t message this person because they blocked you.")
             inserted = connection.execute(
                 """INSERT INTO direct_messages
-                       (conversation_id, sender_id, recipient_id, body, image_url)
+                       (conversation_id, sender_id, recipient_id, body, image_url, audio_url)
                    SELECT c.id, %s,
                           CASE
                               WHEN c.participant_one_id = %s THEN c.participant_two_id
                               ELSE c.participant_one_id
                           END,
-                          COALESCE(%s, 'Photo'), %s
+                          COALESCE(%s, CASE WHEN %s IS NOT NULL THEN 'Voice note' ELSE 'Photo' END),
+                          %s, %s
                    FROM direct_conversations c
                    WHERE c.id = %s
                      AND (c.participant_one_id = %s OR c.participant_two_id = %s)
@@ -5042,7 +5185,9 @@ def create_app(
                     user["id"],
                     user["id"],
                     input.text,
+                    input.audio_url,
                     input.image_url,
+                    input.audio_url,
                     conversation_id,
                     user["id"],
                     user["id"],
@@ -5051,7 +5196,8 @@ def create_app(
             if not inserted:
                 raise ApiError(404, "conversation_not_found", "That conversation could not be found.")
             row = connection.execute(
-                """SELECT message.id, message.body, message.image_url, message.created_at, message.read_at,
+                """SELECT message.id, message.body, message.image_url, message.audio_url,
+                          message.edited_at, message.created_at, message.read_at,
                           message.sender_id, message.recipient_id,
                           sender.display_name, sender.username
                    FROM direct_messages message
@@ -5071,6 +5217,86 @@ def create_app(
             [row["recipient_id"]],
         )
         return {"message": public_direct_message(row, user["id"])}
+
+    @app.put(
+        "/api/messages/conversations/{conversation_id}/messages/{message_id}",
+        dependencies=[Depends(enforce_message_rate_limit)],
+    )
+    def edit_direct_message(
+        conversation_id: UUID,
+        message_id: UUID,
+        input: DirectMessageEditInput,
+        request: Request,
+    ) -> Dict[str, Any]:
+        user = require_user(request)
+        with database.connection() as connection:
+            existing = connection.execute(
+                """SELECT id, sender_id, image_url, audio_url, created_at
+                   FROM direct_messages
+                   WHERE id = %s AND conversation_id = %s""",
+                (message_id, conversation_id),
+            ).fetchone()
+            if not existing or str(existing["sender_id"]) != str(user["id"]):
+                raise ApiError(404, "message_not_found", "That message could not be found.")
+            if existing["image_url"] or existing.get("audio_url"):
+                raise ApiError(400, "message_not_editable", "Only text messages can be edited.")
+            if existing["created_at"] < datetime.now(timezone.utc) - timedelta(minutes=15):
+                raise ApiError(403, "edit_window_expired", "Messages can only be edited within 15 minutes of sending.")
+            block = connection.execute(
+                """SELECT other.id AS recipient_id,
+                          EXISTS (
+                              SELECT 1 FROM user_blocks
+                              WHERE blocker_id = %s AND blocked_id = other.id
+                          ) AS blocked_by_me,
+                          EXISTS (
+                              SELECT 1 FROM user_blocks
+                              WHERE blocker_id = other.id AND blocked_id = %s
+                          ) AS blocked_by_them
+                   FROM direct_conversations conversation
+                   JOIN users other ON other.id = CASE
+                       WHEN conversation.participant_one_id = %s THEN conversation.participant_two_id
+                       ELSE conversation.participant_one_id
+                   END
+                   WHERE conversation.id = %s
+                     AND (conversation.participant_one_id = %s OR conversation.participant_two_id = %s)""",
+                (user["id"], user["id"], user["id"], conversation_id, user["id"], user["id"]),
+            ).fetchone()
+            if not block:
+                raise ApiError(404, "conversation_not_found", "That conversation could not be found.")
+            if block["blocked_by_me"] or block["blocked_by_them"]:
+                raise ApiError(403, "message_edit_blocked", "Messages cannot be edited in a blocked conversation.")
+            row = connection.execute(
+                """UPDATE direct_messages
+                   SET body = %s, edited_at = now()
+                   WHERE id = %s AND conversation_id = %s AND sender_id = %s
+                     AND created_at >= now() - interval '15 minutes'
+                   RETURNING id""",
+                (input.text, message_id, conversation_id, user["id"]),
+            ).fetchone()
+            if not row:
+                raise ApiError(403, "edit_window_expired", "Messages can only be edited within 15 minutes of sending.")
+            updated = connection.execute(
+                """SELECT message.id, message.body, message.image_url, message.audio_url,
+                          message.edited_at, message.created_at, message.read_at,
+                          message.sender_id, message.recipient_id,
+                          sender.display_name, sender.username
+                   FROM direct_messages message
+                   JOIN users sender ON sender.id = message.sender_id
+                   WHERE message.id = %s""",
+                (message_id,),
+            ).fetchone()
+        if not updated:
+            raise ApiError(500, "internal_error", "The edited message could not be loaded.")
+        publish_realtime(
+            {
+                "type": "message.updated",
+                "conversationId": str(conversation_id),
+                "messageId": str(message_id),
+                "senderId": str(updated["sender_id"]),
+            },
+            [block["recipient_id"]],
+        )
+        return {"message": public_direct_message(updated, user["id"])}
 
     def public_dating_profile(row: Dict[str, Any]) -> Dict[str, Any]:
         today = date.today()

@@ -1,11 +1,11 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
-import { Archive, ArchiveRestore, ArrowLeft, Ban, Check, CheckCheck, ImagePlus, Search, Send, Settings2, UserPlus, Volume2, VolumeX, X } from 'lucide-react'
+import { Archive, ArchiveRestore, ArrowLeft, Ban, Check, CheckCheck, ImagePlus, Mic, Pencil, Save, Search, Send, Settings2, Smile, Square, UserPlus, Volume2, VolumeX, X } from 'lucide-react'
 import { useLocation } from 'react-router-dom'
 import AppPageHeader from '../../components/AppPageHeader.jsx'
 import Avatar from '../../components/Avatar.jsx'
 import StatusExperience from '../../components/StatusExperience.jsx'
-import { getConversations, getDirectMessages, openConversation as openDirectConversation, searchMessageUsers, sendDirectMessage, setConversationBlocked, updateConversationPreferences } from '../../utils/messageApi.js'
-import { uploadImage } from '../../utils/mediaApi.js'
+import { editDirectMessage, getConversations, getDirectMessages, openConversation as openDirectConversation, searchMessageUsers, sendDirectMessage, setConversationBlocked, updateConversationPreferences } from '../../utils/messageApi.js'
+import { uploadImage, uploadVoiceNote } from '../../utils/mediaApi.js'
 import { subscribeRealtime } from '../../utils/realtime.js'
 
 function playIncomingMessageSound(audioContext) {
@@ -31,6 +31,14 @@ export default function InboxPage() {
   const [message, setMessage] = useState('')
   const [messageImage, setMessageImage] = useState(null)
   const [messageImagePreview, setMessageImagePreview] = useState('')
+  const [voiceNote, setVoiceNote] = useState(null)
+  const [voiceNotePreview, setVoiceNotePreview] = useState('')
+  const [recordingVoice, setRecordingVoice] = useState(false)
+  const [recordingSeconds, setRecordingSeconds] = useState(0)
+  const [emojiPickerOpen, setEmojiPickerOpen] = useState(false)
+  const [editingMessageId, setEditingMessageId] = useState('')
+  const [editingMessageText, setEditingMessageText] = useState('')
+  const [savingMessageEdit, setSavingMessageEdit] = useState(false)
   const [search, setSearch] = useState('')
   const [activeTab, setActiveTab] = useState('All messages')
   const [conversations, setConversations] = useState([])
@@ -56,6 +64,11 @@ export default function InboxPage() {
   const [loadingMessages, setLoadingMessages] = useState(false)
   const [statusTarget, setStatusTarget] = useState(null)
   const messagesEnd = useRef(null)
+  const voiceRecorder = useRef(null)
+  const voiceStream = useRef(null)
+  const voiceChunks = useRef([])
+  const recordingTimer = useRef(null)
+  const recordingStarted = useRef(0)
   const audioContext = useRef(null)
   const mutedConversationIds = useRef(new Set())
   const requestedConversationId = useRef(location.state?.conversationId ?? '')
@@ -231,9 +244,17 @@ export default function InboxPage() {
       getDirectMessages(conversationId)
         .then((loadedMessages) => {
           setRemoteMessageState({ conversationId, messages: loadedMessages })
+          const latestMessage = loadedMessages.at(-1)
           setConversations((current) => current.map((conversation) => (
             conversation.id === conversationId
-              ? { ...conversation, unreadCount: 0 }
+              ? {
+                  ...conversation,
+                  ...(latestMessage ? {
+                    message: latestMessage.text || (latestMessage.imageUrl ? 'Photo' : ''),
+                    time: latestMessage.relativeTime,
+                  } : {}),
+                  unreadCount: 0,
+                }
               : conversation
           )))
         })
@@ -251,6 +272,8 @@ export default function InboxPage() {
         }
       } else if (event.type === 'message.read' && event.conversationId === activeId) {
         refreshActiveConversation(activeId, 'Could not refresh read receipts.')
+      } else if (event.type === 'message.updated' && event.conversationId === activeId) {
+        refreshActiveConversation(activeId, 'Could not refresh the edited message.')
       } else if (event.type === 'sync' || event.type === 'connected') {
         refreshConversationList()
         if (activeId) {
@@ -304,6 +327,22 @@ export default function InboxPage() {
     return () => URL.revokeObjectURL(preview)
   }, [messageImage])
 
+  useEffect(() => {
+    if (!voiceNote) {
+      setVoiceNotePreview('')
+      return undefined
+    }
+    const preview = URL.createObjectURL(voiceNote)
+    setVoiceNotePreview(preview)
+    return () => URL.revokeObjectURL(preview)
+  }, [voiceNote])
+
+  useEffect(() => () => {
+    window.clearInterval(recordingTimer.current)
+    if (voiceRecorder.current?.state === 'recording') voiceRecorder.current.stop()
+    voiceStream.current?.getTracks().forEach((track) => track.stop())
+  }, [])
+
   async function startConversation(recipient) {
     setStartingConversation(true)
     try {
@@ -327,11 +366,12 @@ export default function InboxPage() {
   async function sendMessage(event) {
     event.preventDefault()
     const trimmed = message.trim()
-    if ((!trimmed && !messageImage) || !activeRemote) return
+    if ((!trimmed && !messageImage && !voiceNote) || !activeRemote) return
     setSending(true)
     try {
       const imageUrl = messageImage ? await uploadImage(messageImage) : null
-      const sentMessage = await sendDirectMessage(activeRemote.id, trimmed, imageUrl)
+      const audioUrl = voiceNote ? await uploadVoiceNote(voiceNote) : null
+      const sentMessage = await sendDirectMessage(activeRemote.id, trimmed, imageUrl, audioUrl)
       setRemoteMessageState((current) => ({
         conversationId: activeRemote.id,
         messages: current.conversationId === activeRemote.id
@@ -345,11 +385,103 @@ export default function InboxPage() {
       )))
       setMessage('')
       setMessageImage(null)
+      setVoiceNote(null)
+      setEmojiPickerOpen(false)
       setError('')
     } catch (sendError) {
       setError(sendError instanceof Error ? sendError.message : 'Your message could not be sent.')
     } finally {
       setSending(false)
+    }
+  }
+
+  async function startVoiceRecording() {
+    setError('')
+    if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === 'undefined') {
+      setError('Voice recording is not supported by this browser. You can still send text and photos.')
+      return
+    }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+      const preferredType = ['audio/webm;codecs=opus', 'audio/ogg;codecs=opus', 'audio/mp4']
+        .find((type) => MediaRecorder.isTypeSupported(type))
+      const recorder = new MediaRecorder(stream, preferredType ? { mimeType: preferredType } : undefined)
+      voiceStream.current = stream
+      voiceChunks.current = []
+      recorder.addEventListener('dataavailable', (event) => {
+        if (event.data.size) voiceChunks.current.push(event.data)
+      })
+      recorder.addEventListener('stop', () => {
+        const recording = new Blob(voiceChunks.current, { type: recorder.mimeType || 'audio/webm' })
+        if (recording.size) {
+          setVoiceNote(recording)
+          setMessageImage(null)
+        } else {
+          setError('The voice recording was empty. Please record again.')
+        }
+        voiceChunks.current = []
+        voiceStream.current?.getTracks().forEach((track) => track.stop())
+        voiceStream.current = null
+        voiceRecorder.current = null
+        window.clearInterval(recordingTimer.current)
+        setRecordingVoice(false)
+      }, { once: true })
+      recorder.addEventListener('error', () => {
+        setError('The voice recording failed. Please try again.')
+        if (recorder.state === 'recording') recorder.stop()
+      }, { once: true })
+      voiceRecorder.current = recorder
+      recordingStarted.current = Date.now()
+      recorder.start()
+      setRecordingSeconds(0)
+      setRecordingVoice(true)
+      recordingTimer.current = window.setInterval(() => {
+        const seconds = Math.floor((Date.now() - recordingStarted.current) / 1000)
+        setRecordingSeconds(seconds)
+        if (seconds >= 120 && voiceRecorder.current?.state === 'recording') voiceRecorder.current.stop()
+      }, 500)
+    } catch (recordingError) {
+      const message = recordingError?.name === 'NotAllowedError'
+        ? 'Allow microphone access in your browser to record a voice note.'
+        : recordingError instanceof Error ? recordingError.message : 'Could not start voice recording.'
+      setError(message)
+    }
+  }
+
+  function stopVoiceRecording() {
+    if (voiceRecorder.current?.state === 'recording') voiceRecorder.current.stop()
+  }
+
+  async function saveMessageEdit(event, item) {
+    event.preventDefault()
+    if (!activeRemote || savingMessageEdit) return
+    setSavingMessageEdit(true)
+    setError('')
+    try {
+      const updatedMessage = await editDirectMessage(activeRemote.id, item.id, editingMessageText)
+      setRemoteMessageState((current) => ({
+        ...current,
+        messages: current.conversationId === activeRemote.id
+          ? current.messages.map((messageItem) => messageItem.id === item.id ? updatedMessage : messageItem)
+          : current.messages,
+      }))
+      setSearchedMessageState((current) => ({
+        ...current,
+        messages: current.conversationId === activeRemote.id
+          ? current.messages.map((messageItem) => messageItem.id === item.id ? updatedMessage : messageItem)
+          : current.messages,
+      }))
+      setConversations((current) => current.map((conversation) => (
+        conversation.id === activeRemote.id
+          ? { ...conversation, message: updatedMessage.text, time: updatedMessage.relativeTime }
+          : conversation
+      )))
+      setEditingMessageId('')
+      setEditingMessageText('')
+    } catch (editError) {
+      setError(editError instanceof Error ? editError.message : 'Could not edit this message.')
+    } finally {
+      setSavingMessageEdit(false)
     }
   }
 
@@ -447,20 +579,27 @@ export default function InboxPage() {
                 {!loadingMessages && !messagesLoadError && !messages.length && <p className="inbox-empty-state">This conversation is ready. Send the first message.</p>}
                 {!loadingMessages && !messagesLoadError && normalizedChatSearch && !searchingMessages && !visibleMessages.length && <p className="inbox-empty-state">No messages match “{normalizedChatSearch}”.</p>}
                 {visibleMessages.map((item) => <div className={`chat-message-row ${item.from === 'me' ? 'chat-message-mine' : ''}`} key={item.id}>
-                  <div className="chat-message-bubble">
+                  {editingMessageId === item.id ? <form className="chat-message-edit-form" onSubmit={(event) => saveMessageEdit(event, item)}>
+                    <textarea aria-label="Edit message" value={editingMessageText} maxLength={2000} autoFocus onChange={(event) => setEditingMessageText(event.target.value)} />
+                    <div><small>Edited messages are marked for everyone in this chat.</small><span><button type="button" onClick={() => { setEditingMessageId(''); setEditingMessageText('') }} disabled={savingMessageEdit}>Cancel</button><button type="submit" disabled={!editingMessageText.trim() || savingMessageEdit}><Save size={13} /> {savingMessageEdit ? 'Saving…' : 'Save'}</button></span></div>
+                  </form> : <div className="chat-message-bubble">
                     {item.imageUrl && <a className="chat-message-image-link" href={item.imageUrl} target="_blank" rel="noreferrer"><img className="chat-message-image" src={item.imageUrl} alt="Photo attachment" loading="lazy" /></a>}
+                    {item.audioUrl && <audio className="chat-message-audio" controls preload="none" src={item.audioUrl}>Your browser cannot play this voice note.</audio>}
                     {item.text && <p className="chat-message-text">{item.text}</p>}
-                  </div>
+                  </div>}
                   <div className="chat-message-meta">
                     {item.from === 'them' && <span className="chat-message-sender">{activeRemote.name.split(' ')[0]}</span>}
                     <time className="chat-message-time">{item.time}</time>
+                    {item.editedAt && <span className="chat-message-edited">Edited</span>}
                     {item.from === 'me' && <span className={`chat-message-receipt ${item.readAt ? 'chat-message-receipt-read' : ''}`} title={item.readAt ? `Read ${new Date(item.readAt).toLocaleString()}` : 'Sent'} aria-label={item.readAt ? 'Read' : 'Sent'}>
                       {item.readAt ? <CheckCheck size={14} /> : <Check size={14} />}
                     </span>}
+                    {item.from === 'me' && item.canEdit && !editingMessageId && <button type="button" className="chat-message-edit-trigger" aria-label="Edit message" onClick={() => { setEditingMessageId(item.id); setEditingMessageText(item.text) }}><Pencil size={12} /> Edit</button>}
                   </div>
                 </div>)}<div ref={messagesEnd} />
               </div>
               {messageImagePreview && <div className="chat-selected-image-preview"><img src={messageImagePreview} alt="Selected photo attachment" /><button type="button" aria-label="Remove selected photo" onClick={() => setMessageImage(null)} disabled={sending}><X size={14} /></button></div>}
+              {voiceNotePreview && <div className="chat-selected-voice-preview"><audio controls src={voiceNotePreview}>Preview your voice note.</audio><button type="button" aria-label="Remove voice note" onClick={() => setVoiceNote(null)} disabled={sending}><X size={14} /></button></div>}
               {!activeRemote.isBlockedByMe && <form className={`chat-composer ${activeRemote.isBlockedByThem ? 'chat-composer-disabled' : ''}`} onSubmit={sendMessage}>
                 <label className="chat-image-picker" aria-label="Attach a photo"><ImagePlus size={17} /><input type="file" accept="image/jpeg,image/png,image/webp" onChange={(event) => {
                   const file = event.target.files?.[0]
@@ -471,12 +610,20 @@ export default function InboxPage() {
                     return
                   }
                   setMessageImage(file)
+                  setVoiceNote(null)
                   setError('')
-                }} disabled={sending || loadingMessages || activeRemote.isBlockedByThem} /></label>
-                <input value={message} onChange={(event) => setMessage(event.target.value)} placeholder={activeRemote.isBlockedByThem ? `You can’t message ${activeRemote.name.split(' ')[0]} because they blocked you.` : `Message ${activeRemote.name.split(' ')[0]}...`} aria-label="Write a message" maxLength={2000} disabled={sending || loadingMessages || activeRemote.isBlockedByThem} />
-                <button className="chat-send" type="submit" aria-label="Send message" disabled={(!message.trim() && !messageImage) || sending || loadingMessages || activeRemote.isBlockedByThem}><Send size={16} /></button>
+                }} disabled={sending || loadingMessages || activeRemote.isBlockedByThem || recordingVoice || Boolean(voiceNote)} /></label>
+                <div className="chat-emoji-wrap">
+                  <button type="button" className={`chat-composer-tool ${emojiPickerOpen ? 'chat-composer-tool-active' : ''}`} aria-label="Add emoji" aria-expanded={emojiPickerOpen} onClick={() => setEmojiPickerOpen((open) => !open)} disabled={sending || activeRemote.isBlockedByThem}><Smile size={17} /></button>
+                  {emojiPickerOpen && <div className="chat-emoji-picker" role="group" aria-label="Choose an emoji">{['😀', '😂', '🥰', '😍', '😊', '😉', '😘', '🤗', '🤔', '🙌', '👏', '👍', '❤️', '💙', '🎉', '🙏', '✨', '🔥', '😢', '😮'].map((emoji) => <button key={emoji} type="button" aria-label={`Insert ${emoji}`} onClick={() => setMessage((current) => `${current}${emoji}`)}>{emoji}</button>)}</div>}
+                </div>
+                <input value={message} onChange={(event) => setMessage(event.target.value)} placeholder={recordingVoice ? `Recording voice note · ${Math.floor(recordingSeconds / 60)}:${String(recordingSeconds % 60).padStart(2, '0')}` : activeRemote.isBlockedByThem ? `You can’t message ${activeRemote.name.split(' ')[0]} because they blocked you.` : `Message ${activeRemote.name.split(' ')[0]}...`} aria-label="Write a message" maxLength={2000} disabled={sending || loadingMessages || activeRemote.isBlockedByThem || recordingVoice} />
+                {recordingVoice
+                  ? <button className="chat-composer-tool chat-recording-stop" type="button" onClick={stopVoiceRecording} aria-label="Stop voice recording"><Square size={15} fill="currentColor" /></button>
+                  : <button className={`chat-composer-tool ${voiceNote ? 'chat-composer-tool-active' : ''}`} type="button" onClick={voiceNote ? () => setVoiceNote(null) : startVoiceRecording} aria-label={voiceNote ? 'Discard voice note' : 'Record voice note'} disabled={sending || loadingMessages || activeRemote.isBlockedByThem}><Mic size={17} /></button>}
+                <button className="chat-send" type="submit" aria-label="Send message" disabled={(!message.trim() && !messageImage && !voiceNote) || sending || loadingMessages || activeRemote.isBlockedByThem || recordingVoice}><Send size={16} /></button>
               </form>}
-              <p className="chat-account-footnote">Private messages and photos are stored in your account.</p>
+              <p className="chat-account-footnote">Private messages, photos, and voice notes are stored in your account. Text messages can be edited for 15 minutes after sending.</p>
             </>}
         </section>
       </div>

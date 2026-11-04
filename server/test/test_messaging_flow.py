@@ -1,8 +1,10 @@
 import os
 import re
+import tempfile
 import unittest
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from uuid import uuid4
 
 from fastapi.testclient import TestClient
@@ -282,6 +284,19 @@ class FakeMessagingConnection:
             self.state["preferences"][(str(conversation_id), str(user_id))] = preferences
             return FakeResult(preferences.copy())
         if sql.startswith("update direct_messages"):
+            if "set body = %s" in sql:
+                body, message_id, conversation_id, sender_id = parameters
+                message = self.state["messages"].get(str(message_id))
+                if (
+                    not message
+                    or message["conversation_id"] != str(conversation_id)
+                    or message["sender_id"] != str(sender_id)
+                    or message["created_at"] < datetime.now(timezone.utc) - timedelta(minutes=15)
+                ):
+                    return FakeResult()
+                message["body"] = body
+                message["edited_at"] = datetime.now(timezone.utc)
+                return FakeResult({"id": message["id"]})
             conversation_id, recipient_id = map(str, parameters)
             now = datetime.now(timezone.utc)
             updated = []
@@ -296,7 +311,7 @@ class FakeMessagingConnection:
             return FakeResult(rows=updated)
         if sql.startswith("insert into direct_messages"):
             sender_id = str(parameters[0])
-            conversation_id = str(parameters[4])
+            conversation_id = str(parameters[6])
             conversation = self.state["conversations"].get(conversation_id)
             if not conversation or sender_id not in {
                 conversation["participant_one_id"],
@@ -316,19 +331,73 @@ class FakeMessagingConnection:
                 "conversation_id": conversation_id,
                 "sender_id": sender_id,
                 "recipient_id": recipient_id,
-                "body": parameters[2] or "Photo",
-                "image_url": parameters[3],
+                "body": parameters[2] or ("Voice note" if parameters[5] else "Photo"),
+                "image_url": parameters[4],
+                "audio_url": parameters[5],
                 "created_at": datetime.now(timezone.utc),
                 "read_at": None,
+                "edited_at": None,
             }
             self.state["messages"][message["id"]] = message
             return FakeResult({"id": message["id"]})
+        if sql.startswith("select id, sender_id, image_url, audio_url, created_at"):
+            message = self.state["messages"].get(str(parameters[0]))
+            if message and message["conversation_id"] == str(parameters[1]):
+                return FakeResult({
+                    key: message.get(key)
+                    for key in ("id", "sender_id", "image_url", "audio_url", "created_at")
+                })
+            return FakeResult()
+        if sql.startswith("select other.id as recipient_id") and "from direct_conversations conversation" in sql:
+            viewer_id, blocked_by_them_viewer, viewer_for_other, conversation_id, _, _ = map(str, parameters)
+            conversation = self.state["conversations"].get(conversation_id)
+            if not conversation or viewer_id not in {
+                conversation["participant_one_id"],
+                conversation["participant_two_id"],
+            }:
+                return FakeResult()
+            recipient_id = next(
+                participant
+                for participant in (conversation["participant_one_id"], conversation["participant_two_id"])
+                if participant != viewer_id
+            )
+            return FakeResult({
+                "recipient_id": recipient_id,
+                "blocked_by_me": (viewer_for_other, recipient_id) in self.state["blocks"],
+                "blocked_by_them": (recipient_id, blocked_by_them_viewer) in self.state["blocks"],
+            })
+        if sql.startswith("select message.id") and "from direct_messages message join direct_conversations conversation" in sql:
+            audio_url, user_id, _ = map(str, parameters)
+            message = next(
+                (
+                    item
+                    for item in self.state["messages"].values()
+                    if item.get("audio_url") == audio_url
+                    and user_id in (item["sender_id"], item["recipient_id"])
+                ),
+                None,
+            )
+            return FakeResult({"id": message["id"]} if message else None)
+        if sql.startswith("select id from direct_messages"):
+            audio_url, user_id, _ = map(str, parameters)
+            message = next(
+                (
+                    item
+                    for item in self.state["messages"].values()
+                    if item.get("audio_url") == audio_url
+                    and user_id in (item["sender_id"], item["recipient_id"])
+                ),
+                None,
+            )
+            return FakeResult({"id": message["id"]} if message else None)
+        if sql.startswith("insert into admin_audit_log"):
+            return FakeResult()
         if sql.startswith("select message.id") and "where message.id = %s" in sql:
             message = self.state["messages"].get(str(parameters[0]))
             return FakeResult(self._message_row(message) if message else None)
         if sql.startswith("select message.id") and "from (" in sql:
-            if "select id, body, image_url, created_at, read_at, sender_id from direct_messages" not in sql:
-                raise AssertionError("Message query must expose read_at from its subquery.")
+            if "select id, body, image_url, audio_url, edited_at, created_at, read_at, sender_id from direct_messages" not in sql:
+                raise AssertionError("Message query must expose audio and edit fields from its subquery.")
             search_term = None
             if "strpos(lower(body), lower(%s)) > 0" in sql:
                 conversation_id, search_term, limit = str(parameters[0]), parameters[1], parameters[2]
@@ -355,8 +424,10 @@ class FakeMessagingConnection:
             "id": message["id"],
             "body": message["body"],
             "image_url": message.get("image_url"),
+            "audio_url": message.get("audio_url"),
             "created_at": message["created_at"],
             "read_at": message["read_at"],
+            "edited_at": message.get("edited_at"),
             "sender_id": message["sender_id"],
             "recipient_id": message["recipient_id"],
             "display_name": sender["display_name"],
@@ -420,9 +491,11 @@ class MessagingFlowTests(unittest.TestCase):
             session_max_age_days=7,
             session_secret="test-session-secret-that-is-long-enough",
             trust_proxy=0,
-            admin_emails=frozenset(),
+            admin_emails=frozenset({"casey@example.com"}),
         )
-        app = create_app(settings=settings, pool=self.pool)
+        self.media_directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self.media_directory.cleanup)
+        app = create_app(settings=settings, pool=self.pool, media_directory=Path(self.media_directory.name))
         self.client = TestClient(app)
         self.bob_client = TestClient(app)
         self.casey_client = TestClient(app)
@@ -538,6 +611,85 @@ class MessagingFlowTests(unittest.TestCase):
         self.assertEqual(
             self.bob_client.get("/api/messages/conversations").json()["conversations"][0]["lastMessage"],
             "Photo",
+        )
+        self.assertEqual(self.client.put(
+            "{}/{}".format(message_url, sent.json()["message"]["id"]),
+            json={"text": "Edited photo"},
+        ).status_code, 400)
+
+    def test_text_messages_can_be_edited_only_by_the_sender_within_15_minutes(self):
+        created = self.client.post("/api/messages/conversations", json={
+            "recipient_id": self.user_ids["bob"],
+        })
+        conversation_id = created.json()["conversationId"]
+        message_url = "/api/messages/conversations/{}/messages".format(conversation_id)
+        sent = self.client.post(message_url, json={"text": "Original message"})
+        message_id = sent.json()["message"]["id"]
+
+        edited = self.client.put(
+            "{}/{}".format(message_url, message_id),
+            json={"text": "Corrected message"},
+        )
+        self.assertEqual(edited.status_code, 200, edited.text)
+        self.assertEqual(edited.json()["message"]["text"], "Corrected message")
+        self.assertTrue(edited.json()["message"]["canEdit"])
+        self.assertIsNotNone(edited.json()["message"]["editedAt"])
+
+        not_sender = self.bob_client.put(
+            "{}/{}".format(message_url, message_id),
+            json={"text": "Not your message"},
+        )
+        self.assertEqual(not_sender.status_code, 404)
+
+        expired_message = self.client.post(message_url, json={"text": "Too old to edit"})
+        expired_id = expired_message.json()["message"]["id"]
+        self.pool.state["messages"][expired_id]["created_at"] = (
+            datetime.now(timezone.utc) - timedelta(minutes=16)
+        )
+        expired = self.client.put(
+            "{}/{}".format(message_url, expired_id),
+            json={"text": "Late correction"},
+        )
+        self.assertEqual(expired.status_code, 403)
+
+    def test_voice_notes_are_private_to_participants_and_audited_for_admin_access(self):
+        created = self.client.post("/api/messages/conversations", json={
+            "recipient_id": self.user_ids["bob"],
+        })
+        conversation_id = created.json()["conversationId"]
+        message_url = "/api/messages/conversations/{}/messages".format(conversation_id)
+        uploaded = self.bob_client.post(
+            "/api/media/voice-notes",
+            content=b"v" * 128,
+            headers={"content-type": "audio/webm"},
+        )
+        self.assertEqual(uploaded.status_code, 201, uploaded.text)
+        audio_url = uploaded.json()["url"]
+        sent = self.bob_client.post(message_url, json={"audio_url": audio_url})
+        self.assertEqual(sent.status_code, 201, sent.text)
+        self.assertEqual(sent.json()["message"]["text"], "Voice note")
+        self.assertEqual(sent.json()["message"]["audioUrl"], audio_url)
+
+        filename = audio_url.rsplit("/", 1)[-1]
+        self.assertEqual(
+            self.client.get("/api/media/voice-notes/{}".format(filename)).status_code,
+            200,
+        )
+        self.assertEqual(
+            self.casey_client.get("/api/media/voice-notes/{}".format(filename)).status_code,
+            404,
+        )
+        admin_playback = self.casey_client.get(
+            "/api/admin/users/{}/voice-notes/{}".format(self.user_ids["bob"], filename)
+        )
+        self.assertEqual(admin_playback.status_code, 200, admin_playback.text)
+
+        anonymous = TestClient(self.client.app)
+        self.assertEqual(
+            anonymous.get(
+                "/api/admin/users/{}/voice-notes/{}".format(self.user_ids["bob"], filename)
+            ).status_code,
+            401,
         )
 
     def test_chat_search_finds_message_history_without_marking_messages_read(self):
