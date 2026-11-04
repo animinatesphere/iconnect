@@ -1261,7 +1261,6 @@ def create_app(
                 str(row["sender_id"]) == str(viewer_id)
                 and not row.get("image_url")
                 and not row.get("audio_url")
-                and row["created_at"] >= datetime.now(timezone.utc) - timedelta(minutes=15)
             ),
             "sender": {
                 "id": str(row["sender_id"]),
@@ -5240,8 +5239,6 @@ def create_app(
                 raise ApiError(404, "message_not_found", "That message could not be found.")
             if existing["image_url"] or existing.get("audio_url"):
                 raise ApiError(400, "message_not_editable", "Only text messages can be edited.")
-            if existing["created_at"] < datetime.now(timezone.utc) - timedelta(minutes=15):
-                raise ApiError(403, "edit_window_expired", "Messages can only be edited within 15 minutes of sending.")
             block = connection.execute(
                 """SELECT other.id AS recipient_id,
                           EXISTS (
@@ -5269,12 +5266,11 @@ def create_app(
                 """UPDATE direct_messages
                    SET body = %s, edited_at = now()
                    WHERE id = %s AND conversation_id = %s AND sender_id = %s
-                     AND created_at >= now() - interval '15 minutes'
                    RETURNING id""",
                 (input.text, message_id, conversation_id, user["id"]),
             ).fetchone()
             if not row:
-                raise ApiError(403, "edit_window_expired", "Messages can only be edited within 15 minutes of sending.")
+                raise ApiError(404, "message_not_found", "That message could not be found.")
             updated = connection.execute(
                 """SELECT message.id, message.body, message.image_url, message.audio_url,
                           message.edited_at, message.created_at, message.read_at,
