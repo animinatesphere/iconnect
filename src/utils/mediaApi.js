@@ -70,3 +70,22 @@ export async function uploadImage(file) {
   })
   return payload.url
 }
+
+export async function uploadVoiceNote(blob) {
+  if (!(blob instanceof Blob) || !blob.size) {
+    throw new Error('The voice recording is empty. Record a message and try again.')
+  }
+  if (blob.size > 10 * 1024 * 1024) {
+    throw new Error('Voice notes must be 10 MB or smaller.')
+  }
+  const contentType = blob.type.split(';', 1)[0].toLowerCase()
+  if (!['audio/webm', 'audio/ogg', 'audio/mp4'].includes(contentType)) {
+    throw new Error('This browser recorded an unsupported audio format.')
+  }
+  const payload = await apiRequest('/api/media/voice-notes', {
+    method: 'POST',
+    headers: { 'Content-Type': contentType },
+    body: blob,
+  })
+  return payload.url
+}

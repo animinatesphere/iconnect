@@ -39,10 +39,13 @@ export function toDirectMessage(message) {
     from: message.isMine ? 'me' : 'them',
     text: message.text,
     imageUrl: message.imageUrl ?? '',
+    audioUrl: message.audioUrl ?? '',
     time: formatTime(message.createdAt),
     relativeTime: formatRelativeTime(message.createdAt),
     createdAt: message.createdAt,
     readAt: message.readAt,
+    editedAt: message.editedAt ?? null,
+    canEdit: Boolean(message.canEdit),
   }
 }
 
@@ -73,11 +76,19 @@ export async function getDirectMessages(conversationId, query = '') {
   return payload.messages.map(toDirectMessage)
 }
 
-export async function sendDirectMessage(conversationId, text, imageUrl = null) {
+export async function sendDirectMessage(conversationId, text, imageUrl = null, audioUrl = null) {
   const payload = await apiRequest(`/api/messages/conversations/${encodeURIComponent(conversationId)}/messages`, {
     method: 'POST',
-    body: JSON.stringify({ text, image_url: imageUrl }),
+    body: JSON.stringify({ text, image_url: imageUrl, audio_url: audioUrl }),
   })
+  return toDirectMessage(payload.message)
+}
+
+export async function editDirectMessage(conversationId, messageId, text) {
+  const payload = await apiRequest(
+    `/api/messages/conversations/${encodeURIComponent(conversationId)}/messages/${encodeURIComponent(messageId)}`,
+    { method: 'PUT', body: JSON.stringify({ text }) },
+  )
   return toDirectMessage(payload.message)
 }
 
