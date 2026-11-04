@@ -26,6 +26,7 @@ import AssistantPage from './pages/app/AssistantPage.jsx'
 import AccountPage from './pages/app/AccountPage.jsx'
 import VideoHubPage from './pages/app/VideoHubPage.jsx'
 import VideoStudioPage from './pages/app/VideoStudioPage.jsx'
+import LiveVideoPage from './pages/app/LiveVideoPage.jsx'
 import MoneyHubPage from './pages/app/MoneyHubPage.jsx'
 import IBookPage from './pages/app/IBookPage.jsx'
 import IBuyPage from './pages/app/IBuyPage.jsx'
@@ -143,6 +144,8 @@ function AppRoutes() {
               <Route path="chat" element={<InboxPage />} />
               <Route path="create" element={<CreatePage />} />
               <Route path="videos" element={<VideoHubPage />} />
+              <Route path="live" element={<LiveVideoPage />} />
+              <Route path="live/:streamId" element={<LiveVideoPage />} />
               <Route path="studio" element={<VideoStudioPage />} />
               <Route path="wallet" element={<MoneyHubPage />} />
               <Route path="payments" element={<MoneyHubPage />} />

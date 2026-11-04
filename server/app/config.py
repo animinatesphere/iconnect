@@ -38,6 +38,9 @@ class Settings:
     admin_emails: FrozenSet[str]
     greenhouse_board_tokens: Tuple[str, ...] = ()
     smartrecruiters_company_ids: Tuple[str, ...] = ()
+    livekit_url: str = ""
+    livekit_api_key: str = ""
+    livekit_api_secret: str = ""
 
 
 def _required_secret(name: str) -> str:
@@ -121,6 +124,32 @@ def load_settings() -> Settings:
     if any(not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", email) for email in admin_emails):
         raise RuntimeError("ADMIN_EMAILS must contain comma-separated valid email addresses.")
 
+    livekit_url = os.getenv("LIVEKIT_URL", "").strip().rstrip("/")
+    livekit_api_key = os.getenv("LIVEKIT_API_KEY", "").strip()
+    livekit_api_secret = os.getenv("LIVEKIT_API_SECRET", "").strip()
+    if any((livekit_url, livekit_api_key, livekit_api_secret)) and not all((
+        livekit_url,
+        livekit_api_key,
+        livekit_api_secret,
+    )):
+        raise RuntimeError(
+            "LIVEKIT_URL, LIVEKIT_API_KEY, and LIVEKIT_API_SECRET must be configured together."
+        )
+    if livekit_url:
+        parsed_livekit_url = urlparse(livekit_url)
+        expected_scheme = "wss" if production else parsed_livekit_url.scheme
+        if (
+            parsed_livekit_url.scheme not in {"wss", "ws"}
+            or (production and parsed_livekit_url.scheme != expected_scheme)
+            or not parsed_livekit_url.netloc
+            or parsed_livekit_url.path
+            or parsed_livekit_url.query
+            or parsed_livekit_url.fragment
+        ):
+            raise RuntimeError("LIVEKIT_URL must be a ws:// or wss:// origin without a path.")
+        if len(livekit_api_secret) < 32:
+            raise RuntimeError("LIVEKIT_API_SECRET must be at least 32 characters.")
+
     return Settings(
         app_origin=app_origin.rstrip("/"),
         api_host=api_host,
@@ -143,4 +172,7 @@ def load_settings() -> Settings:
             "SMARTRECRUITERS_COMPANY_IDS",
             DEFAULT_SMARTRECRUITERS_COMPANY_IDS,
         ),
+        livekit_url=livekit_url,
+        livekit_api_key=livekit_api_key,
+        livekit_api_secret=livekit_api_secret,
     )

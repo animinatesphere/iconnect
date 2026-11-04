@@ -521,3 +521,22 @@ CREATE INDEX IF NOT EXISTS videos_created_at_idx
 
 CREATE INDEX IF NOT EXISTS videos_user_created_at_idx
   ON videos(user_id, created_at DESC, id DESC);
+
+CREATE TABLE IF NOT EXISTS live_streams (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  host_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  title varchar(100) NOT NULL CHECK (char_length(btrim(title)) BETWEEN 1 AND 100),
+  room_name varchar(36) NOT NULL UNIQUE,
+  status varchar(8) NOT NULL DEFAULT 'live' CHECK (status IN ('live', 'ended')),
+  created_at timestamptz NOT NULL DEFAULT now(),
+  last_heartbeat_at timestamptz NOT NULL DEFAULT now(),
+  ended_at timestamptz
+);
+
+CREATE INDEX IF NOT EXISTS live_streams_live_created_at_idx
+  ON live_streams(created_at DESC, id DESC)
+  WHERE status = 'live';
+
+CREATE UNIQUE INDEX IF NOT EXISTS live_streams_one_live_per_host_idx
+  ON live_streams(host_id)
+  WHERE status = 'live';

@@ -1,4 +1,6 @@
 import os
+import base64
+import json
 import re
 import tempfile
 import unittest
@@ -35,6 +37,97 @@ class FakeMessagingConnection:
 
     def execute(self, query, parameters=()):
         sql = re.sub(r"\s+", " ", query).strip().lower()
+        if sql.startswith("select id from live_streams where host_id"):
+            host_id = str(parameters[0])
+            row = next(
+                (
+                    stream
+                    for stream in self.state["live_streams"].values()
+                    if stream["host_id"] == host_id and stream["status"] == "live"
+                ),
+                None,
+            )
+            return FakeResult({"id": row["id"]} if row else None)
+        if sql.startswith("insert into live_streams"):
+            host_id, title, room_name = map(str, parameters)
+            row = {
+                "id": str(uuid4()),
+                "host_id": host_id,
+                "title": title,
+                "room_name": room_name,
+                "status": "live",
+                "created_at": datetime.now(timezone.utc),
+                "last_heartbeat_at": datetime.now(timezone.utc),
+            }
+            self.state["live_streams"][row["id"]] = row
+            return FakeResult({
+                key: row[key]
+                for key in ("id", "title", "created_at", "host_id")
+            })
+        if sql.startswith("select stream.id") and "where stream.id = %s" in sql:
+            stream = self.state["live_streams"].get(str(parameters[0]))
+            if (
+                not stream
+                or stream["status"] != "live"
+                or stream["last_heartbeat_at"] <= datetime.now(timezone.utc) - timedelta(seconds=90)
+            ):
+                return FakeResult()
+            host = self.state["users"][stream["host_id"]]
+            return FakeResult({
+                "id": stream["id"],
+                "title": stream["title"],
+                "room_name": stream["room_name"],
+                "created_at": stream["created_at"],
+                "host_id": stream["host_id"],
+                "display_name": host["display_name"],
+                "username": host["username"],
+                "profile_image_url": host.get("profile_image_url"),
+            })
+        if sql.startswith("select stream.id") and "where stream.status = 'live'" in sql:
+            rows = []
+            for stream in self.state["live_streams"].values():
+                if stream["status"] != "live":
+                    continue
+                if stream["last_heartbeat_at"] <= datetime.now(timezone.utc) - timedelta(seconds=90):
+                    continue
+                host = self.state["users"][stream["host_id"]]
+                rows.append({
+                    "id": stream["id"],
+                    "title": stream["title"],
+                    "created_at": stream["created_at"],
+                    "host_id": stream["host_id"],
+                    "display_name": host["display_name"],
+                    "username": host["username"],
+                    "profile_image_url": host.get("profile_image_url"),
+                })
+            rows.sort(key=lambda item: item["created_at"], reverse=True)
+            return FakeResult(rows=rows[:100])
+        if sql.startswith("update live_streams"):
+            if "last_heartbeat_at = now()" in sql:
+                stream_id, host_id = map(str, parameters)
+                stream = self.state["live_streams"].get(stream_id)
+                if not stream or stream["host_id"] != host_id or stream["status"] != "live":
+                    return FakeResult()
+                stream["last_heartbeat_at"] = datetime.now(timezone.utc)
+                return FakeResult({"id": stream_id})
+            if "last_heartbeat_at <= now()" in sql:
+                host_id = str(parameters[0])
+                for stream in self.state["live_streams"].values():
+                    if (
+                        stream["host_id"] == host_id
+                        and stream["status"] == "live"
+                        and stream["last_heartbeat_at"] <= datetime.now(timezone.utc) - timedelta(seconds=90)
+                    ):
+                        stream["status"] = "ended"
+                        stream["ended_at"] = datetime.now(timezone.utc)
+                return FakeResult()
+            stream_id, host_id = map(str, parameters)
+            stream = self.state["live_streams"].get(stream_id)
+            if not stream or stream["host_id"] != host_id or stream["status"] != "live":
+                return FakeResult()
+            stream["status"] = "ended"
+            stream["ended_at"] = datetime.now(timezone.utc)
+            return FakeResult({"id": stream_id})
         if sql.startswith("select exists") and "from user_blocks" in sql:
             blocker_one, blocked_one, blocker_two, blocked_two = map(str, parameters)
             return FakeResult({
@@ -441,6 +534,7 @@ class FakeMessagingPool:
             "sessions": {},
             "conversations": {},
             "messages": {},
+            "live_streams": {},
             "blocks": set(),
             "preferences": {},
             "follows": set(),
@@ -491,6 +585,9 @@ class MessagingFlowTests(unittest.TestCase):
             session_secret="test-session-secret-that-is-long-enough",
             trust_proxy=0,
             admin_emails=frozenset({"casey@example.com"}),
+            livekit_url="wss://live.example.test",
+            livekit_api_key="test-key",
+            livekit_api_secret="test-livekit-secret-with-more-than-32-characters",
         )
         self.media_directory = tempfile.TemporaryDirectory()
         self.addCleanup(self.media_directory.cleanup)
@@ -509,6 +606,53 @@ class MessagingFlowTests(unittest.TestCase):
                 "expires_at": datetime.now(timezone.utc) + timedelta(days=1),
             }
             client.cookies.set("iconnect.sid", token)
+
+    def test_live_stream_lifecycle_and_host_viewer_permissions(self):
+        anonymous = TestClient(self.client.app)
+        self.assertEqual(anonymous.get("/api/live").status_code, 401)
+
+        created = self.client.post("/api/live", json={"title": "Community Q&A"})
+        self.assertEqual(created.status_code, 201, created.text)
+        stream = created.json()["stream"]
+        self.assertEqual(stream["title"], "Community Q&A")
+        self.assertEqual(stream["host"]["username"], "alice")
+        self.assertEqual(created.json()["serverUrl"], "wss://live.example.test")
+
+        def decode_claims(token):
+            payload = token.split(".")[1]
+            payload += "=" * (-len(payload) % 4)
+            return json.loads(base64.urlsafe_b64decode(payload))
+
+        host_claims = decode_claims(created.json()["token"])
+        self.assertTrue(host_claims["video"]["canPublish"])
+        self.assertTrue(host_claims["video"]["canPublishData"])
+        self.assertEqual(host_claims["video"]["room"], self.pool.state["live_streams"][stream["id"]]["room_name"])
+
+        duplicate = self.client.post("/api/live", json={"title": "Second stream"})
+        self.assertEqual(duplicate.status_code, 409)
+
+        listed = self.bob_client.get("/api/live")
+        self.assertEqual([item["id"] for item in listed.json()["streams"]], [stream["id"]])
+        joined = self.bob_client.post("/api/live/{}/join".format(stream["id"]))
+        self.assertEqual(joined.status_code, 200, joined.text)
+        viewer_claims = decode_claims(joined.json()["token"])
+        self.assertFalse(viewer_claims["video"]["canPublish"])
+        self.assertTrue(viewer_claims["video"]["canSubscribe"])
+        self.assertTrue(viewer_claims["video"]["canPublishData"])
+        self.assertFalse(joined.json()["isHost"])
+        self.assertEqual(self.bob_client.post("/api/live/{}/heartbeat".format(stream["id"])).status_code, 404)
+        self.assertEqual(self.client.post("/api/live/{}/heartbeat".format(stream["id"])).status_code, 204)
+
+        host_rejoin = self.client.post("/api/live/{}/join".format(stream["id"]))
+        self.assertTrue(host_rejoin.json()["isHost"])
+        self.assertTrue(decode_claims(host_rejoin.json()["token"])["video"]["canPublish"])
+
+        not_owner = self.bob_client.post("/api/live/{}/end".format(stream["id"]))
+        self.assertEqual(not_owner.status_code, 404)
+        ended = self.client.post("/api/live/{}/end".format(stream["id"]))
+        self.assertEqual(ended.status_code, 204)
+        self.assertEqual(self.bob_client.get("/api/live").json()["streams"], [])
+        self.assertEqual(self.bob_client.post("/api/live/{}/join".format(stream["id"])).status_code, 404)
 
     def test_authenticated_direct_messaging_and_conversation_privacy(self):
         anonymous = TestClient(self.client.app)
