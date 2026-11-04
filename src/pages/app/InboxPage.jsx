@@ -3,6 +3,7 @@ import { Archive, ArchiveRestore, ArrowLeft, Ban, Check, CheckCheck, ImagePlus, 
 import { useLocation } from 'react-router-dom'
 import AppPageHeader from '../../components/AppPageHeader.jsx'
 import Avatar from '../../components/Avatar.jsx'
+import StatusExperience from '../../components/StatusExperience.jsx'
 import { getConversations, getDirectMessages, openConversation as openDirectConversation, searchMessageUsers, sendDirectMessage, setConversationBlocked, updateConversationPreferences } from '../../utils/messageApi.js'
 import { uploadImage } from '../../utils/mediaApi.js'
 import { subscribeRealtime } from '../../utils/realtime.js'
@@ -53,6 +54,7 @@ export default function InboxPage() {
   const [updatingChatSetting, setUpdatingChatSetting] = useState(false)
   const [loadingConversations, setLoadingConversations] = useState(true)
   const [loadingMessages, setLoadingMessages] = useState(false)
+  const [statusTarget, setStatusTarget] = useState(null)
   const messagesEnd = useRef(null)
   const audioContext = useRef(null)
   const mutedConversationIds = useRef(new Set())
@@ -423,7 +425,7 @@ export default function InboxPage() {
             : <>
               <div className="chat-header">
                 <button type="button" className="chat-back" aria-label="Back to inbox list" onClick={() => setMobileChatOpen(false)}><ArrowLeft size={17} /></button>
-                <span className="conversation-avatar"><Avatar person={activeRemote} /></span>
+                <button type="button" className={`conversation-avatar chat-status-avatar ${activeRemote.hasActiveStatus ? 'has-active-status' : ''}`} aria-label={`View ${activeRemote.name}'s status`} onClick={() => setStatusTarget(activeRemote)}><Avatar person={activeRemote} /></button>
                 <div><strong>{activeRemote.name}</strong><small>@{activeRemote.username} · Private conversation</small></div>
                 <button type="button" className={`quiet-icon-button chat-header-action ${chatSearchOpen ? 'chat-header-action-active' : ''}`} aria-label="Search messages in this chat" aria-expanded={chatSearchOpen} onClick={() => { setChatSearchOpen((open) => !open); setChatSearch(''); setSearchedMessageState({ conversationId: '', query: '', messages: [] }) }}><Search size={17} /></button>
                 <div className="chat-settings-wrap">
@@ -478,6 +480,11 @@ export default function InboxPage() {
             </>}
         </section>
       </div>
+      {statusTarget && <StatusExperience
+        mode="contact"
+        userId={statusTarget.recipientId}
+        onClose={() => setStatusTarget(null)}
+      />}
     </div>
   )
 }

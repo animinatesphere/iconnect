@@ -34,6 +34,10 @@ All social routes require a verified, signed-in account and use the existing sec
 - `PUT /api/social/posts/{post_id}/like` sets the signed-in user's like state (`{"liked":true|false}`); repeating the same request is safe.
 - `GET /api/social/posts/{post_id}/comments?limit=100` lists comments (1–200 per request).
 - `POST /api/social/posts/{post_id}/comments` creates a comment (`{"text":"..."}`, up to 280 characters); an optional `parent_comment_id` replies to a top-level comment on that post. Replies are limited to one level.
+- `GET /api/statuses` lists active statuses from the signed-in member, followed accounts, and conversation contacts. `GET /api/statuses?user_id=<uuid>` returns one permitted account’s statuses.
+- `POST /api/statuses` posts an uploaded status photo and optional caption (`{"image_url":"/api/media/images/<id>.webp","caption":"..."}`). Statuses expire after 24 hours.
+- `GET /api/statuses/{status_id}` opens a status and records one view per account. Only the status owner receives the names and timestamps of viewers.
+- `DELETE /api/statuses/{status_id}` removes the signed-in member’s status.
 
 `POST /api/media/images` accepts one authenticated JPEG, PNG, or WebP image (maximum 4 MB and 20 megapixels); uploaded files are validated, resized, and stored as WebP. The web app automatically optimizes larger selected photos before upload. Image files are stored on the API host in `ICONNECT_MEDIA_DIR` (default: `./uploads` relative to the repository root), not in PostgreSQL; production should point this variable at a persistent VPS directory and make it writable by the API service account. Images are served to signed-in members at the returned URL. Upload controls are available for posts, profile photos, private-message attachments, iBuy products, local listings, community covers, and job/company photos. Post creation, likes, comments, bookmarks, and media uploads are rate-limited per client IP. `GET /api/social/posts?following_only=true` limits results to authors the current user follows. Stories and live video are not implemented.
 
@@ -57,6 +61,8 @@ All marketplace routes require a verified account:
 - `GET /api/marketplace/products?query=lamp&category=Home&limit=50` lists published member products. Search is optional, category can be `Style`, `Tech`, `Home`, or `Other`, and limits are 1–100.
 - `POST /api/marketplace/products` publishes a listing with `name`, `category`, integer `price` in NGN, `stock`, `description`, and up to five `image_urls` (plus optional legacy HTTPS `image_url`).
 - `GET /api/marketplace/products/{product_id}` returns a published product and the seller’s public name and username.
+- `PUT /api/marketplace/products/{product_id}` edits the signed-in seller’s listing using the same fields as creation.
+- `DELETE /api/marketplace/products/{product_id}` permanently deletes the signed-in seller’s listing.
 
 Listings and image galleries are stored in PostgreSQL, with uploaded image files in `ICONNECT_MEDIA_DIR`. Signed-in members can list products from iBuy; allowlisted admins sign in at `/admin/login` and can use “Open iBuy to list a product” in the admin portal. Buyers can message a seller through the private messaging API. iBuy does not currently process payments, place orders, or arrange delivery; buyers and sellers must confirm those details directly.
 

@@ -229,6 +229,21 @@ class SocialBookmarkInput(StrictModel):
     bookmarked: bool
 
 
+class UserStatusInput(StrictModel):
+    image_url: str = Field(min_length=1, max_length=2048)
+    caption: str = Field(default="", max_length=500)
+
+    @field_validator("image_url")
+    @classmethod
+    def valid_status_image(cls, value: str) -> str:
+        return validate_image_reference(value)
+
+    @field_validator("caption")
+    @classmethod
+    def clean_status_caption(cls, value: str) -> str:
+        return value.strip()
+
+
 class MarketplaceProductInput(StrictModel):
     name: str = Field(min_length=1, max_length=120)
     category: Literal["Style", "Tech", "Home", "Other"]
@@ -971,6 +986,25 @@ def create_app(
                 "name": row["seller_name"],
                 "username": row["seller_username"],
             },
+        }
+
+    def public_status(row: Dict[str, Any]) -> Dict[str, Any]:
+        return {
+            "id": str(row["id"]),
+            "imageUrl": row["image_url"],
+            "caption": row["caption"],
+            "createdAt": row["created_at"].isoformat(),
+            "expiresAt": row["expires_at"].isoformat(),
+            "viewedByMe": bool(row.get("viewed_by_me")),
+            "isMine": bool(row["is_mine"]),
+            "viewCount": int(row.get("view_count") or 0),
+            "author": {
+                "id": str(row["user_id"]),
+                "name": row["display_name"],
+                "username": row["username"],
+                "avatar": row.get("profile_image_url"),
+            },
+            "viewers": row.get("viewers", []),
         }
 
     def public_local_marketplace_listing(row: Dict[str, Any]) -> Dict[str, Any]:
@@ -2721,6 +2755,215 @@ def create_app(
             ],
         }
 
+    @app.get("/api/statuses")
+    def list_user_statuses(
+        request: Request,
+        user_id: Optional[UUID] = None,
+    ) -> Dict[str, Any]:
+        user = require_user(request)
+        with database.connection() as connection:
+            connection.execute(
+                "DELETE FROM user_statuses WHERE expires_at <= now()"
+            )
+            rows = connection.execute(
+                """SELECT status.id, status.user_id, status.image_url, status.caption,
+                          status.created_at, status.expires_at,
+                          author.display_name, author.username,
+                          author.profile_image_url,
+                          EXISTS (
+                              SELECT 1 FROM user_status_views mine
+                              WHERE mine.status_id = status.id
+                                AND mine.viewer_id = %s
+                          ) AS viewed_by_me,
+                          status.user_id = %s AS is_mine,
+                          (SELECT count(*) FROM user_status_views views
+                           WHERE views.status_id = status.id) AS view_count
+                   FROM user_statuses status
+                   JOIN users author ON author.id = status.user_id
+                   WHERE status.expires_at > now()
+                     AND (%s::uuid IS NULL OR status.user_id = %s)
+                     AND (
+                         status.user_id = %s
+                         OR EXISTS (
+                             SELECT 1 FROM user_follows followed
+                             WHERE followed.follower_id = %s
+                               AND followed.following_id = status.user_id
+                         )
+                         OR EXISTS (
+                             SELECT 1 FROM direct_conversations conversation
+                             WHERE (conversation.participant_one_id = %s
+                                    AND conversation.participant_two_id = status.user_id)
+                                OR (conversation.participant_two_id = %s
+                                    AND conversation.participant_one_id = status.user_id)
+                         )
+                     )
+                     AND NOT EXISTS (
+                         SELECT 1 FROM user_blocks blocked
+                         WHERE (blocked.blocker_id = %s AND blocked.blocked_id = status.user_id)
+                            OR (blocked.blocker_id = status.user_id AND blocked.blocked_id = %s)
+                     )
+                   ORDER BY status.created_at DESC
+                   LIMIT 200""",
+                (
+                    user["id"],
+                    user["id"],
+                    user_id,
+                    user_id,
+                    user["id"],
+                    user["id"],
+                    user["id"],
+                    user["id"],
+                    user["id"],
+                    user["id"],
+                ),
+            ).fetchall()
+        return {"statuses": [public_status(row) for row in rows]}
+
+    @app.post(
+        "/api/statuses",
+        status_code=201,
+        dependencies=[Depends(enforce_social_rate_limit)],
+    )
+    def create_user_status(
+        input: UserStatusInput,
+        user: Dict[str, Any] = Depends(require_user),
+    ) -> Dict[str, Any]:
+        with database.connection() as connection:
+            inserted = connection.execute(
+                """INSERT INTO user_statuses (user_id, image_url, caption)
+                   VALUES (%s, %s, %s)
+                   RETURNING id""",
+                (user["id"], input.image_url, input.caption),
+            ).fetchone()
+            if not inserted:
+                raise ApiError(500, "internal_error", "Your status could not be posted.")
+            row = connection.execute(
+                """SELECT status.id, status.user_id, status.image_url, status.caption,
+                          status.created_at, status.expires_at,
+                          author.display_name, author.username,
+                          author.profile_image_url,
+                          false AS viewed_by_me,
+                          true AS is_mine,
+                          0 AS view_count
+                   FROM user_statuses status
+                   JOIN users author ON author.id = status.user_id
+                   WHERE status.id = %s AND status.user_id = %s""",
+                (inserted["id"], user["id"]),
+            ).fetchone()
+        if not row:
+            raise ApiError(500, "internal_error", "Your status could not be loaded.")
+        return {"status": public_status(row)}
+
+    @app.get("/api/statuses/{status_id}")
+    def get_user_status(
+        status_id: UUID,
+        request: Request,
+    ) -> Dict[str, Any]:
+        user = require_user(request)
+        with database.connection() as connection:
+            row = connection.execute(
+                """SELECT status.id, status.user_id, status.image_url, status.caption,
+                          status.created_at, status.expires_at,
+                          author.display_name, author.username,
+                          author.profile_image_url,
+                          EXISTS (
+                              SELECT 1 FROM user_status_views mine
+                              WHERE mine.status_id = status.id
+                                AND mine.viewer_id = %s
+                          ) AS viewed_by_me,
+                          status.user_id = %s AS is_mine,
+                          (SELECT count(*) FROM user_status_views views
+                           WHERE views.status_id = status.id) AS view_count
+                   FROM user_statuses status
+                   JOIN users author ON author.id = status.user_id
+                   WHERE status.id = %s
+                     AND status.expires_at > now()
+                     AND (
+                         status.user_id = %s
+                         OR EXISTS (
+                             SELECT 1 FROM user_follows followed
+                             WHERE followed.follower_id = %s
+                               AND followed.following_id = status.user_id
+                         )
+                         OR EXISTS (
+                             SELECT 1 FROM direct_conversations conversation
+                             WHERE (conversation.participant_one_id = %s
+                                    AND conversation.participant_two_id = status.user_id)
+                                OR (conversation.participant_two_id = %s
+                                    AND conversation.participant_one_id = status.user_id)
+                         )
+                     )
+                     AND NOT EXISTS (
+                         SELECT 1 FROM user_blocks blocked
+                         WHERE (blocked.blocker_id = %s AND blocked.blocked_id = status.user_id)
+                            OR (blocked.blocker_id = status.user_id AND blocked.blocked_id = %s)
+                     )""",
+                (
+                    user["id"],
+                    user["id"],
+                    status_id,
+                    user["id"],
+                    user["id"],
+                    user["id"],
+                    user["id"],
+                    user["id"],
+                    user["id"],
+                ),
+            ).fetchone()
+            if not row:
+                raise ApiError(404, "status_not_found", "That status is unavailable or has expired.")
+            is_mine = bool(row["is_mine"])
+            if not is_mine:
+                if not row["viewed_by_me"]:
+                    inserted_view = connection.execute(
+                        """INSERT INTO user_status_views (status_id, viewer_id)
+                           VALUES (%s, %s)
+                           ON CONFLICT (status_id, viewer_id) DO NOTHING
+                           RETURNING status_id""",
+                        (status_id, user["id"]),
+                    ).fetchone()
+                    if inserted_view:
+                        row["view_count"] = int(row["view_count"]) + 1
+                row["viewed_by_me"] = True
+            if is_mine:
+                viewers = connection.execute(
+                    """SELECT viewer.id, viewer.display_name, viewer.username,
+                              viewer.profile_image_url, status_view.viewed_at
+                       FROM user_status_views status_view
+                       JOIN users viewer ON viewer.id = status_view.viewer_id
+                       WHERE status_view.status_id = %s
+                       ORDER BY status_view.viewed_at DESC""",
+                    (status_id,),
+                ).fetchall()
+                row["viewers"] = [
+                    {
+                        "id": str(viewer["id"]),
+                        "name": viewer["display_name"],
+                        "username": viewer["username"],
+                        "avatar": viewer.get("profile_image_url"),
+                        "viewedAt": viewer["viewed_at"].isoformat(),
+                    }
+                    for viewer in viewers
+                ]
+        return {"status": public_status(row)}
+
+    @app.delete("/api/statuses/{status_id}")
+    def delete_user_status(
+        status_id: UUID,
+        request: Request,
+    ) -> Dict[str, Any]:
+        user = require_user(request)
+        with database.connection() as connection:
+            deleted = connection.execute(
+                """DELETE FROM user_statuses
+                   WHERE id = %s AND user_id = %s
+                   RETURNING id""",
+                (status_id, user["id"]),
+            ).fetchone()
+        if not deleted:
+            raise ApiError(404, "status_not_found", "That status could not be found.")
+        return {"deleted": True}
+
     @app.get("/api/social/posts")
     def list_social_posts(
         user: Dict[str, Any] = Depends(require_user),
@@ -3084,6 +3327,65 @@ def create_app(
         if not row:
             raise ApiError(500, "internal_error", "The product listing could not be loaded.")
         return {"product": public_marketplace_product(row)}
+
+    @app.put("/api/marketplace/products/{product_id}")
+    def update_marketplace_product(
+        product_id: UUID,
+        input: MarketplaceProductInput,
+        user: Dict[str, Any] = Depends(require_user),
+    ) -> Dict[str, Any]:
+        image_urls = input.image_urls or ([input.image_url] if input.image_url else [])
+        with database.connection() as connection:
+            updated = connection.execute(
+                """UPDATE marketplace_products
+                   SET name = %s, category = %s, price = %s, stock = %s,
+                       description = %s, image_url = %s, image_urls = %s
+                   WHERE id = %s AND seller_id = %s
+                   RETURNING id""",
+                (
+                    input.name,
+                    input.category,
+                    input.price,
+                    input.stock,
+                    input.description,
+                    input.image_url or (image_urls[0] if image_urls else None),
+                    image_urls,
+                    product_id,
+                    user["id"],
+                ),
+            ).fetchone()
+            if not updated:
+                raise ApiError(404, "product_not_found", "That product listing could not be found.")
+            row = connection.execute(
+                """SELECT p.id, p.name, p.category, p.price, p.stock,
+                          p.description, p.image_url, p.image_urls, p.created_at,
+                          s.id AS seller_id, s.display_name AS seller_name,
+                          s.username AS seller_username
+                   FROM marketplace_products p
+                   JOIN users s ON s.id = p.seller_id
+                   WHERE p.id = %s AND p.published""",
+                (product_id,),
+            ).fetchone()
+        if not row:
+            raise ApiError(500, "internal_error", "The updated product could not be loaded.")
+        return {"product": public_marketplace_product(row)}
+
+    @app.delete("/api/marketplace/products/{product_id}")
+    def delete_marketplace_product(
+        product_id: UUID,
+        request: Request,
+    ) -> Dict[str, Any]:
+        user = require_user(request)
+        with database.connection() as connection:
+            deleted = connection.execute(
+                """DELETE FROM marketplace_products
+                   WHERE id = %s AND seller_id = %s
+                   RETURNING id""",
+                (product_id, user["id"]),
+            ).fetchone()
+        if not deleted:
+            raise ApiError(404, "product_not_found", "That product listing could not be found.")
+        return {"deleted": True}
 
     @app.get("/api/marketplace/products/{product_id}")
     def get_marketplace_product(
@@ -4302,6 +4604,11 @@ def create_app(
                           other.display_name AS recipient_name,
                           other.username AS recipient_username,
                           other.profile_image_url AS recipient_avatar,
+                          EXISTS (
+                              SELECT 1 FROM user_statuses active_status
+                              WHERE active_status.user_id = other.id
+                                AND active_status.expires_at > now()
+                          ) AS has_active_status,
                           latest.body AS last_message,
                           latest.image_url AS last_image_url,
                           latest.created_at AS last_message_at,
@@ -4361,6 +4668,7 @@ def create_app(
                         "name": row["recipient_name"],
                         "username": row["recipient_username"],
                         "avatar": row.get("recipient_avatar"),
+                        "hasActiveStatus": bool(row.get("has_active_status")),
                     },
                     "lastMessage": row["last_message"] or ("Photo" if row.get("last_image_url") else ""),
                     "lastMessageAt": (

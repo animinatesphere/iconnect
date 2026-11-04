@@ -28,3 +28,25 @@ export async function createMarketplaceProduct(product) {
   })
   return payload.product
 }
+
+export async function updateMarketplaceProduct(productId, product) {
+  const payload = await apiRequest(`/api/marketplace/products/${encodeURIComponent(productId)}`, {
+    method: 'PUT',
+    body: JSON.stringify({
+      name: product.name,
+      category: product.category,
+      price: Number(product.price),
+      stock: Number(product.stock),
+      description: product.description,
+      image_url: product.imageUrl || null,
+      image_urls: product.imageUrls ?? [],
+    }),
+  })
+  return payload.product
+}
+
+export async function deleteMarketplaceProduct(productId) {
+  return apiRequest(`/api/marketplace/products/${encodeURIComponent(productId)}`, {
+    method: 'DELETE',
+  })
+}

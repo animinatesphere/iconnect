@@ -4,6 +4,7 @@ import { Link, useNavigate } from 'react-router-dom'
 import AppPageHeader from '../../components/AppPageHeader.jsx'
 import Avatar from '../../components/Avatar.jsx'
 import PostEditForm from '../../components/PostEditForm.jsx'
+import StatusExperience from '../../components/StatusExperience.jsx'
 import { apiRequest } from '../../utils/api.js'
 import { getPeople } from '../../utils/peopleApi.js'
 import { subscribeRealtime } from '../../utils/realtime.js'
@@ -209,6 +210,7 @@ export default function FeedPage() {
     <div className="app-content-width">
       <AppPageHeader eyebrow="YOUR iCONNECT HOME" title="Your home" description="A little of what your people are sharing." />
       <div className="feed-welcome-callout"><span className="welcome-icon"><Heart size={17} /></span><span><strong>Welcome, {currentUser?.name.split(' ')[0] ?? 'friend'}.</strong> Here’s what your people are sharing.</span><Link to="/app/profile">Your profile →</Link></div>
+      <StatusExperience currentUser={currentUser} />
       <div className="feed-layout-grid">
         <section className="feed-main-column">
           <Link to="/app/social" className="quick-compose">

@@ -355,6 +355,28 @@ CREATE INDEX IF NOT EXISTS marketplace_products_published_created_at_idx
 CREATE INDEX IF NOT EXISTS marketplace_products_seller_id_idx
   ON marketplace_products(seller_id, created_at DESC);
 
+CREATE TABLE IF NOT EXISTS user_statuses (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  image_url varchar(2048) NOT NULL,
+  caption varchar(500) NOT NULL DEFAULT '',
+  created_at timestamptz NOT NULL DEFAULT now(),
+  expires_at timestamptz NOT NULL DEFAULT now() + interval '24 hours'
+);
+
+CREATE INDEX IF NOT EXISTS user_statuses_active_user_created_idx
+  ON user_statuses(user_id, expires_at, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS user_status_views (
+  status_id uuid NOT NULL REFERENCES user_statuses(id) ON DELETE CASCADE,
+  viewer_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  viewed_at timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (status_id, viewer_id)
+);
+
+CREATE INDEX IF NOT EXISTS user_status_views_viewer_idx
+  ON user_status_views(viewer_id, viewed_at DESC);
+
 CREATE TABLE IF NOT EXISTS local_marketplace_listings (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   seller_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,

@@ -21,6 +21,7 @@ export function toConversation(conversation) {
     username: conversation.recipient.username,
     handle: `@${conversation.recipient.username}`,
     avatar: conversation.recipient.avatar ?? '',
+    hasActiveStatus: Boolean(conversation.recipient.hasActiveStatus),
     message: conversation.lastMessage,
     time: formatRelativeTime(conversation.lastMessageAt),
     unreadCount: conversation.unreadCount,
