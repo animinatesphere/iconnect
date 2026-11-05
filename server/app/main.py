@@ -51,6 +51,8 @@ SOCIAL_WINDOW_SECONDS = 15 * 60
 SOCIAL_REQUEST_LIMIT = 60
 MESSAGE_WINDOW_SECONDS = 15 * 60
 MESSAGE_REQUEST_LIMIT = 120
+AI_WINDOW_SECONDS = 15 * 60
+AI_REQUEST_LIMIT = 20
 MEDIA_UPLOAD_WINDOW_SECONDS = 15 * 60
 MEDIA_UPLOAD_REQUEST_LIMIT = 30
 MAX_IMAGE_BYTES = 4 * 1024 * 1024
@@ -585,6 +587,33 @@ class LiveStreamInput(StrictModel):
         return value
 
 
+class AssistantMessageInput(StrictModel):
+    role: Literal["user", "model"]
+    text: str = Field(min_length=1, max_length=4000)
+
+    @field_validator("text")
+    @classmethod
+    def clean_text(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("Message text is required.")
+        return value
+
+
+class AssistantChatInput(StrictModel):
+    messages: List[AssistantMessageInput] = Field(min_length=1, max_length=12)
+
+    @model_validator(mode="after")
+    def validate_conversation(self) -> "AssistantChatInput":
+        if self.messages[-1].role != "user":
+            raise ValueError("The latest assistant message must come from the user.")
+        if any(left.role == right.role for left, right in zip(self.messages, self.messages[1:])):
+            raise ValueError("Conversation messages must alternate between user and assistant.")
+        if sum(len(message.text) for message in self.messages) > 12000:
+            raise ValueError("The conversation is too long.")
+        return self
+
+
 class UserFollowInput(StrictModel):
     following: bool
 
@@ -865,6 +894,8 @@ def create_app(
     social_rate_limit_lock = threading.Lock()
     message_rate_limit_state: Dict[str, Deque[float]] = defaultdict(deque)
     message_rate_limit_lock = threading.Lock()
+    ai_rate_limit_state: Dict[str, Deque[float]] = defaultdict(deque)
+    ai_rate_limit_lock = threading.Lock()
     media_upload_rate_limit_state: Dict[str, Deque[float]] = defaultdict(deque)
     media_upload_rate_limit_lock = threading.Lock()
     realtime_connections: Dict[
@@ -1094,6 +1125,20 @@ def create_app(
                     429,
                     "rate_limited",
                     "You are sending messages too quickly. Please try again later.",
+                )
+            attempts.append(now)
+
+    def enforce_ai_rate_limit(user_id: Any) -> None:
+        now = time.monotonic()
+        with ai_rate_limit_lock:
+            attempts = ai_rate_limit_state[str(user_id)]
+            while attempts and now - attempts[0] >= AI_WINDOW_SECONDS:
+                attempts.popleft()
+            if len(attempts) >= AI_REQUEST_LIMIT:
+                raise ApiError(
+                    429,
+                    "rate_limited",
+                    "You’ve reached the assistant request limit. Try again in a few minutes.",
                 )
             attempts.append(now)
 
@@ -1654,6 +1699,102 @@ def create_app(
             media_type=media_type,
             headers={"Cache-Control": "private, no-store"},
         )
+
+    @app.post("/api/assistant/chat")
+    def chat_with_assistant(
+        input: AssistantChatInput,
+        request: Request,
+    ) -> Dict[str, str]:
+        user = require_user(request)
+        if not settings.gemini_api_key:
+            raise ApiError(
+                503,
+                "assistant_not_configured",
+                "The AI assistant is not configured on this server yet.",
+            )
+        enforce_ai_rate_limit(user["id"])
+        provider_payload = {
+            "systemInstruction": {
+                "parts": [{
+                    "text": (
+                        "You are iConnect Assistant, a friendly and helpful general-purpose assistant. "
+                        "Be clear, practical, and respectful. You do not have access to iConnect accounts, "
+                        "private messages, profiles, or live data, and cannot perform actions in the app. "
+                        "Do not present guesses as facts. For medical, legal, or financial topics, provide "
+                        "general information and encourage consulting a qualified professional."
+                    ),
+                }],
+            },
+            "contents": [
+                {
+                    "role": message.role,
+                    "parts": [{"text": message.text}],
+                }
+                for message in input.messages
+            ],
+            "generationConfig": {
+                "temperature": 0.7,
+                "maxOutputTokens": 900,
+            },
+        }
+        provider_request = urllib.request.Request(
+            "https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent".format(
+                settings.gemini_model,
+            ),
+            data=json.dumps(provider_payload).encode("utf-8"),
+            headers={
+                "Content-Type": "application/json",
+                "x-goog-api-key": settings.gemini_api_key,
+            },
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(provider_request, timeout=30) as response:
+                provider_result = json.loads(response.read(512 * 1024))
+        except urllib.error.HTTPError as error:
+            logger.warning("Gemini assistant request failed with HTTP %s", error.code)
+            raise ApiError(
+                502,
+                "assistant_provider_error",
+                "The AI assistant couldn’t respond right now. Please try again.",
+            ) from error
+        except (urllib.error.URLError, TimeoutError, OSError) as error:
+            logger.warning("Gemini assistant request could not reach the provider: %s", type(error).__name__)
+            raise ApiError(
+                502,
+                "assistant_provider_unavailable",
+                "The AI service could not be reached. Please try again.",
+            ) from error
+        except (json.JSONDecodeError, UnicodeDecodeError) as error:
+            logger.warning("Gemini assistant returned an invalid response.")
+            raise ApiError(
+                502,
+                "assistant_invalid_response",
+                "The AI service returned an invalid response. Please try again.",
+            ) from error
+
+        if not isinstance(provider_result, dict):
+            raise ApiError(
+                502,
+                "assistant_invalid_response",
+                "The AI service returned an invalid response. Please try again.",
+            )
+        candidates = provider_result.get("candidates")
+        candidate = candidates[0] if isinstance(candidates, list) and candidates else None
+        content = candidate.get("content") if isinstance(candidate, dict) else None
+        parts = content.get("parts") if isinstance(content, dict) else None
+        reply = "\n".join(
+            part["text"]
+            for part in (parts if isinstance(parts, list) else [])
+            if isinstance(part, dict) and isinstance(part.get("text"), str)
+        ).strip()
+        if not reply:
+            raise ApiError(
+                502,
+                "assistant_empty_response",
+                "The AI service couldn’t create a response. Please try rephrasing your request.",
+            )
+        return {"reply": reply}
 
     def require_livekit() -> None:
         if not (

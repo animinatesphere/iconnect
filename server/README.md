@@ -219,9 +219,19 @@ The authenticated WebSocket endpoint at `/api/realtime` streams message-created 
 
 The API currently fans out events in process memory, so deploy it as a single Uvicorn worker/instance. Multiple workers or API instances require a shared event broker before deployment. Nginx must proxy `/api/realtime` using HTTP/1.1 and forward the `Upgrade` and `Connection` headers; keep its read timeout longer than the API's 25-second WebSocket heartbeat interval. Without WebSocket upgrade proxying, inbox updates fall back to polling, while feed and comment changes will not arrive live.
 
+## AI assistant
+
+The signed-in AI assistant sends the latest conversation context to Google Gemini through the API. Configure `GEMINI_API_KEY` on the server (from Google AI Studio); the key is never sent to the browser. `GEMINI_MODEL` is optional and defaults to `gemini-2.5-flash`. Never use a `VITE_` variable for the key.
+
+- `POST /api/assistant/chat` accepts 1–12 alternating `user` and `model` messages, with a 12,000-character conversation limit, and returns `{"reply":"..."}`.
+- Requests require a verified signed-in session and are limited to 20 per member per 15 minutes.
+- Chat history is held in the browser page state and is not stored by iConnect. Submitted messages are sent to Google to generate replies; members should not enter sensitive information.
+
+Set `GEMINI_API_KEY` in the API service environment and restart `iconnect-api.service` to enable the assistant. Without a key, the endpoint responds that the assistant is not configured.
+
 ## Unconnected product areas
 
-The app does not currently have provider-backed APIs for travel bookings, wallet balances or transfers, payments, trading, video storage or streaming, notifications, or external social account connections. Savings plans only track member-entered records; no money moves through iConnect. Dating is limited to 18+ self-reported profiles and mutual matches, without identity verification. The AI assistant uses static example text and is not connected to an AI service.
+The app does not currently have provider-backed APIs for travel bookings, wallet balances or transfers, payments, trading, notifications, or external social account connections. Savings plans only track member-entered records; no money moves through iConnect. Dating is limited to 18+ self-reported profiles and mutual matches, without identity verification.
 
 ## Admin API
 
@@ -254,7 +264,7 @@ The Vercel rewrite must only be deployed after the API hostname has DNS, a worki
 
 ## Production environment
 
-Set `NODE_ENV=production`, `API_HOST=127.0.0.1`, `API_PORT=10000`, `APP_ORIGIN=https://www.iconnectdworld.com`, `DATABASE_URL`, `SESSION_SECRET`, `OTP_HASH_SECRET`, `RESEND_API_KEY`, `EMAIL_FROM`, `SESSION_MAX_AGE_DAYS=7`, `TRUST_PROXY=1`, the intended server-only `ADMIN_EMAILS`, `ICONNECT_MEDIA_DIR=/var/lib/iconnect/uploads`, and the three `LIVEKIT_*` settings described below in the VPS environment. Create the media directory and make it writable by the API service account before starting the API. Keep secrets out of source control and never put them in `VITE_*` variables.
+Set `NODE_ENV=production`, `API_HOST=127.0.0.1`, `API_PORT=10000`, `APP_ORIGIN=https://www.iconnectdworld.com`, `DATABASE_URL`, `SESSION_SECRET`, `OTP_HASH_SECRET`, `RESEND_API_KEY`, `EMAIL_FROM`, `SESSION_MAX_AGE_DAYS=7`, `TRUST_PROXY=1`, the intended server-only `ADMIN_EMAILS`, `ICONNECT_MEDIA_DIR=/var/lib/iconnect/uploads`, `GEMINI_API_KEY` if enabling the AI assistant, and the three `LIVEKIT_*` settings described below in the VPS environment. Create the media directory and make it writable by the API service account before starting the API. Keep secrets out of source control and never put them in `VITE_*` variables.
 
 On the VPS, create the environment with `python3 -m venv server/.venv`, install runtime packages with `server/.venv/bin/pip install -r server/requirements.txt`, and run `npm run db:migrate`. The API virtual host must allow request bodies up to 260 MB for 250 MiB video uploads and 12 MB for CAC documents. Add these exact-match locations to its HTTPS `server` block so Nginx streams upload bodies to the API instead of buffering the entire upload first:
 

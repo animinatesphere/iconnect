@@ -5,8 +5,11 @@ import re
 import tempfile
 import unittest
 from contextlib import contextmanager
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
+from io import BytesIO
 from pathlib import Path
+from unittest.mock import patch
 from uuid import uuid4
 
 from fastapi.testclient import TestClient
@@ -589,6 +592,7 @@ class MessagingFlowTests(unittest.TestCase):
             livekit_api_key="test-key",
             livekit_api_secret="test-livekit-secret-with-more-than-32-characters",
         )
+        self.settings = settings
         self.media_directory = tempfile.TemporaryDirectory()
         self.addCleanup(self.media_directory.cleanup)
         app = create_app(settings=settings, pool=self.pool, media_directory=Path(self.media_directory.name))
@@ -606,6 +610,54 @@ class MessagingFlowTests(unittest.TestCase):
                 "expires_at": datetime.now(timezone.utc) + timedelta(days=1),
             }
             client.cookies.set("iconnect.sid", token)
+
+    def test_ai_assistant_is_authenticated_and_uses_server_side_gemini_key(self):
+        endpoint = "/api/assistant/chat"
+        request_body = {"messages": [{"role": "user", "text": "Give me a writing idea."}]}
+
+        anonymous = TestClient(self.client.app)
+        self.assertEqual(anonymous.post(endpoint, json=request_body).status_code, 401)
+        not_configured = self.client.post(endpoint, json=request_body)
+        self.assertEqual(not_configured.status_code, 503)
+        self.assertEqual(not_configured.json()["error"]["code"], "assistant_not_configured")
+
+        settings = replace(self.settings, gemini_api_key="test-gemini-api-key")
+        app = create_app(settings=settings, pool=self.pool)
+        client = TestClient(app)
+        client.cookies.set("iconnect.sid", "session-token-alice")
+        provider_response = json.dumps({
+            "candidates": [{
+                "content": {
+                    "parts": [{"text": "Start with one clear idea."}],
+                },
+            }],
+        }).encode("utf-8")
+        with patch(
+            "server.app.main.urllib.request.urlopen",
+            return_value=BytesIO(provider_response),
+        ) as urlopen:
+            response = client.post(endpoint, json=request_body)
+
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json(), {"reply": "Start with one clear idea."})
+        provider_request = urlopen.call_args.args[0]
+        self.assertEqual(
+            provider_request.full_url,
+            "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent",
+        )
+        self.assertEqual(
+            provider_request.get_header("X-goog-api-key"),
+            "test-gemini-api-key",
+        )
+        self.assertNotIn("test-gemini-api-key", provider_request.full_url)
+
+        invalid_history = client.post(endpoint, json={
+            "messages": [
+                {"role": "user", "text": "First"},
+                {"role": "user", "text": "Second"},
+            ],
+        })
+        self.assertEqual(invalid_history.status_code, 400)
 
     def test_live_stream_lifecycle_and_host_viewer_permissions(self):
         anonymous = TestClient(self.client.app)

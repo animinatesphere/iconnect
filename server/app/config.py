@@ -41,6 +41,8 @@ class Settings:
     livekit_url: str = ""
     livekit_api_key: str = ""
     livekit_api_secret: str = ""
+    gemini_api_key: str = ""
+    gemini_model: str = "gemini-2.5-flash"
 
 
 def _required_secret(name: str) -> str:
@@ -150,6 +152,11 @@ def load_settings() -> Settings:
         if len(livekit_api_secret) < 32:
             raise RuntimeError("LIVEKIT_API_SECRET must be at least 32 characters.")
 
+    gemini_api_key = os.getenv("GEMINI_API_KEY", "").strip()
+    gemini_model = os.getenv("GEMINI_MODEL", "gemini-2.5-flash").strip()
+    if not re.fullmatch(r"gemini-[A-Za-z0-9._-]{1,80}", gemini_model):
+        raise RuntimeError("GEMINI_MODEL must be a valid Gemini model identifier.")
+
     return Settings(
         app_origin=app_origin.rstrip("/"),
         api_host=api_host,
@@ -175,4 +182,6 @@ def load_settings() -> Settings:
         livekit_url=livekit_url,
         livekit_api_key=livekit_api_key,
         livekit_api_secret=livekit_api_secret,
+        gemini_api_key=gemini_api_key,
+        gemini_model=gemini_model,
     )
