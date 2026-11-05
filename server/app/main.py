@@ -5377,7 +5377,7 @@ def create_app(
                               WHEN c.participant_one_id = %s THEN c.participant_two_id
                               ELSE c.participant_one_id
                           END,
-                          COALESCE(%s, CASE WHEN %s IS NOT NULL THEN 'Voice note' ELSE 'Photo' END),
+                          COALESCE(%s, CASE WHEN %s::text IS NOT NULL THEN 'Voice note' ELSE 'Photo' END),
                           %s, %s
                    FROM direct_conversations c
                    WHERE c.id = %s
