@@ -41,7 +41,7 @@ export default function ProductPage() {
               <span className="product-area-icon"><Icon size={20} strokeWidth={1.7} /></span>
               <h3>{name}</h3>
               <p>{description}</p>
-              <span className="planned-label">{status}</span>
+              {/* <span className="planned-label">{status}</span> */}
             </article>
           ))}
         </div>
