@@ -8,4 +8,4 @@ rtc:
   use_external_ip: true
 
 keys:
-  replace-with-livekit-api-key: replace-with-a-random-secret-at-least-32-characters
+  replace-with-livekit-api-key: 128e3a85651de4540b1dcfb388dab443e1304720cbf4d0edfde54efafd479267
