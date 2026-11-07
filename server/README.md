@@ -130,6 +130,18 @@ All local marketplace routes require a verified account:
 - `POST /api/local-marketplace/listings` publishes a listing with `category`, `title`, `price`, `location`, `detail`, `description`, and an optional HTTPS or uploaded-image `image_url`.
 - `GET /api/local-marketplace/listings/{listing_id}` returns a published listing and the provider’s public name and username.
 
+## iBook stays and local rides
+
+iBook supports member-posted stay listings and booking requests, plus driver profiles and request/accept ride coordination. All routes require a verified account.
+
+- `GET /api/ibook/stays?location=Lagos&limit=50` lists active stays, optionally filtered by area.
+- `POST /api/ibook/stays` creates a listing with property type, title, location, NGN price and period, guest capacity, description, and 1–5 uploaded or HTTPS `image_urls`.
+- `POST /api/ibook/stay-bookings` requests dates and guest count for a listing. `GET /api/ibook/stay-bookings` shows a member’s guest and host requests. Guests can cancel a pending request; hosts can confirm or decline it. Confirmed date ranges cannot overlap.
+- `GET /api/ibook/drivers?area=Ikeja&passengers=2` lists available member drivers with sufficient seats. `PUT /api/ibook/drivers/me` creates or updates the signed-in member’s vehicle, service area, seat count, and availability; `GET /api/ibook/drivers/me` retrieves their own profile.
+- `POST /api/ibook/rides` sends a ride request to an available driver with pickup, destination, pickup time, passenger count, and an optional note. `GET /api/ibook/rides` shows requests to the rider or driver. Drivers can accept/decline pending requests or mark accepted rides complete; riders can cancel pending requests. Accepting a ride takes the driver offline; after completion, they must switch availability back on themselves.
+
+These are member-to-member request and confirmation workflows, not a licensed ride-hailing or accommodation service. iBook does not provide live GPS dispatch, fare calculation, in-app payment, identity verification of drivers/hosts, or automatic booking confirmation. Members must verify details and agree on price and safety arrangements directly before a trip or stay. Flights remain unavailable until an airline booking provider is integrated. Deploy the backend and run `npm run db:migrate` to create the iBook tables.
+
 Listings are stored in PostgreSQL. Members can message a provider through private messaging. Payments, bookings, external social account connections, and delivery are not implemented; members must confirm those details directly.
 
 ## People API
