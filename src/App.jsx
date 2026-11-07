@@ -34,6 +34,8 @@ import LocalMarketplacePage from './pages/app/LocalMarketplacePage.jsx'
 import SocialPage from './pages/app/SocialPage.jsx'
 import DatingPage from './pages/app/DatingPage.jsx'
 import DatingInboxPage from './pages/app/DatingInboxPage.jsx'
+import BillingPage from './pages/app/BillingPage.jsx'
+import MarketplaceOrdersPage from './pages/app/MarketplaceOrdersPage.jsx'
 import AdminLoginPage from './pages/admin/AdminLoginPage.jsx'
 import AdminDashboardPage from './pages/admin/AdminDashboardPage.jsx'
 import { apiRequest } from './utils/api.js'
@@ -151,6 +153,7 @@ function AppRoutes() {
               <Route path="payments" element={<MoneyHubPage />} />
               <Route path="itrade" element={<MoneyHubPage />} />
               <Route path="ibuy" element={<IBuyPage />} />
+              <Route path="orders" element={<MarketplaceOrdersPage />} />
               <Route path="ibuy/:productId" element={<IBuyPage />} />
               <Route path="ibook" element={<IBookPage />} />
               <Route path="marketplace" element={<LocalMarketplacePage />} />
@@ -165,6 +168,7 @@ function AppRoutes() {
               <Route path="dating/messages/:matchId" element={<DatingInboxPage />} />
               <Route path="assistant" element={<AssistantPage />} />
               <Route path="profile" element={<AccountPage />} />
+              <Route path="billing" element={<BillingPage />} />
             </Route>
           </Route>
         </Route>

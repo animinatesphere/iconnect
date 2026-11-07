@@ -143,6 +143,57 @@ export async function revokeAdminSubadmin(userId) {
   })
 }
 
+export async function getAdminMonetization() {
+  return apiRequest('/api/admin/monetization')
+}
+
+export async function saveAdminSubscriptionPlan(plan) {
+  const body = {
+    name: plan.name,
+    currency: plan.currency,
+    amount_minor: Number(plan.amountMinor),
+    jobs_limit: Number(plan.postingLimits.jobs),
+    products_limit: Number(plan.postingLimits.products),
+    marketplace_limit: Number(plan.postingLimits.marketplace),
+    videos_limit: Number(plan.postingLimits.videos),
+    active: plan.active,
+  }
+  const path = plan.id
+    ? `/api/admin/monetization/plans/${encodeURIComponent(plan.id)}`
+    : '/api/admin/monetization/plans'
+  return apiRequest(path, {
+    method: plan.id ? 'PUT' : 'POST',
+    body: JSON.stringify(body),
+  })
+}
+
+export async function saveAdminMonetizationSettings(settings) {
+  return apiRequest('/api/admin/monetization/settings', {
+    method: 'PUT',
+    body: JSON.stringify({
+      free_jobs_limit: Number(settings.freeMonthlyLimits.jobs),
+      free_products_limit: Number(settings.freeMonthlyLimits.products),
+      free_marketplace_limit: Number(settings.freeMonthlyLimits.marketplace),
+      free_videos_limit: Number(settings.freeMonthlyLimits.videos),
+      free_daily_dating_likes: Number(settings.freeDailyDatingLikes),
+      marketplace_commission_bps: Math.round(Number(settings.marketplaceCommissionPercent) * 100),
+    }),
+  })
+}
+
+export async function saveAdminDatingProduct(product) {
+  return apiRequest(`/api/admin/monetization/dating-products/${encodeURIComponent(product.id)}`, {
+    method: 'PUT',
+    body: JSON.stringify({
+      name: product.name,
+      amount_minor: Number(product.amountMinor),
+      quantity: Number(product.quantity),
+      duration_hours: Number(product.durationHours),
+      active: product.active,
+    }),
+  })
+}
+
 export async function adminLogout() {
   return apiRequest('/api/auth/logout', { method: 'POST' })
 }

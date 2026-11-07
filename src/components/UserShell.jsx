@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react'
-import { Banknote, Bell, Bitcoin, Bot, BriefcaseBusiness, ChevronDown, CircleEllipsis, Clapperboard, Heart, Home, Menu, MessageCircle, PenLine, Plane, Plus, Radio, Search, ShoppingBag, Store, UserRound, Users, Video, WalletCards, X } from 'lucide-react'
+import { Banknote, Bell, Bitcoin, Bot, BriefcaseBusiness, ChevronDown, CircleEllipsis, Clapperboard, CreditCard, Heart, Home, Menu, MessageCircle, PackageCheck, PenLine, Plane, Plus, Radio, Search, ShoppingBag, Store, UserRound, Users, Video, WalletCards, X } from 'lucide-react'
 import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import Avatar from './Avatar.jsx'
 import Brand from './Brand.jsx'
@@ -31,12 +31,14 @@ const exploreLinks = [
   { to: '/app/payments', label: 'Payments', icon: Banknote },
   { to: '/app/itrade', label: 'iTrade', icon: Bitcoin },
   { to: '/app/ibuy', label: 'iBuy market', icon: ShoppingBag },
+  { to: '/app/orders', label: 'Marketplace orders', icon: PackageCheck },
   { to: '/app/marketplace', label: 'Homes & local services', icon: Store },
   { to: '/app/ibook', label: 'iBook journeys', icon: Plane },
   { to: '/app/jobs', label: 'Job hub', icon: BriefcaseBusiness },
   { to: '/app/connect', label: 'Connect', icon: Users },
   { to: '/app/invest', label: 'Invest & save', icon: WalletCards },
   { to: '/app/dating', label: 'Dating', icon: Heart },
+  { to: '/app/billing', label: 'Plans & billing', icon: CreditCard },
   { to: '/app/assistant', label: 'AI assistant', icon: Bot },
 ]
 

@@ -3764,3 +3764,136 @@ button, a { -webkit-tap-highlight-color: transparent; }
   .live-chat-panel h2 { padding: 10px 12px; }
   .live-chat-messages { min-height: 100px; }
 }
+
+.billing-page { padding-bottom: 36px; }
+.billing-feedback { margin: 0 0 14px; padding: 11px 13px; border-radius: 8px; font-size: 11px; }
+.billing-error { border: 1px solid #f0d7d2; background: #fff7f5; color: #a44f43; }
+.billing-notice { border: 1px solid #dfe8d2; background: #f5f8ee; color: #687a46; }
+.billing-current-card { display: flex; align-items: center; gap: 14px; margin: 0 0 24px; padding: 17px; border: 1px solid #e4e8db; border-radius: 13px; background: linear-gradient(110deg, #f8faf2, #fffefa); }
+.billing-current-icon { width: 42px; height: 42px; display: grid; flex: 0 0 auto; place-items: center; border-radius: 11px; background: #eaf0df; color: #75864e; }
+.billing-current-copy { min-width: 0; flex: 1; }
+.billing-current-copy h2 { margin: 3px 0; color: #3c4035; font: 700 16px 'Manrope', sans-serif; }
+.billing-current-copy p, .billing-current-copy small { margin: 0; color: #838579; font-size: 10px; line-height: 1.6; }
+.billing-cancel-button { min-height: 34px; padding: 0 11px; border: 1px solid #e6d9d4; border-radius: 7px; background: white; color: #9c5e52; font-size: 9px; font-weight: 700; cursor: pointer; }
+.billing-cancel-button:disabled { opacity: .6; cursor: wait; }
+.billing-section { margin: 23px 0 0; }
+.ibuy-actions-buttons { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.ibuy-purchase-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.ibuy-purchase-actions > label { display: grid; gap: 4px; color: #77796f; font-size: 8px; font-weight: 700; }
+.ibuy-purchase-actions input { width: 68px; min-height: 39px; padding: 0 8px; border: 1px solid #e9e8e1; border-radius: 7px; color: #484a42; font: inherit; }
+.ibuy-purchase-actions > .app-primary-button { min-height: 39px; display: inline-flex; align-items: center; justify-content: center; gap: 7px; padding: 0 15px; border-radius: 7px; font-size: 9px; }
+.marketplace-orders-page { padding-bottom: 38px; }
+.marketplace-orders-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; margin: -5px 0 18px; }
+.marketplace-orders-section { margin-top: 21px; }
+.marketplace-orders-heading { margin-bottom: 10px; }
+.marketplace-orders-heading h2 { margin: 4px 0 0; color: #393c33; font: 700 16px 'Manrope', sans-serif; }
+.marketplace-orders-heading h2 small { margin-left: 5px; color: #93958a; font: 500 10px 'DM Sans', sans-serif; }
+.marketplace-order-list { display: grid; gap: 9px; }
+.marketplace-order-card { display: grid; grid-template-columns: minmax(150px, .7fr) minmax(0, 1.5fr) auto; align-items: center; gap: 12px; padding: 14px; border: 1px solid #e8e9e1; border-radius: 10px; background: #fffefa; }
+.marketplace-order-status { display: inline-flex; width: fit-content; align-items: center; gap: 6px; padding: 6px 8px; border-radius: 20px; background: #f0f3e8; color: #66764a; font-size: 8px; font-weight: 700; }
+.marketplace-order-status.order-pending { background: #f7f2e5; color: #947b42; }
+.marketplace-order-status.order-payment_failed, .marketplace-order-status.order-expired { background: #f8ece9; color: #a35b50; }
+.marketplace-order-main { min-width: 0; }
+.marketplace-order-main h3 { overflow: hidden; margin: 0 0 4px; color: #43463d; font: 700 12px 'Manrope', sans-serif; text-overflow: ellipsis; white-space: nowrap; }
+.marketplace-order-main p, .marketplace-order-main small { display: block; margin: 0; color: #85877c; font-size: 8px; line-height: 1.6; }
+.marketplace-order-total { color: #41443a; font: 700 13px 'Manrope', sans-serif; white-space: nowrap; }
+.marketplace-order-actions { grid-column: 2 / -1; display: flex; flex-wrap: wrap; align-items: center; gap: 7px; }
+.marketplace-order-actions .product-detail-secondary-button, .marketplace-order-actions .app-primary-button { min-height: 31px; padding: 0 9px; font-size: 8px; }
+.marketplace-order-actions .app-primary-button { display: inline-flex; align-items: center; justify-content: center; gap: 5px; }
+.marketplace-seller-net { color: #788651; font-size: 8px; font-weight: 700; }
+.marketplace-orders-empty { display: grid; justify-items: center; gap: 7px; padding: 24px; border: 1px dashed #e2e4db; border-radius: 10px; color: #838b6c; }
+.marketplace-orders-empty p { margin: 0; color: #56594f; font-size: 10px; font-weight: 700; }
+.marketplace-orders-empty span { color: #929389; font-size: 9px; }
+.marketplace-payout-note { margin: 20px 0 0; padding: 11px 13px; border-radius: 8px; background: #f6f5f0; color: #898a80; font-size: 9px; line-height: 1.6; }
+.admin-marketplace-revenue-row { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 18px; padding: 11px 0; border-top: 1px solid #edeee7; color: #818378; font-size: 9px; }
+.admin-marketplace-revenue-row strong { color: #626c49; }
+.admin-marketplace-revenue-row span { display: inline-flex; gap: 5px; }
+.admin-marketplace-revenue-row b { color: #4a4d42; }
+.billing-section-heading { display: flex; align-items: end; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
+.billing-section-heading h2 { margin: 4px 0 0; color: #383b32; font: 700 16px 'Manrope', sans-serif; }
+.billing-currency-picker { display: grid; gap: 5px; color: #838579; font-size: 9px; font-weight: 700; }
+.billing-currency-picker select { min-height: 34px; padding: 0 10px; border: 1px solid #e2e4da; border-radius: 7px; background: #fffefa; color: #52554a; font: inherit; }
+.billing-refresh { display: inline-flex; align-items: center; gap: 6px; min-height: 31px; padding: 0 9px; border: 1px solid #e3e5dc; border-radius: 7px; background: white; color: #6f7659; font-size: 9px; cursor: pointer; }
+.billing-quota-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
+.billing-quota-card, .billing-plan-card { min-width: 0; border: 1px solid #e8e9e1; border-radius: 11px; background: #fffefa; }
+.billing-quota-card { display: grid; gap: 9px; padding: 13px; }
+.billing-quota-card > span { color: #7e8075; font-size: 9px; }
+.billing-quota-card > strong { color: #44483c; font: 700 21px 'Manrope', sans-serif; }
+.billing-quota-card > strong small { color: #999a90; font-size: 12px; font-weight: 500; }
+.billing-quota-card > small { color: #999a90; font-size: 8px; }
+.billing-quota-track { height: 5px; overflow: hidden; border-radius: 5px; background: #eeefe9; }
+.billing-quota-track i { height: 100%; display: block; border-radius: inherit; background: #89976a; }
+.billing-plan-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 11px; }
+.billing-plan-card { display: flex; flex-direction: column; align-items: flex-start; padding: 15px; }
+.billing-plan-tag { display: inline-flex; align-items: center; gap: 6px; color: #788651; font-size: 9px; font-weight: 700; }
+.billing-plan-card h3 { margin: 12px 0 5px; color: #3e4138; font: 700 15px 'Manrope', sans-serif; }
+.billing-plan-price { margin: 0; color: #34372f; font: 700 22px 'Manrope', sans-serif; }
+.billing-plan-price small { color: #8d8e84; font: 500 9px 'DM Sans', sans-serif; }
+.billing-plan-card ul { display: grid; gap: 9px; width: 100%; margin: 15px 0; padding: 0; list-style: none; }
+.billing-plan-card li { display: flex; align-items: center; gap: 7px; color: #77796f; font-size: 9px; }
+.billing-plan-card li svg { flex: 0 0 auto; color: #879565; }
+.billing-plan-card > .app-primary-button { width: 100%; min-height: 36px; justify-content: center; gap: 6px; margin-top: auto; font-size: 9px; }
+.billing-plan-card > .app-primary-button:disabled { opacity: .6; cursor: default; }
+.billing-empty { grid-column: 1 / -1; margin: 0; padding: 20px; border: 1px dashed #e2e4db; border-radius: 10px; color: #85877c; font-size: 10px; text-align: center; }
+.billing-dating-section { padding-top: 21px; border-top: 1px solid #e9eae3; }
+.billing-dating-summary { display: flex; flex-wrap: wrap; align-items: center; gap: 9px 18px; margin-bottom: 11px; padding: 11px 13px; border-radius: 9px; background: #fbf6f4; color: #7c6d68; font-size: 9px; }
+.billing-dating-summary svg { color: #d2756c; }
+.billing-dating-summary > span { display: inline-flex; align-items: center; gap: 4px; }
+.billing-addon-card { min-height: 160px; }
+
+.dating-likes-summary { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin: 0 0 14px; padding: 11px 13px; border: 1px solid #f0e2de; border-radius: 9px; background: #fff9f7; color: #7b6f69; font-size: 9px; }
+.dating-likes-summary > div { display: flex; align-items: center; gap: 8px; }
+.dating-likes-summary svg { color: #d2756c; }
+.dating-likes-summary strong { color: #5e514d; }
+.dating-likes-summary a { flex: 0 0 auto; color: #9a5d53; font-weight: 700; text-decoration: none; }
+.dating-likes-summary a:hover { text-decoration: underline; }
+
+.admin-monetization { display: grid; gap: 14px; }
+.admin-monetization-revenue { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.admin-monetization-revenue-card { min-width: 0; padding: 15px; border: 1px solid #e8e9e1; border-radius: 11px; background: linear-gradient(120deg, #fffefa, #f8faf3); }
+.admin-monetization-revenue-card > div { display: flex; align-items: center; gap: 7px; color: #7b865d; font-size: 10px; font-weight: 700; }
+.admin-monetization-revenue-card > strong { display: block; margin-top: 11px; color: #3e4237; font: 700 22px 'Manrope', sans-serif; }
+.admin-monetization-revenue-card > small, .admin-monetization-revenue-card > p { display: block; margin: 5px 0 0; color: #929389; font-size: 9px; }
+.admin-monetization-revenue-card > p { padding-top: 9px; border-top: 1px solid #edeee7; }
+.admin-monetization .admin-panel { padding: 15px; }
+.admin-monetization .admin-panel-heading { margin-bottom: 14px; }
+.admin-monetization-fields { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.admin-monetization-fields > label { display: grid; align-content: start; gap: 5px; color: #72746a; font-size: 9px; font-weight: 700; }
+.admin-monetization-fields input:not([type="checkbox"]), .admin-monetization-fields select { width: 100%; min-width: 0; min-height: 35px; padding: 0 9px; border: 1px solid #e4e5dc; border-radius: 6px; outline: 0; background: white; color: #474a41; font: inherit; font-size: 10px; }
+.admin-monetization-fields input:focus, .admin-monetization-fields select:focus { border-color: #9bab73; box-shadow: 0 0 0 3px #dce8c340; }
+.admin-monetization-save { display: inline-flex; align-items: center; gap: 6px; margin-top: 12px; padding: 0 10px; }
+.admin-monetization-plan-list { display: grid; gap: 10px; }
+.admin-monetization-plan { display: grid; gap: 12px; padding: 13px; border: 1px solid #ecece6; border-radius: 9px; background: #fffefa; }
+.admin-monetization-plan-footer { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.admin-monetization-plan-footer .admin-row-action, .admin-monetization-new-plan > .admin-row-action { display: inline-flex; align-items: center; gap: 6px; min-height: 31px; padding: 0 10px; font-size: 9px; }
+.admin-monetization-active { display: inline-flex; align-items: center; gap: 6px; color: #77796f; font-size: 9px; }
+.admin-monetization-active input { accent-color: #788651; }
+.admin-monetization-new-plan { margin-top: 12px; background: #fafbf7; }
+.admin-monetization-new-plan h3 { display: flex; align-items: center; gap: 7px; margin: 0; color: #55594b; font: 700 12px 'Manrope', sans-serif; }
+
+@media (max-width: 760px) {
+  .billing-quota-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .billing-plan-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .admin-monetization-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+@media (max-width: 480px) {
+  .billing-current-card { align-items: flex-start; flex-wrap: wrap; padding: 13px; }
+  .billing-current-copy { min-width: calc(100% - 60px); }
+  .billing-cancel-button { margin-left: 55px; }
+  .billing-plan-grid { grid-template-columns: 1fr; }
+  .billing-section-heading { align-items: flex-start; flex-direction: column; }
+  .billing-dating-summary { align-items: flex-start; flex-direction: column; }
+  .dating-likes-summary { align-items: flex-start; flex-direction: column; }
+  .admin-monetization-revenue { grid-template-columns: 1fr; }
+  .admin-monetization-fields { grid-template-columns: 1fr; }
+  .admin-monetization .admin-panel { padding: 12px; }
+  .ibuy-actions-buttons, .ibuy-actions-buttons > * { width: 100%; }
+  .ibuy-purchase-actions { width: 100%; }
+  .ibuy-purchase-actions > .app-primary-button { flex: 1; }
+  .marketplace-order-card { grid-template-columns: 1fr auto; gap: 9px; }
+  .marketplace-order-status { grid-column: 1 / -1; }
+  .marketplace-order-main { grid-column: 1 / -1; }
+  .marketplace-order-actions { grid-column: 1 / -1; }
+  .marketplace-order-total { grid-column: 2; grid-row: 2; }
+}

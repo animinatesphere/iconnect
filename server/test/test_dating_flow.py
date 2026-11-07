@@ -33,6 +33,26 @@ class FakeDatingConnection:
 
     def execute(self, query, parameters=()):
         sql = re.sub(r"\s+", " ", query).strip().lower()
+        if "from posting_quota_settings" in sql:
+            return FakeResult({"free_daily_dating_likes": self.state["free_daily_dating_likes"]})
+        if sql.startswith("select liked from dating_swipes"):
+            pair = tuple(map(str, parameters))
+            return FakeResult({"liked": self.state["swipes"][pair]} if pair in self.state["swipes"] else None)
+        if sql.startswith("select count(*) as used from dating_swipes"):
+            user_id = str(parameters[0])
+            used = sum(1 for (liker, _target), liked in self.state["swipes"].items()
+                       if liker == user_id and liked)
+            return FakeResult({"used": used})
+        if sql.startswith("select entitlement.id"):
+            user_id = str(parameters[0])
+            available = self.state["extra_like_credits"].get(user_id, 0)
+            return FakeResult({"id": "extra-like-{}".format(user_id)} if available > 0 else None)
+        if sql.startswith("update dating_entitlements"):
+            entitlement_id = str(parameters[0])
+            user_id = entitlement_id.removeprefix("extra-like-")
+            if user_id in self.state["extra_like_credits"]:
+                self.state["extra_like_credits"][user_id] -= 1
+            return FakeResult()
         if sql.startswith("select u.id") and "from auth_sessions" in sql:
             session = self.state["sessions"].get(parameters[0])
             if not session:
@@ -204,6 +224,8 @@ class FakeDatingPool:
             "matches": {},
             "messages": [],
             "blocks": set(),
+            "free_daily_dating_likes": 10,
+            "extra_like_credits": {},
         }
 
     @contextmanager
@@ -339,3 +361,37 @@ class DatingFlowTests(unittest.TestCase):
             self.client.get(f"/api/dating/matches/{self.match_id}/messages").status_code,
             200,
         )
+
+    def test_daily_free_likes_and_paid_like_credits(self):
+        self.create_profile(self.client, "woman", "everyone")
+        self.create_profile(self.bob_client, "man", "everyone")
+        self.create_profile(self.casey_client, "man", "everyone")
+        self.pool.state["free_daily_dating_likes"] = 1
+
+        first_like = self.client.post(
+            f"/api/dating/profiles/{self.user_ids['bob']}/swipe",
+            json={"liked": True},
+        )
+        self.assertEqual(first_like.status_code, 200, first_like.text)
+
+        over_limit = self.client.post(
+            f"/api/dating/profiles/{self.user_ids['casey']}/swipe",
+            json={"liked": True},
+        )
+        self.assertEqual(over_limit.status_code, 402)
+        self.assertEqual(over_limit.json()["error"]["code"], "dating_likes_limit_reached")
+
+        self.pool.state["extra_like_credits"][self.user_ids["alice"]] = 1
+        paid_like = self.client.post(
+            f"/api/dating/profiles/{self.user_ids['casey']}/swipe",
+            json={"liked": True},
+        )
+        self.assertEqual(paid_like.status_code, 200, paid_like.text)
+        self.assertEqual(self.pool.state["extra_like_credits"][self.user_ids["alice"]], 0)
+
+        repeated_like = self.client.post(
+            f"/api/dating/profiles/{self.user_ids['casey']}/swipe",
+            json={"liked": True},
+        )
+        self.assertEqual(repeated_like.status_code, 200, repeated_like.text)
+        self.assertEqual(self.pool.state["extra_like_credits"][self.user_ids["alice"]], 0)
