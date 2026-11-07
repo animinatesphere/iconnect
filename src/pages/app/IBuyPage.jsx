@@ -1,12 +1,12 @@
 import React, { useEffect, useState } from 'react'
-import { ArrowLeft, ArrowUpRight, Edit3, Image as ImageIcon, MessageCircle, Plus, Search, Store, Trash2, X } from 'lucide-react'
+import { ArrowLeft, ArrowUpRight, Edit3, Image as ImageIcon, MessageCircle, PackageCheck, Plus, Search, Store, Trash2, X } from 'lucide-react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import AppPageHeader from '../../components/AppPageHeader.jsx'
 import Avatar from '../../components/Avatar.jsx'
 import PageMeta from '../../components/PageMeta.jsx'
 import { apiRequest } from '../../utils/api.js'
 import { uploadImage } from '../../utils/mediaApi.js'
-import { createMarketplaceProduct, deleteMarketplaceProduct, getMarketplaceProduct, getMarketplaceProducts, updateMarketplaceProduct } from '../../utils/marketplaceApi.js'
+import { checkoutMarketplaceProduct, createMarketplaceProduct, deleteMarketplaceProduct, getMarketplaceProduct, getMarketplaceProducts, updateMarketplaceProduct } from '../../utils/marketplaceApi.js'
 import { openConversation } from '../../utils/messageApi.js'
 
 const categories = ['All', 'Style', 'Tech', 'Home', 'Other']
@@ -36,6 +36,8 @@ export default function IBuyPage() {
   const [publishing, setPublishing] = useState(false)
   const [deletingProduct, setDeletingProduct] = useState(false)
   const [messagingSeller, setMessagingSeller] = useState(false)
+  const [purchasing, setPurchasing] = useState(false)
+  const [purchaseQuantity, setPurchaseQuantity] = useState(1)
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
   const [retry, setRetry] = useState(0)
@@ -218,6 +220,18 @@ export default function IBuyPage() {
     }
   }
 
+  async function purchaseProduct(product) {
+    setPurchasing(true)
+    setError('')
+    try {
+      const { checkoutUrl } = await checkoutMarketplaceProduct(product.id, purchaseQuantity)
+      window.location.assign(checkoutUrl)
+    } catch (purchaseError) {
+      setError(purchaseError.message || 'Could not start secure checkout.')
+      setPurchasing(false)
+    }
+  }
+
   if (productId) {
     return (
       <div className="app-content-width commerce-page product-detail-page">
@@ -241,11 +255,15 @@ export default function IBuyPage() {
             <div className="product-detail-buy-row">
               {currentUser?.id === selectedProduct.seller.id
                   ? <><button type="button" className="product-detail-secondary-button" onClick={() => editProduct(selectedProduct)}><Edit3 size={14} /> Edit listing</button><button type="button" className="product-detail-secondary-button product-delete-button" onClick={() => removeProduct(selectedProduct)} disabled={deletingProduct}><Trash2 size={14} /> {deletingProduct ? 'Deleting…' : 'Delete listing'}</button></>
-                : <button type="button" className="app-primary-button" disabled={messagingSeller} onClick={() => contactSeller(selectedProduct)}><MessageCircle size={16} /> {messagingSeller ? 'Opening chat…' : 'Message seller'}</button>}
+                : <div className="ibuy-purchase-actions">
+                  <label>Quantity<input type="number" min="1" max={selectedProduct.stock} value={purchaseQuantity} onChange={(event) => setPurchaseQuantity(Math.max(1, Math.min(selectedProduct.stock || 1, Number(event.target.value))))} disabled={selectedProduct.stock <= 0 || purchasing} /></label>
+                  <button type="button" className="app-primary-button" disabled={purchasing || selectedProduct.stock <= 0} onClick={() => purchaseProduct(selectedProduct)}><ArrowUpRight size={16} /> {purchasing ? 'Opening secure checkout…' : 'Buy now'}</button>
+                  <button type="button" className="product-detail-secondary-button" disabled={messagingSeller || purchasing} onClick={() => contactSeller(selectedProduct)}><MessageCircle size={14} /> {messagingSeller ? 'Opening chat…' : 'Message seller'}</button>
+                </div>}
               <button type="button" className="product-detail-secondary-button" onClick={() => navigate('/app/ibuy')}><ArrowLeft size={14} /> Continue browsing</button>
             </div>
             <div className="product-detail-facts"><h2>Product details</h2><dl><div><dt>Category</dt><dd>{selectedProduct.category}</dd></div><div><dt>Seller</dt><dd>{selectedProduct.seller.name} · @{selectedProduct.seller.username}</dd></div><div><dt>Availability</dt><dd>{selectedProduct.stock > 0 ? `${selectedProduct.stock} in stock` : 'Out of stock'}</dd></div></dl></div>
-            <div className="product-detail-disclaimer"><MessageCircle size={15} /><span>Contact the seller to confirm current availability, payment, and delivery arrangements. iBuy does not process payments yet.</span></div>
+            <div className="product-detail-disclaimer"><MessageCircle size={15} /><span>Payments are processed securely by Paystack. After payment, contact the seller in Messages to coordinate delivery. Seller payouts are handled outside iBuy for now.</span></div>
           </div>
         </section>}
         {!loadingProduct && !selectedProduct && !error && <section className="product-detail-not-found"><h1>We couldn't find this listing.</h1><p>It may have been removed or is no longer available.</p><Link to="/app/ibuy" className="app-primary-button">Return to iBuy</Link></section>}
@@ -258,7 +276,7 @@ export default function IBuyPage() {
       <AppPageHeader eyebrow="IBUY · COMMUNITY MARKETPLACE" title="Buy and sell with your community." description="Browse member listings or add a product for sale." />
       {error && <p className="feed-interaction-notice feed-error" role="alert">{error}</p>}
       {notice && <p className="feed-interaction-notice" role="status">{notice}</p>}
-      <section className="ibuy-actions-bar"><p>Contact sellers directly in Messages to check details and arrange a transaction.</p><button type="button" className="app-primary-button" onClick={() => { if (listingOpen) closeListingForm(); else { setListing(emptyListing); setListingOpen(true); setError('') } }}><Plus size={15} /> {listingOpen ? 'Close form' : 'List a product'}</button></section>
+      <section className="ibuy-actions-bar"><p>Pay securely with Paystack and coordinate delivery with sellers in Messages.</p><div className="ibuy-actions-buttons"><Link to="/app/orders" className="product-detail-secondary-button"><PackageCheck size={15} /> My orders</Link><button type="button" className="app-primary-button" onClick={() => { if (listingOpen) closeListingForm(); else { setListing(emptyListing); setListingOpen(true); setError('') } }}><Plus size={15} /> {listingOpen ? 'Close form' : 'List a product'}</button></div></section>
       {listingOpen && <form className="ibuy-listing-form" onSubmit={submitListing}>
         <div className="ibuy-form-heading"><h2>{editingProduct ? 'Edit product listing' : 'New product listing'}</h2><button type="button" className="quiet-icon-button" aria-label="Close listing form" onClick={closeListingForm}><X size={17} /></button></div>
         <label>Product name<input value={listing.name} onChange={(event) => setListing((current) => ({ ...current, name: event.target.value }))} maxLength={120} required /></label>

@@ -50,3 +50,21 @@ export async function deleteMarketplaceProduct(productId) {
     method: 'DELETE',
   })
 }
+
+export async function checkoutMarketplaceProduct(productId, quantity = 1) {
+  return apiRequest('/api/marketplace/orders/checkout', {
+    method: 'POST',
+    body: JSON.stringify({ product_id: productId, quantity }),
+  })
+}
+
+export async function getMarketplaceOrders() {
+  const payload = await apiRequest('/api/marketplace/orders')
+  return payload.orders
+}
+
+export async function fulfillMarketplaceOrder(orderId) {
+  return apiRequest(`/api/marketplace/orders/${encodeURIComponent(orderId)}/fulfill`, {
+    method: 'POST',
+  })
+}

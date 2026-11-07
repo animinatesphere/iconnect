@@ -47,6 +47,25 @@ class FakeConnection:
 
     def execute(self, query, parameters=()):
         sql = re.sub(r"\s+", " ", query).strip().lower()
+        if sql.startswith("select pg_advisory_xact_lock"):
+            return FakeResult()
+        if "from posting_quota_settings" in sql:
+            return FakeResult({"free_monthly_limits": self.state.get("free_monthly_limits", {
+                "jobs": 100, "products": 100, "marketplace": 100, "videos": 100,
+            })})
+        if sql.startswith("select plan.posting_limits from billing_subscriptions"):
+            return FakeResult()
+        if sql.startswith("select count(*) as used from posting_usage"):
+            user_id, category = map(str, parameters)
+            used = sum(1 for entry in self.state.get("posting_usage", [])
+                       if entry["user_id"] == user_id and entry["category"] == category)
+            return FakeResult({"used": used})
+        if sql.startswith("insert into posting_usage"):
+            user_id, category, content_id = map(str, parameters)
+            self.state.setdefault("posting_usage", []).append({
+                "user_id": user_id, "category": category, "content_id": content_id,
+            })
+            return FakeResult()
         if sql.startswith("insert into admin_audit_log"):
             action = next(
                 (name for name in (
@@ -378,6 +397,8 @@ class FakeConnection:
                 "image_urls": image_urls,
             })
             return FakeResult({"id": product["id"]})
+        if sql.startswith("select id from marketplace_orders where product_id ="):
+            return FakeResult()
         if sql.startswith("delete from marketplace_products"):
             product_id, seller_id = map(str, parameters)
             product = next(
@@ -1219,6 +1240,10 @@ class FakePool:
             "likes": set(),
             "bookmarks": set(),
             "comments": [],
+            "posting_usage": [],
+            "free_monthly_limits": {
+                "jobs": 100, "products": 100, "marketplace": 100, "videos": 100,
+            },
         }
 
     @contextmanager

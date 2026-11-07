@@ -34,6 +34,25 @@ class FakeJobsConnection:
 
     def execute(self, query, parameters=()):
         sql = re.sub(r"\s+", " ", query).strip().lower()
+        if sql.startswith("select pg_advisory_xact_lock"):
+            return FakeResult()
+        if "from posting_quota_settings" in sql:
+            return FakeResult({"free_monthly_limits": self.state.get("free_monthly_limits", {
+                "jobs": 100, "products": 100, "marketplace": 100, "videos": 100,
+            })})
+        if sql.startswith("select plan.posting_limits from billing_subscriptions"):
+            return FakeResult()
+        if sql.startswith("select count(*) as used from posting_usage"):
+            user_id, category = map(str, parameters)
+            used = sum(1 for entry in self.state.get("posting_usage", [])
+                       if entry["user_id"] == user_id and entry["category"] == category)
+            return FakeResult({"used": used})
+        if sql.startswith("insert into posting_usage"):
+            user_id, category, content_id = map(str, parameters)
+            self.state.setdefault("posting_usage", []).append({
+                "user_id": user_id, "category": category, "content_id": content_id,
+            })
+            return FakeResult()
         if sql.startswith("insert into admin_audit_log"):
             return FakeResult({"id": str(uuid4())})
         if sql.startswith("select u.id") and "from auth_sessions" in sql:
@@ -218,6 +237,10 @@ class FakeJobsPool:
             "business_profiles": {},
             "bookmarks": set(),
             "applications": {},
+            "posting_usage": [],
+            "free_monthly_limits": {
+                "jobs": 100, "products": 100, "marketplace": 100, "videos": 100,
+            },
         }
 
     @contextmanager
@@ -328,6 +351,23 @@ class JobsFlowTests(unittest.TestCase):
             ).status_code,
             404,
         )
+
+    def test_free_monthly_job_posting_allowance_is_enforced(self):
+        self.pool.state["free_monthly_limits"]["jobs"] = 1
+        self.create_listing(title="First allowed role")
+        denied = self.clients["alice"].post("/api/jobs", json={
+            "title": "Second role",
+            "company": "Common Ground",
+            "location": "Lagos, Nigeria",
+            "employment_type": "Full-time",
+            "workplace_type": "hybrid",
+            "summary": "A second role.",
+            "description": "This role exceeds the current free monthly limit.",
+            "company_image_url": "/api/media/images/{}.webp".format("d" * 32),
+        })
+        self.assertEqual(denied.status_code, 402, denied.text)
+        self.assertEqual(denied.json()["error"]["code"], "posting_limit_reached")
+        self.assertEqual(len(self.pool.state["posting_usage"]), 1)
 
     def test_job_hub_combines_configured_external_results(self):
         external_job = {

@@ -5,6 +5,7 @@ import AppPageHeader from '../../components/AppPageHeader.jsx'
 import Avatar from '../../components/Avatar.jsx'
 import { blockDatingUser, getDatingDiscovery, getDatingMatches, getDatingProfile, reportDatingUser, saveDatingProfile, swipeDatingProfile, unmatchDatingUser } from '../../utils/datingApi.js'
 import { uploadImage } from '../../utils/mediaApi.js'
+import { getMyBilling } from '../../utils/billingApi.js'
 
 const emptyProfile = {
   birth_date: '',
@@ -125,6 +126,8 @@ export default function DatingPage() {
   const [busy, setBusy] = useState('')
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
+  const [datingBilling, setDatingBilling] = useState(null)
+  const [billingError, setBillingError] = useState('')
 
   useEffect(() => {
     let active = true
@@ -132,6 +135,9 @@ export default function DatingPage() {
       .then((loadedProfile) => { if (active) setProfile(loadedProfile) })
       .catch((loadError) => { if (active) setError(loadError.message || 'Could not load your dating profile.') })
       .finally(() => { if (active) setLoading(false) })
+    getMyBilling()
+      .then((billing) => { if (active) setDatingBilling(billing.dating) })
+      .catch((billingLoadError) => { if (active) setBillingError(billingLoadError.message || 'Dating allowances are unavailable.') })
     return () => { active = false }
   }, [])
 
@@ -150,6 +156,11 @@ export default function DatingPage() {
     setNotice('')
     try {
       const result = await swipeDatingProfile(person.user_id, liked)
+      if (liked) {
+        getMyBilling()
+          .then((billing) => { setDatingBilling(billing.dating); setBillingError('') })
+          .catch((billingLoadError) => setBillingError(billingLoadError.message || 'Could not refresh dating allowances.'))
+      }
       setProfiles((current) => current.filter((item) => item.user_id !== person.user_id))
       if (result.matched) {
         setNotice(`It’s a match with ${person.name}! You can now message in your separate dating inbox.`)
@@ -240,7 +251,12 @@ export default function DatingPage() {
     <div className="app-content-width dating-page">
       <AppPageHeader eyebrow="18+ · SEPARATE FROM YOUR REGULAR INBOX" title="Dating" description="Discover people, make a mutual match, and keep dating conversations in their own inbox." />
       {error && <p className="dating-feedback dating-error" role="alert">{error}</p>}
+      {billingError && <p className="dating-feedback dating-error" role="alert">{billingError}</p>}
       {notice && <p className="dating-feedback dating-notice" role="status">{notice}</p>}
+      {datingBilling && <section className="dating-likes-summary">
+        <div><Heart size={17} /><span><strong>{datingBilling.likesUsedToday} / {datingBilling.freeLikesPerDay}</strong> free likes used today · {datingBilling.extraLikesRemaining} extra remaining</span></div>
+        <Link to="/app/billing">Dating extras & plans</Link>
+      </section>}
       <div className="dating-tabs" role="tablist" aria-label="Dating sections">
         <button type="button" role="tab" aria-selected={tab === 'discover'} className={tab === 'discover' ? 'is-selected' : ''} onClick={() => { setTab('discover'); setNotice('') }}><Sparkles size={16} /> Discover</button>
         <button type="button" role="tab" aria-selected={tab === 'matches'} className={tab === 'matches' ? 'is-selected' : ''} onClick={() => { setTab('matches'); setNotice('') }}><Heart size={16} /> Matches</button>

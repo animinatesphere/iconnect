@@ -113,9 +113,14 @@ All marketplace routes require a verified account:
 - `POST /api/marketplace/products` publishes a listing with `name`, `category`, integer `price` in NGN, `stock`, `description`, and up to five `image_urls` (plus optional legacy HTTPS `image_url`).
 - `GET /api/marketplace/products/{product_id}` returns a published product and the seller’s public name and username.
 - `PUT /api/marketplace/products/{product_id}` edits the signed-in seller’s listing using the same fields as creation.
-- `DELETE /api/marketplace/products/{product_id}` permanently deletes the signed-in seller’s listing.
+- `DELETE /api/marketplace/products/{product_id}` permanently deletes the signed-in seller’s listing only if it has no order history.
 
-Listings and image galleries are stored in PostgreSQL, with uploaded image files in `ICONNECT_MEDIA_DIR`. Signed-in members can list products from iBuy; allowlisted admins sign in at `/admin/login` and can use “Open iBuy to list a product” in the admin portal. Buyers can message a seller through the private messaging API. iBuy does not currently process payments, place orders, or arrange delivery; buyers and sellers must confirm those details directly.
+Listings and image galleries are stored in PostgreSQL, with uploaded image files in `ICONNECT_MEDIA_DIR`. Signed-in members can list products from iBuy; allowlisted admins sign in at `/admin/login` and can use “Open iBuy to list a product” in the admin portal. Buyers can message a seller through the private messaging API.
+
+- `POST /api/marketplace/orders/checkout` starts a Paystack-only NGN checkout with `product_id` and `quantity` (1–1000). Stock is reserved while payment is pending; failed or expired checkouts release it. Provider-confirmed payment marks an order paid.
+- `GET /api/marketplace/orders` returns the signed-in member’s purchases and sales. Sellers can mark paid orders fulfilled with `POST /api/marketplace/orders/{order_id}/fulfill`.
+
+The admin Monetization panel configures the marketplace commission (0–30%) and reports paid marketplace revenue. Seller payouts, refunds, and delivery are not integrated: they must be reconciled outside iBuy. A payment received after its stock reservation expires is re-reserved if stock remains; otherwise the order is flagged for refund review. Configure `PAYSTACK_SECRET_KEY` server-side before enabling checkout.
 
 ## Local marketplace API
 
@@ -213,6 +218,26 @@ Dating has a private profile separate from the regular member profile. The API c
 
 Dating profiles, likes, matches, messages, blocks, and reports are stored separately from standard messages and social follows/blocks. Dating profile photos use the existing authenticated image upload API. Run `npm run db:migrate` when deploying these tables.
 
+## Publishing subscriptions and dating extras
+
+The member Plans & billing page supports NGN checkout through Paystack and USD checkout through Stripe. Monthly publisher plans gate member-created job listings, iBuy products, local marketplace listings, and uploaded videos. The super-admin Monetization page controls plan prices and per-category caps, monthly free allowances, daily free dating likes, dating add-on prices, and revenue totals by currency. Posting allowance resets and free dating likes use UTC calendar periods. Active publisher caps replace (rather than add to) the free monthly cap.
+
+Dating matching remains free. Optional configured add-ons can provide extra likes or a time-limited profile boost; boosts are prioritized in discovery. Dating add-ons are disabled until a super-admin sets a price and enables them.
+
+Configure these values only in the API service environment; never put payment secrets in browser or `VITE_*` variables:
+
+- `PAYSTACK_SECRET_KEY` for NGN transactions and Paystack webhook verification.
+- `STRIPE_SECRET_KEY` and `STRIPE_WEBHOOK_SECRET` for USD payments. The Stripe values must be configured together.
+
+Register these webhook destinations with the providers:
+
+- Paystack: `https://api.iconnectdworld.com/api/billing/webhooks/paystack`
+- Stripe: `https://api.iconnectdworld.com/api/billing/webhooks/stripe`
+
+Subscribe the Paystack webhook to subscription and charge lifecycle events, including `charge.success`, `subscription.create`, `subscription.not_renew`, `subscription.disable`, `invoice.payment_failed`, and `invoice.update`. Configure Stripe for Checkout completion (and async payment success if enabled), invoice paid/payment failed, and subscription updated/deleted events. Keep webhook signing enabled; the API verifies signatures and de-duplicates provider event IDs.
+
+After deploying the backend code, run `npm run db:migrate`, configure the server-only keys and provider webhooks, then restart the API. Super-admins can edit the seeded example plans or create their own; prices are entered as major currency units in the dashboard and are stored as kobo/cents. The app does not receive or display secret keys.
+
 ## Live updates
 
 The authenticated WebSocket endpoint at `/api/realtime` streams message-created and read-receipt events to the conversation participants, and post/comment changes to connected members. Events contain identifiers and metadata, not message or comment text. The web app reconnects automatically, refreshes on reconnect, and keeps a 60-second polling fallback for inbox recovery.
@@ -266,7 +291,7 @@ The Vercel rewrite must only be deployed after the API hostname has DNS, a worki
 
 Set `NODE_ENV=production`, `API_HOST=127.0.0.1`, `API_PORT=10000`, `APP_ORIGIN=https://www.iconnectdworld.com`, `DATABASE_URL`, `SESSION_SECRET`, `OTP_HASH_SECRET`, `RESEND_API_KEY`, `EMAIL_FROM`, `SESSION_MAX_AGE_DAYS=7`, `TRUST_PROXY=1`, the intended server-only `ADMIN_EMAILS`, `ICONNECT_MEDIA_DIR=/var/lib/iconnect/uploads`, `GEMINI_API_KEY` if enabling the AI assistant, and the three `LIVEKIT_*` settings described below in the VPS environment. Create the media directory and make it writable by the API service account before starting the API. Keep secrets out of source control and never put them in `VITE_*` variables.
 
-On the VPS, create the environment with `python3 -m venv server/.venv`, install runtime packages with `server/.venv/bin/pip install -r server/requirements.txt`, and run `npm run db:migrate`. The API virtual host must allow request bodies up to 260 MB for 250 MiB video uploads and 12 MB for CAC documents. Add these exact-match locations to its HTTPS `server` block so Nginx streams upload bodies to the API instead of buffering the entire upload first:
+On the VPS, create the environment with `python3 -m venv server/.venv`, install runtime packages with `server/.venv/bin/pip install -r server/requirements.txt`, configure server-only payment credentials if enabling subscriptions, and run `npm run db:migrate`. The API virtual host must allow request bodies up to 260 MB for 250 MiB video uploads and 12 MB for CAC documents. Add these exact-match locations to its HTTPS `server` block so Nginx streams upload bodies to the API instead of buffering the entire upload first:
 
 ```nginx
 location = /api/media/voice-notes {

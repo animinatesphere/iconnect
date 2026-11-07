@@ -43,6 +43,9 @@ class Settings:
     livekit_api_secret: str = ""
     gemini_api_key: str = ""
     gemini_model: str = "gemini-2.5-flash"
+    paystack_secret_key: str = ""
+    stripe_secret_key: str = ""
+    stripe_webhook_secret: str = ""
 
 
 def _required_secret(name: str) -> str:
@@ -156,6 +159,11 @@ def load_settings() -> Settings:
     gemini_model = os.getenv("GEMINI_MODEL", "gemini-2.5-flash").strip()
     if not re.fullmatch(r"gemini-[A-Za-z0-9._-]{1,80}", gemini_model):
         raise RuntimeError("GEMINI_MODEL must be a valid Gemini model identifier.")
+    paystack_secret_key = os.getenv("PAYSTACK_SECRET_KEY", "").strip()
+    stripe_secret_key = os.getenv("STRIPE_SECRET_KEY", "").strip()
+    stripe_webhook_secret = os.getenv("STRIPE_WEBHOOK_SECRET", "").strip()
+    if bool(stripe_secret_key) != bool(stripe_webhook_secret):
+        raise RuntimeError("STRIPE_SECRET_KEY and STRIPE_WEBHOOK_SECRET must be configured together.")
 
     return Settings(
         app_origin=app_origin.rstrip("/"),
@@ -184,4 +192,7 @@ def load_settings() -> Settings:
         livekit_api_secret=livekit_api_secret,
         gemini_api_key=gemini_api_key,
         gemini_model=gemini_model,
+        paystack_secret_key=paystack_secret_key,
+        stripe_secret_key=stripe_secret_key,
+        stripe_webhook_secret=stripe_webhook_secret,
     )

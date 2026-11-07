@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react'
-import { Activity, BriefcaseBusiness, ChevronLeft, ChevronRight, FileText, LogOut, Package, Search, ShieldAlert, Users, UserCog, X } from 'lucide-react'
+import { Activity, BriefcaseBusiness, ChevronLeft, ChevronRight, CreditCard, FileText, LogOut, Package, Search, ShieldAlert, Users, UserCog, X } from 'lucide-react'
 import { Link, useNavigate } from 'react-router-dom'
 import Avatar from '../../components/Avatar.jsx'
 import PageMeta from '../../components/PageMeta.jsx'
@@ -8,6 +8,7 @@ import AdminContentPanel from './AdminContentPanel.jsx'
 import AdminProductsPanel from './AdminProductsPanel.jsx'
 import AdminPublishingPanel from './AdminPublishingPanel.jsx'
 import AdminSubadminsPanel from './AdminSubadminsPanel.jsx'
+import AdminMonetizationPanel from './AdminMonetizationPanel.jsx'
 
 const pageSize = 100
 
@@ -399,6 +400,7 @@ export default function AdminDashboardPage() {
             ['Products', Package],
             ['Publishing', BriefcaseBusiness],
             ...(admin?.role === 'super_admin' ? [['Admins', UserCog]] : []),
+            ...(admin?.role === 'super_admin' ? [['Monetization', CreditCard]] : []),
             ['Audit log', ShieldAlert],
           ].map(([label, Icon]) => <button key={label} type="button" className={section === label ? 'admin-portal-nav-active' : ''} onClick={() => chooseSection(label)}><Icon size={16} /><span>{label}</span></button>)}
         </nav>
@@ -407,7 +409,7 @@ export default function AdminDashboardPage() {
       <div className="admin-portal-main">
         <header className="admin-portal-topbar"><div><span>iConnect admin</span><b>/</b><strong>{section}</strong></div><div className="admin-portal-topbar-actions"><span className="admin-preview-chip"><i /> {admin?.role === 'super_admin' ? 'SUPER ADMIN' : 'SUB-ADMIN'}</span><button type="button" onClick={signOut}><LogOut size={14} /> Sign out</button></div></header>
         <main className="admin-portal-content">
-          <div className="admin-portal-page-heading"><div><span className="app-page-eyebrow">WEBSITE OPERATIONS</span><h1>{section === 'Overview' ? 'Dashboard overview' : section}</h1><p>{section === 'Users' ? 'Search accounts to review profile details, photos, company records, messages, and all member activity.' : section === 'Audit log' ? 'Review administrator access and recorded management actions.' : section === 'Content' ? 'Review and remove posts, comments, listings, jobs, and communities from user pages.' : section === 'Products' ? 'Create, edit, publish, hide, or remove iBuy products with photos.' : section === 'Publishing' ? 'Publish official jobs and housing listings to the pages members use.' : section === 'Admins' ? 'Super-admins can grant and revoke sub-admin access.' : 'Live platform totals and recent growth from the iConnect database.'}</p></div>{section === 'Users' && <label className="admin-user-search"><Search size={15} /><input value={search} onChange={(event) => { setSearch(event.target.value); setUserOffset(0) }} placeholder="Search name, username, or email" aria-label="Search users" /></label>}</div>
+          <div className="admin-portal-page-heading"><div><span className="app-page-eyebrow">WEBSITE OPERATIONS</span><h1>{section === 'Overview' ? 'Dashboard overview' : section}</h1><p>{section === 'Users' ? 'Search accounts to review profile details, photos, company records, messages, and all member activity.' : section === 'Audit log' ? 'Review administrator access and recorded management actions.' : section === 'Content' ? 'Review and remove posts, comments, listings, jobs, and communities from user pages.' : section === 'Products' ? 'Create, edit, publish, hide, or remove iBuy products with photos.' : section === 'Publishing' ? 'Publish official jobs and housing listings to the pages members use.' : section === 'Admins' ? 'Super-admins can grant and revoke sub-admin access.' : section === 'Monetization' ? 'Manage publishing subscriptions, free allowances, dating add-ons, and payment revenue.' : 'Live platform totals and recent growth from the iConnect database.'}</p></div>{section === 'Users' && <label className="admin-user-search"><Search size={15} /><input value={search} onChange={(event) => { setSearch(event.target.value); setUserOffset(0) }} placeholder="Search name, username, or email" aria-label="Search users" /></label>}</div>
           {section === 'Users' && <div className="admin-safety-banner"><ShieldAlert size={18} /><span><strong>Private account access is audited.</strong> Admins can view profile and company details, submitted CAC records, posts, and private message history.</span></div>}
           {error && <p className="feed-interaction-notice feed-error" role="alert">{error}</p>}
           {notice && <p className="feed-interaction-notice" role="status">{notice}</p>}
@@ -432,6 +434,7 @@ export default function AdminDashboardPage() {
           {!loading && section === 'Products' && <AdminProductsPanel />}
           {!loading && section === 'Publishing' && <AdminPublishingPanel />}
           {!loading && section === 'Admins' && admin?.role === 'super_admin' && <AdminSubadminsPanel />}
+          {!loading && section === 'Monetization' && admin?.role === 'super_admin' && <AdminMonetizationPanel />}
           {!loading && section === 'Audit log' && <section className="admin-panel admin-queue-panel"><div className="admin-panel-heading"><div><span className="app-page-eyebrow">RECORDED ADMIN ACTIVITY</span><h2>Latest 100 events</h2></div><button type="button" className="admin-row-action" onClick={refreshAudit} disabled={loadingAudit}>{loadingAudit ? 'Loading…' : 'Refresh'}</button></div>{auditEvents.map((event) => <div className="admin-audit-entry" key={event.id}><span /><div><strong>{auditDescription(event)} · {event.admin.email}</strong><small>{event.subject ? `Account: ${event.subject.name} (${event.subject.email}) · ` : ''}{event.details && Object.keys(event.details).length > 0 ? `${JSON.stringify(event.details)} · ` : ''}{formatDate(event.createdAt)}</small></div></div>)}{!auditEvents.length && <div className="admin-content-empty"><Activity size={18} /><p>No audit events recorded.</p></div>}</section>}
         </main>
       </div>

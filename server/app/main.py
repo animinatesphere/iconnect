@@ -10,6 +10,7 @@ import re
 import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from collections import defaultdict, deque
 from contextlib import asynccontextmanager
@@ -29,6 +30,13 @@ from psycopg.rows import dict_row
 from psycopg_pool import ConnectionPool
 
 from .config import Settings, load_settings
+from .billing import (
+    BillingProviderError,
+    parse_provider_datetime,
+    provider_request,
+    verify_paystack_signature,
+    verify_stripe_signature,
+)
 from .security import (
     create_email_code,
     create_session_token,
@@ -45,6 +53,7 @@ LOGGER = logging.getLogger("iconnect.api")
 EMAIL_PATTERN = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 USERNAME_PATTERN = re.compile(r"^[a-zA-Z0-9._]{3,30}$")
 MAX_REQUEST_BYTES = 16 * 1024
+MAX_WEBHOOK_BYTES = 1024 * 1024
 AUTH_WINDOW_SECONDS = 15 * 60
 AUTH_REQUEST_LIMIT = 10
 SOCIAL_WINDOW_SECONDS = 15 * 60
@@ -395,6 +404,11 @@ class MarketplaceProductInput(StrictModel):
         return validate_image_urls(values)
 
 
+class MarketplaceCheckoutInput(StrictModel):
+    product_id: UUID = Field(strict=False)
+    quantity: int = Field(ge=1, le=1000)
+
+
 class AdminMarketplaceProductInput(MarketplaceProductInput):
     published: bool = True
 
@@ -612,6 +626,65 @@ class AssistantChatInput(StrictModel):
         if sum(len(message.text) for message in self.messages) > 12000:
             raise ValueError("The conversation is too long.")
         return self
+
+
+class SubscriptionPlanInput(StrictModel):
+    name: str = Field(min_length=1, max_length=80)
+    currency: Literal["NGN", "USD"]
+    amount_minor: int = Field(ge=1, le=100_000_000_000)
+    jobs_limit: int = Field(ge=0, le=10000)
+    products_limit: int = Field(ge=0, le=10000)
+    marketplace_limit: int = Field(ge=0, le=10000)
+    videos_limit: int = Field(ge=0, le=10000)
+    active: bool = True
+
+    @field_validator("name")
+    @classmethod
+    def clean_plan_name(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("A plan name is required.")
+        return value
+
+
+class PostingQuotaSettingsInput(StrictModel):
+    free_jobs_limit: int = Field(ge=0, le=1000)
+    free_products_limit: int = Field(ge=0, le=1000)
+    free_marketplace_limit: int = Field(ge=0, le=1000)
+    free_videos_limit: int = Field(ge=0, le=1000)
+    free_daily_dating_likes: int = Field(ge=0, le=1000)
+    marketplace_commission_bps: int = Field(ge=0, le=3000)
+
+
+class DatingBillingProductInput(StrictModel):
+    name: str = Field(min_length=1, max_length=80)
+    amount_minor: int = Field(ge=0, le=100_000_000_000)
+    quantity: int = Field(ge=1, le=1000)
+    duration_hours: int = Field(ge=0, le=720)
+    active: bool
+
+    @field_validator("name")
+    @classmethod
+    def clean_dating_product_name(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("A product name is required.")
+        return value
+
+
+class BillingCheckoutInput(StrictModel):
+    plan_id: Optional[UUID] = None
+    dating_product_id: Optional[UUID] = None
+
+    @model_validator(mode="after")
+    def validate_checkout_item(self) -> "BillingCheckoutInput":
+        if (self.plan_id is None) == (self.dating_product_id is None):
+            raise ValueError("Choose exactly one plan or dating add-on.")
+        return self
+
+
+class BillingConfirmInput(StrictModel):
+    reference: str = Field(min_length=1, max_length=200)
 
 
 class UserFollowInput(StrictModel):
@@ -1040,6 +1113,11 @@ def create_app(
                 body_limit = (
                     MAX_IMAGE_BYTES
                     if request.url.path == "/api/media/images"
+                    else MAX_WEBHOOK_BYTES
+                    if request.url.path in {
+                        "/api/billing/webhooks/paystack",
+                        "/api/billing/webhooks/stripe",
+                    }
                     else MAX_VOICE_NOTE_BYTES
                     if request.url.path == "/api/media/voice-notes"
                     else MAX_BUSINESS_DOCUMENT_BYTES
@@ -1142,6 +1220,96 @@ def create_app(
                 )
             attempts.append(now)
 
+    def posting_quota_snapshot(
+        connection: Any,
+        user_id: Any,
+        category: str,
+        lock: bool = False,
+    ) -> Dict[str, int]:
+        if lock:
+            connection.execute(
+                "SELECT pg_advisory_xact_lock(hashtext(%s), hashtext(%s))",
+                (str(user_id), category),
+            )
+        settings_row = connection.execute(
+            """SELECT free_monthly_limits
+               FROM posting_quota_settings WHERE id = 1"""
+        ).fetchone()
+        if not settings_row:
+            raise ApiError(
+                503,
+                "billing_not_configured",
+                "Posting limits are unavailable. Please try again later.",
+            )
+        subscription = connection.execute(
+            """SELECT plan.posting_limits
+               FROM billing_subscriptions subscription
+               JOIN subscription_plans plan ON plan.id = subscription.plan_id
+               WHERE subscription.user_id = %s
+                 AND subscription.status IN ('active', 'past_due')
+                 AND (subscription.current_period_end IS NULL
+                      OR subscription.current_period_end > now())
+               ORDER BY subscription.current_period_end DESC NULLS LAST,
+                        subscription.created_at DESC
+               LIMIT 1""",
+            (user_id,),
+        ).fetchone()
+        active_plan_limits = subscription.get("posting_limits") if subscription else None
+        limits = (
+            active_plan_limits
+            if subscription
+            else settings_row.get("free_monthly_limits")
+        ) or {}
+        if isinstance(limits, str):
+            try:
+                limits = json.loads(limits)
+            except json.JSONDecodeError as error:
+                logger.exception("Stored posting quota settings contain invalid JSON.")
+                raise ApiError(500, "billing_configuration_error", "Posting limits could not be loaded.") from error
+        monthly_limit = limits.get(category, 0) if isinstance(limits, dict) else 0
+        try:
+            monthly_limit = max(0, int(monthly_limit))
+        except (TypeError, ValueError):
+            raise ApiError(500, "billing_configuration_error", "Posting limits could not be loaded.")
+        usage_row = connection.execute(
+            """SELECT count(*) AS used
+               FROM posting_usage
+               WHERE user_id = %s AND category = %s
+                 AND created_at >= (date_trunc('month', now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC')""",
+            (user_id, category),
+        ).fetchone()
+        used = int(usage_row["used"]) if usage_row else 0
+        return {
+            "limit": monthly_limit,
+            "used": used,
+            "remaining": max(0, monthly_limit - used),
+        }
+
+    def record_posting_usage(
+        connection: Any,
+        user_id: Any,
+        category: str,
+        content_id: Any,
+    ) -> None:
+        quota = posting_quota_snapshot(connection, user_id, category, lock=True)
+        if quota["used"] >= quota["limit"]:
+            label = {
+                "jobs": "job",
+                "products": "product",
+                "marketplace": "marketplace listing",
+                "videos": "video",
+            }[category]
+            raise ApiError(
+                402,
+                "posting_limit_reached",
+                "Your monthly {} posting allowance is used up. Choose a publisher plan to continue.".format(label),
+            )
+        connection.execute(
+            """INSERT INTO posting_usage (user_id, category, content_id)
+               VALUES (%s, %s, %s)""",
+            (user_id, category, content_id),
+        )
+
     def enforce_media_upload_rate_limit(request: Request) -> None:
         forwarded_for = request.headers.get("x-forwarded-for", "")
         client_ip = (
@@ -1236,6 +1404,39 @@ def create_app(
                 "name": row["seller_name"],
                 "username": row["seller_username"],
             },
+        }
+
+    def public_marketplace_order(row: Dict[str, Any], viewer_id: Any) -> Dict[str, Any]:
+        viewer_is_buyer = str(row["buyer_id"]) == str(viewer_id)
+        other_user = (
+            {
+                "id": str(row["seller_id"]),
+                "name": row["seller_name"],
+                "username": row["seller_username"],
+            }
+            if viewer_is_buyer
+            else {
+                "id": str(row["buyer_id"]),
+                "name": row["buyer_name"],
+                "username": row["buyer_username"],
+            }
+        )
+        return {
+            "id": str(row["id"]),
+            "productId": str(row["product_id"]),
+            "productName": row["product_name"],
+            "quantity": int(row["quantity"]),
+            "unitPriceMinor": int(row["unit_price_minor"]),
+            "amountMinor": int(row["amount_minor"]),
+            "marketplaceCommissionMinor": int(row["marketplace_commission_minor"]),
+            "sellerAmountMinor": int(row["seller_amount_minor"]),
+            "currency": row["currency"],
+            "status": row["status"],
+            "createdAt": row["created_at"].isoformat(),
+            "paidAt": row["paid_at"].isoformat() if row.get("paid_at") else None,
+            "fulfilledAt": row["fulfilled_at"].isoformat() if row.get("fulfilled_at") else None,
+            "role": "buyer" if viewer_is_buyer else "seller",
+            "otherParty": other_user,
         }
 
     def public_status(row: Dict[str, Any]) -> Dict[str, Any]:
@@ -1796,6 +1997,993 @@ def create_app(
             )
         return {"reply": reply}
 
+    def public_billing_plan(row: Dict[str, Any]) -> Dict[str, Any]:
+        limits = row.get("posting_limits") or {}
+        if isinstance(limits, str):
+            limits = json.loads(limits)
+        return {
+            "id": str(row["id"]),
+            "name": row["name"],
+            "currency": row["currency"],
+            "amountMinor": int(row["amount_minor"]),
+            "postingLimits": {
+                category: int(limits.get(category, 0))
+                for category in ("jobs", "products", "marketplace", "videos")
+            },
+            "active": bool(row["active"]),
+        }
+
+    def verify_billing_provider(provider: str, secret: str, path: str) -> Dict[str, Any]:
+        try:
+            return provider_request(provider, secret, path)
+        except BillingProviderError as error:
+            logger.warning("%s billing verification failed (HTTP %s)", provider, error.status_code)
+            raise ApiError(
+                502,
+                "payment_verification_failed",
+                "The payment provider could not verify this payment. Try again shortly.",
+            ) from error
+
+    def activate_billing_transaction(
+        connection: Any,
+        transaction: Dict[str, Any],
+        provider_data: Optional[Dict[str, Any]] = None,
+        provider_subscription_id: Optional[str] = None,
+        provider_customer_id: Optional[str] = None,
+        provider_email_token: Optional[str] = None,
+        period_start: Optional[datetime] = None,
+        period_end: Optional[datetime] = None,
+    ) -> bool:
+        updated = connection.execute(
+            """UPDATE billing_transactions
+               SET status = 'paid', paid_at = COALESCE(paid_at, now())
+               WHERE id = %s AND status <> 'paid'
+               RETURNING id, user_id, subscription_id, dating_product_id, order_id, transaction_type""",
+            (transaction["id"],),
+        ).fetchone()
+        if not updated:
+            return False
+        if updated["transaction_type"] == "subscription":
+            period_start = period_start or datetime.now(timezone.utc)
+            period_end = period_end or period_start + timedelta(days=30)
+            connection.execute(
+                """UPDATE billing_subscriptions
+                   SET status = 'active',
+                       provider_subscription_id = COALESCE(%s, provider_subscription_id),
+                       provider_customer_id = COALESCE(%s, provider_customer_id),
+                       provider_email_token = COALESCE(%s, provider_email_token),
+                       current_period_start = %s,
+                       current_period_end = %s,
+                       updated_at = now()
+                   WHERE id = %s""",
+                (
+                    provider_subscription_id,
+                    provider_customer_id,
+                    provider_email_token,
+                    period_start,
+                    period_end,
+                    updated["subscription_id"],
+                ),
+            )
+        elif updated["dating_product_id"]:
+            product = connection.execute(
+                """SELECT quantity, duration_hours, code
+                   FROM dating_billing_products WHERE id = %s""",
+                (updated["dating_product_id"],),
+            ).fetchone()
+            if not product:
+                raise ApiError(500, "billing_configuration_error", "The purchased dating add-on is unavailable.")
+            expires_at = (
+                datetime.now(timezone.utc) + timedelta(hours=int(product["duration_hours"]))
+                if int(product["duration_hours"]) > 0
+                else None
+            )
+            connection.execute(
+                """INSERT INTO dating_entitlements
+                       (user_id, product_id, transaction_id, quantity_remaining,
+                        starts_at, expires_at)
+                   VALUES (%s, %s, %s, %s, now(), %s)""",
+                (
+                    updated["user_id"],
+                    updated["dating_product_id"],
+                    updated["id"],
+                    int(product["quantity"]) if product["code"] == "extra_likes" else 0,
+                    expires_at,
+                ),
+            )
+        elif updated["order_id"]:
+            order = connection.execute(
+                """UPDATE marketplace_orders
+                   SET status = 'paid', paid_at = COALESCE(paid_at, now())
+                   WHERE id = %s AND status = 'pending'""",
+                (updated["order_id"],),
+            ).fetchone()
+            if not order:
+                reserved = connection.execute(
+                    """UPDATE marketplace_products product
+                       SET stock = product.stock - order_row.quantity
+                       FROM marketplace_orders order_row
+                       WHERE order_row.id = %s
+                         AND order_row.status IN ('expired', 'payment_failed')
+                         AND product.id = order_row.product_id
+                         AND product.stock >= order_row.quantity
+                       RETURNING order_row.id""",
+                    (updated["order_id"],),
+                ).fetchone()
+                if reserved:
+                    connection.execute(
+                        """UPDATE marketplace_orders
+                           SET status = 'paid', paid_at = COALESCE(paid_at, now())
+                           WHERE id = %s AND status IN ('expired', 'payment_failed')""",
+                        (updated["order_id"],),
+                    )
+                else:
+                    connection.execute(
+                        """UPDATE marketplace_orders
+                           SET status = 'refund_required'
+                           WHERE id = %s AND status IN ('expired', 'payment_failed')""",
+                        (updated["order_id"],),
+                    )
+        return True
+
+    def release_expired_marketplace_orders(connection: Any) -> None:
+        connection.execute(
+            """WITH expired AS (
+                   UPDATE marketplace_orders
+                   SET status = 'expired'
+                   WHERE status = 'pending' AND expires_at <= now()
+                   RETURNING product_id, quantity
+               ),
+               released AS (
+                   SELECT product_id, sum(quantity)::integer AS quantity
+                   FROM expired GROUP BY product_id
+               )
+               UPDATE marketplace_products product
+               SET stock = product.stock + released.quantity
+               FROM released
+               WHERE product.id = released.product_id"""
+        )
+
+    def fail_marketplace_transaction(
+        connection: Any,
+        transaction_id: Any,
+        status: str = "payment_failed",
+    ) -> None:
+        transaction = connection.execute(
+            """UPDATE billing_transactions
+               SET status = 'failed'
+               WHERE id = %s AND status = 'pending'
+               RETURNING order_id""",
+            (transaction_id,),
+        ).fetchone()
+        if not transaction or not transaction.get("order_id"):
+            return
+        order = connection.execute(
+            """UPDATE marketplace_orders
+               SET status = %s
+               WHERE id = %s AND status = 'pending'
+               RETURNING product_id, quantity""",
+            (status, transaction["order_id"]),
+        ).fetchone()
+        if order:
+            connection.execute(
+                "UPDATE marketplace_products SET stock = stock + %s WHERE id = %s",
+                (order["quantity"], order["product_id"]),
+            )
+
+    @app.get("/api/billing/catalog")
+    def get_billing_catalog(request: Request) -> Dict[str, Any]:
+        require_user(request)
+        with database.connection() as connection:
+            plans = connection.execute(
+                """SELECT id, name, currency, amount_minor, posting_limits, active
+                   FROM subscription_plans WHERE active
+                   ORDER BY currency, amount_minor, name"""
+            ).fetchall()
+            products = connection.execute(
+                """SELECT id, code, name, currency, amount_minor, quantity,
+                          duration_hours
+                   FROM dating_billing_products
+                   WHERE active AND amount_minor > 0
+                   ORDER BY currency, code, amount_minor"""
+            ).fetchall()
+        return {
+            "plans": [public_billing_plan(plan) for plan in plans],
+            "datingProducts": [{
+                "id": str(product["id"]),
+                "code": product["code"],
+                "name": product["name"],
+                "currency": product["currency"],
+                "amountMinor": int(product["amount_minor"]),
+                "quantity": int(product["quantity"]),
+                "durationHours": int(product["duration_hours"]),
+            } for product in products],
+        }
+
+    @app.get("/api/billing/me")
+    def get_member_billing(request: Request) -> Dict[str, Any]:
+        user = require_user(request)
+        categories = ("jobs", "products", "marketplace", "videos")
+        with database.connection() as connection:
+            subscription = connection.execute(
+                """SELECT subscription.id, subscription.status, subscription.currency,
+                          subscription.amount_minor, subscription.current_period_start,
+                          subscription.current_period_end, subscription.cancel_at_period_end,
+                          plan.id AS plan_id, plan.name, plan.posting_limits
+                   FROM billing_subscriptions subscription
+                   JOIN subscription_plans plan ON plan.id = subscription.plan_id
+                   WHERE subscription.user_id = %s
+                     AND subscription.status IN ('active', 'past_due')
+                     AND (subscription.current_period_end IS NULL
+                          OR subscription.current_period_end > now())
+                   ORDER BY subscription.created_at DESC
+                   LIMIT 1""",
+                (user["id"],),
+            ).fetchone()
+            quota_state = {
+                category: posting_quota_snapshot(connection, user["id"], category)
+                for category in categories
+            }
+            settings_row = connection.execute(
+                """SELECT free_daily_dating_likes
+                   FROM posting_quota_settings WHERE id = 1"""
+            ).fetchone()
+            likes = connection.execute(
+                """SELECT count(*) AS used
+                   FROM dating_swipes
+                   WHERE user_id = %s AND liked
+                     AND created_at >= (date_trunc('day', now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC')""",
+                (user["id"],),
+            ).fetchone()
+            credits = connection.execute(
+                """SELECT COALESCE(sum(quantity_remaining), 0) AS remaining
+                   FROM dating_entitlements
+                   JOIN dating_billing_products product ON product.id = dating_entitlements.product_id
+                   WHERE user_id = %s AND product.code = 'extra_likes'
+                     AND quantity_remaining > 0
+                     AND (expires_at IS NULL OR expires_at > now())""",
+                (user["id"],),
+            ).fetchone()
+            boosts = connection.execute(
+                """SELECT EXISTS (
+                       SELECT 1 FROM dating_entitlements
+                       JOIN dating_billing_products product ON product.id = dating_entitlements.product_id
+                       WHERE user_id = %s AND product.code = 'profile_boost'
+                         AND expires_at > now()
+                   ) AS active""",
+                (user["id"],),
+            ).fetchone()
+        limits = subscription.get("posting_limits") if subscription else None
+        if isinstance(limits, str):
+            limits = json.loads(limits)
+        return {
+            "subscription": ({
+                "id": str(subscription["id"]),
+                "planId": str(subscription["plan_id"]),
+                "name": subscription["name"],
+                "status": subscription["status"],
+                "currency": subscription["currency"],
+                "amountMinor": int(subscription["amount_minor"]),
+                "currentPeriodStart": (
+                    subscription["current_period_start"].isoformat()
+                    if subscription["current_period_start"] else None
+                ),
+                "currentPeriodEnd": (
+                    subscription["current_period_end"].isoformat()
+                    if subscription["current_period_end"] else None
+                ),
+                "cancelAtPeriodEnd": bool(subscription["cancel_at_period_end"]),
+            } if subscription else None),
+            "postingQuotas": quota_state,
+            "dating": {
+                "freeLikesPerDay": int(settings_row["free_daily_dating_likes"]) if settings_row else 0,
+                "likesUsedToday": int(likes["used"]) if likes else 0,
+                "extraLikesRemaining": int(credits["remaining"]) if credits else 0,
+                "profileBoostActive": bool(boosts["active"]) if boosts else False,
+            },
+            "planLimits": limits,
+        }
+
+    @app.post("/api/billing/checkout", status_code=201)
+    def create_billing_checkout(
+        input: BillingCheckoutInput,
+        request: Request,
+    ) -> Dict[str, str]:
+        user = require_user(request)
+        plan = None
+        product = None
+        if input.plan_id:
+            with database.connection() as connection:
+                plan = connection.execute(
+                    """SELECT id, name, currency, amount_minor, posting_limits,
+                              paystack_plan_code
+                       FROM subscription_plans WHERE id = %s AND active""",
+                    (input.plan_id,),
+                ).fetchone()
+                active = connection.execute(
+                    """SELECT id FROM billing_subscriptions
+                       WHERE user_id = %s AND status IN ('active', 'past_due')
+                         AND (current_period_end IS NULL OR current_period_end > now())
+                       LIMIT 1""",
+                    (user["id"],),
+                ).fetchone()
+            if not plan:
+                raise ApiError(404, "billing_plan_not_found", "That publisher plan is not available.")
+            if active:
+                raise ApiError(409, "subscription_already_active", "You already have an active publisher plan.")
+            transaction_type = "subscription"
+        else:
+            with database.connection() as connection:
+                product = connection.execute(
+                    """SELECT id, code, name, currency, amount_minor, quantity,
+                              duration_hours
+                       FROM dating_billing_products
+                       WHERE id = %s AND active AND amount_minor > 0""",
+                    (input.dating_product_id,),
+                ).fetchone()
+            if not product:
+                raise ApiError(404, "dating_product_not_found", "That dating add-on is not available.")
+            transaction_type = "dating_boost" if product["code"] == "profile_boost" else "dating_likes"
+
+        provider = "paystack" if (plan or product)["currency"] == "NGN" else "stripe"
+        secret_key = settings.paystack_secret_key if provider == "paystack" else settings.stripe_secret_key
+        if not secret_key:
+            raise ApiError(
+                503,
+                "payment_provider_not_configured",
+                "{} checkout is not configured on this server yet.".format(
+                    "Paystack" if provider == "paystack" else "Stripe",
+                ),
+            )
+        reference = "ic_" + uuid4().hex
+        item = plan or product
+        with database.connection() as connection:
+            subscription_id = None
+            if plan:
+                subscription = connection.execute(
+                    """INSERT INTO billing_subscriptions
+                           (user_id, plan_id, provider, currency, amount_minor)
+                       VALUES (%s, %s, %s, %s, %s)
+                       RETURNING id""",
+                    (user["id"], plan["id"], provider, plan["currency"], plan["amount_minor"]),
+                ).fetchone()
+                subscription_id = subscription["id"]
+            inserted = connection.execute(
+                """INSERT INTO billing_transactions
+                       (user_id, subscription_id, plan_id, dating_product_id,
+                        provider, provider_reference, transaction_type, currency, amount_minor)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                   RETURNING id""",
+                (
+                    user["id"],
+                    subscription_id,
+                    plan["id"] if plan else None,
+                    product["id"] if product else None,
+                    provider,
+                    reference,
+                    transaction_type,
+                    item["currency"],
+                    item["amount_minor"],
+                ),
+            ).fetchone()
+
+        app_billing_url = settings.app_origin + "/app/billing"
+        try:
+            if provider == "paystack":
+                plan_code = plan.get("paystack_plan_code") if plan else None
+                if plan and not plan_code:
+                    provider_plan = provider_request(
+                        provider,
+                        secret_key,
+                        "/plan",
+                        {
+                            "name": "iConnect {} {}".format(plan["name"], str(plan["id"])[:8]),
+                            "interval": "monthly",
+                            "amount": int(plan["amount_minor"]),
+                            "currency": "NGN",
+                        },
+                    )
+                    plan_data = provider_plan.get("data") or {}
+                    plan_code = plan_data.get("plan_code") if isinstance(plan_data, dict) else None
+                    if not plan_code:
+                        raise BillingProviderError()
+                    with database.connection() as connection:
+                        connection.execute(
+                            "UPDATE subscription_plans SET paystack_plan_code = %s WHERE id = %s",
+                            (plan_code, plan["id"]),
+                        )
+                        connection.execute(
+                            "UPDATE billing_transactions SET provider_plan_code = %s WHERE id = %s",
+                            (plan_code, inserted["id"]),
+                        )
+                checkout_payload = {
+                    "email": user["email"],
+                    "amount": int(item["amount_minor"]),
+                    "currency": item["currency"],
+                    "reference": reference,
+                    "callback_url": app_billing_url + "?reference=" + reference,
+                    "metadata": {
+                        "transaction_id": str(inserted["id"]),
+                        "user_id": str(user["id"]),
+                    },
+                }
+                if plan_code:
+                    checkout_payload["plan"] = plan_code
+                result = provider_request(
+                    provider,
+                    secret_key,
+                    "/transaction/initialize",
+                    checkout_payload,
+                )
+                data = result.get("data") or {}
+                checkout_url = data.get("authorization_url") if isinstance(data, dict) else None
+            else:
+                mode = "subscription" if plan else "payment"
+                payload = {
+                    "mode": mode,
+                    "success_url": app_billing_url + "?status=success&reference={CHECKOUT_SESSION_ID}",
+                    "cancel_url": app_billing_url + "?status=cancelled",
+                    "customer_email": user["email"],
+                    "client_reference_id": reference,
+                    "metadata[transaction_id]": str(inserted["id"]),
+                    "line_items[0][price_data][currency]": "usd",
+                    "line_items[0][price_data][unit_amount]": str(int(item["amount_minor"])),
+                    "line_items[0][price_data][product_data][name]": item["name"],
+                    "line_items[0][quantity]": "1",
+                }
+                if plan:
+                    payload["line_items[0][price_data][recurring][interval]"] = "month"
+                    payload["subscription_data[metadata][transaction_id]"] = str(inserted["id"])
+                else:
+                    payload["payment_intent_data[metadata][transaction_id]"] = str(inserted["id"])
+                result = provider_request(
+                    provider,
+                    secret_key,
+                    "/v1/checkout/sessions",
+                    payload,
+                )
+                checkout_url = result.get("url")
+                reference = result.get("id") or reference
+                if result.get("id"):
+                    with database.connection() as connection:
+                        connection.execute(
+                            """UPDATE billing_transactions SET provider_reference = %s
+                               WHERE id = %s""",
+                            (reference, inserted["id"]),
+                        )
+        except BillingProviderError as error:
+            logger.warning("%s checkout initialization failed (HTTP %s)", provider, error.status_code)
+            with database.connection() as connection:
+                connection.execute(
+                    "UPDATE billing_transactions SET status = 'failed' WHERE id = %s",
+                    (inserted["id"],),
+                )
+                if subscription_id:
+                    connection.execute(
+                        "UPDATE billing_subscriptions SET status = 'cancelled', updated_at = now() WHERE id = %s",
+                        (subscription_id,),
+                    )
+            raise ApiError(
+                502,
+                "checkout_initialization_failed",
+                "The payment provider could not start checkout. Please try again.",
+            ) from error
+        if not isinstance(checkout_url, str) or not checkout_url.startswith("https://"):
+            raise ApiError(
+                502,
+                "checkout_initialization_failed",
+                "The payment provider returned an invalid checkout link.",
+            )
+        return {"checkoutUrl": checkout_url, "reference": reference, "provider": provider}
+
+    @app.post("/api/billing/confirm")
+    def confirm_billing_payment(
+        input: BillingConfirmInput,
+        request: Request,
+    ) -> Dict[str, Any]:
+        user = require_user(request)
+        with database.connection() as connection:
+            transaction = connection.execute(
+                """SELECT id, user_id, subscription_id, dating_product_id,
+                          provider, provider_reference, transaction_type, currency,
+                          amount_minor, status
+                   FROM billing_transactions
+                   WHERE user_id = %s AND provider_reference = %s""",
+                (user["id"], input.reference),
+            ).fetchone()
+        if not transaction:
+            raise ApiError(404, "payment_not_found", "That payment could not be found.")
+        if transaction["status"] == "paid":
+            return {"status": "paid"}
+        provider = transaction["provider"]
+        secret_key = settings.paystack_secret_key if provider == "paystack" else settings.stripe_secret_key
+        path = (
+            "/transaction/verify/" + urllib.parse.quote(input.reference, safe="")
+            if provider == "paystack"
+            else "/v1/checkout/sessions/" + urllib.parse.quote(input.reference, safe="")
+        )
+        verification = verify_billing_provider(provider, secret_key, path)
+        data = verification.get("data") if provider == "paystack" else verification
+        if not isinstance(data, dict):
+            raise ApiError(502, "payment_verification_failed", "The payment provider returned an invalid payment.")
+        if provider == "paystack":
+            paid = data.get("status") == "success"
+            verified_amount = data.get("amount")
+            verified_currency = data.get("currency")
+            provider_subscription_id = (
+                (data.get("subscription") or {}).get("subscription_code")
+                if isinstance(data.get("subscription"), dict)
+                else None
+            )
+            provider_customer_id = (
+                (data.get("customer") or {}).get("customer_code")
+                if isinstance(data.get("customer"), dict)
+                else None
+            )
+        else:
+            paid = data.get("payment_status") == "paid"
+            verified_amount = data.get("amount_total")
+            verified_currency = str(data.get("currency") or "").upper()
+            provider_subscription_id = data.get("subscription")
+            provider_customer_id = data.get("customer")
+        if (
+            not paid
+            or int(verified_amount or -1) != int(transaction["amount_minor"])
+            or str(verified_currency or "").upper() != transaction["currency"]
+        ):
+            raise ApiError(409, "payment_not_completed", "Payment is not confirmed yet. If you paid, wait and refresh.")
+        period_start = period_end = None
+        if provider == "stripe" and provider_subscription_id:
+            subscription_data = verify_billing_provider(
+                provider,
+                secret_key,
+                "/v1/subscriptions/" + urllib.parse.quote(str(provider_subscription_id), safe=""),
+            )
+            period_start = parse_provider_datetime(subscription_data.get("current_period_start"))
+            period_end = parse_provider_datetime(subscription_data.get("current_period_end"))
+        with database.connection() as connection:
+            activate_billing_transaction(
+                connection,
+                transaction,
+                data,
+                str(provider_subscription_id) if provider_subscription_id else None,
+                str(provider_customer_id) if provider_customer_id else None,
+                period_start=period_start,
+                period_end=period_end,
+            )
+        return {"status": "paid"}
+
+    @app.post("/api/billing/subscription/cancel")
+    def cancel_billing_subscription(request: Request) -> Dict[str, Any]:
+        user = require_user(request)
+        with database.connection() as connection:
+            subscription = connection.execute(
+                """SELECT id, provider, provider_subscription_id,
+                          provider_email_token, current_period_end
+                   FROM billing_subscriptions
+                   WHERE user_id = %s AND status IN ('active', 'past_due')
+                     AND (current_period_end IS NULL OR current_period_end > now())
+                   ORDER BY created_at DESC LIMIT 1""",
+                (user["id"],),
+            ).fetchone()
+        if not subscription:
+            raise ApiError(404, "subscription_not_found", "You do not have an active publisher plan.")
+        provider = subscription["provider"]
+        secret_key = settings.paystack_secret_key if provider == "paystack" else settings.stripe_secret_key
+        provider_id = subscription["provider_subscription_id"]
+        if not provider_id:
+            raise ApiError(
+                409,
+                "subscription_not_ready",
+                "The provider is still confirming your subscription. Try again shortly.",
+            )
+        if provider == "stripe":
+            try:
+                result = provider_request(
+                    provider,
+                    secret_key,
+                    "/v1/subscriptions/" + urllib.parse.quote(str(provider_id), safe=""),
+                    {"cancel_at_period_end": "true"},
+                )
+            except BillingProviderError as error:
+                logger.warning("Stripe subscription cancellation failed (HTTP %s)", error.status_code)
+                raise ApiError(
+                    502,
+                    "subscription_cancel_failed",
+                    "Stripe could not schedule subscription cancellation.",
+                ) from error
+            if not isinstance(result, dict) or result.get("cancel_at_period_end") is not True:
+                raise ApiError(502, "subscription_cancel_failed", "The payment provider could not schedule cancellation.")
+            with database.connection() as connection:
+                connection.execute(
+                    """UPDATE billing_subscriptions
+                       SET cancel_at_period_end = true, updated_at = now()
+                       WHERE id = %s""",
+                    (subscription["id"],),
+                )
+            return {
+                "cancelAtPeriodEnd": True,
+                "currentPeriodEnd": (
+                    subscription["current_period_end"].isoformat()
+                    if subscription["current_period_end"] else None
+                ),
+            }
+        if not subscription["provider_email_token"]:
+            raise ApiError(
+                409,
+                "subscription_cancel_unavailable",
+                "Paystack has not sent the cancellation token yet. Contact support if this continues.",
+            )
+        try:
+            provider_request(
+                provider,
+                secret_key,
+                "/subscription/disable",
+                {
+                    "code": str(provider_id),
+                    "token": subscription["provider_email_token"],
+                },
+            )
+        except BillingProviderError as error:
+            logger.warning("Paystack subscription cancellation failed (HTTP %s)", error.status_code)
+            raise ApiError(502, "subscription_cancel_failed", "Paystack could not cancel this subscription.") from error
+        with database.connection() as connection:
+            connection.execute(
+                """UPDATE billing_subscriptions
+                   SET cancel_at_period_end = true, updated_at = now()
+                   WHERE id = %s""",
+                (subscription["id"],),
+            )
+        return {
+            "cancelAtPeriodEnd": True,
+            "currentPeriodEnd": (
+                subscription["current_period_end"].isoformat()
+                if subscription["current_period_end"] else None
+            ),
+        }
+
+    def process_stripe_event(event: Dict[str, Any]) -> None:
+        event_type = event.get("type")
+        event_object = (event.get("data") or {}).get("object")
+        if not isinstance(event_object, dict):
+            raise ApiError(400, "invalid_webhook", "The payment event is invalid.")
+        with database.connection() as connection:
+            event_row = connection.execute(
+                """INSERT INTO billing_webhook_events (provider, event_id)
+                   VALUES ('stripe', %s)
+                   ON CONFLICT DO NOTHING
+                   RETURNING event_id""",
+                (str(event.get("id") or ""),),
+            ).fetchone()
+            if not event_row:
+                return
+
+            if event_type in {
+                "checkout.session.completed",
+                "checkout.session.async_payment_succeeded",
+            }:
+                metadata = event_object.get("metadata") or {}
+                transaction_id = metadata.get("transaction_id") if isinstance(metadata, dict) else None
+                transaction = connection.execute(
+                    """SELECT id, user_id, subscription_id, dating_product_id,
+                              provider, provider_reference, transaction_type, currency,
+                              amount_minor, status
+                       FROM billing_transactions WHERE id = %s AND provider = 'stripe'""",
+                    (transaction_id,),
+                ).fetchone() if transaction_id else None
+                if (
+                    transaction
+                    and event_object.get("payment_status") == "paid"
+                    and int(event_object.get("amount_total") or -1) == int(transaction["amount_minor"])
+                    and str(event_object.get("currency") or "").upper() == transaction["currency"]
+                ):
+                    activate_billing_transaction(
+                        connection,
+                        transaction,
+                        event_object,
+                        str(event_object["subscription"]) if event_object.get("subscription") else None,
+                        str(event_object["customer"]) if event_object.get("customer") else None,
+                    )
+            elif event_type in {
+                "checkout.session.expired",
+                "checkout.session.async_payment_failed",
+                "payment_intent.payment_failed",
+            }:
+                metadata = event_object.get("metadata") or {}
+                transaction_id = metadata.get("transaction_id") if isinstance(metadata, dict) else None
+                transaction = connection.execute(
+                    """SELECT id, transaction_type FROM billing_transactions
+                       WHERE id = %s AND provider = 'stripe'""",
+                    (transaction_id,),
+                ).fetchone() if transaction_id else None
+                if transaction and transaction["transaction_type"] == "marketplace_order":
+                    fail_marketplace_transaction(connection, transaction["id"])
+            elif event_type in {"invoice.paid", "invoice.payment_succeeded"}:
+                subscription_id = event_object.get("subscription")
+                if not subscription_id and isinstance(event_object.get("parent"), dict):
+                    details = event_object["parent"].get("subscription_details")
+                    if isinstance(details, dict):
+                        subscription_id = details.get("subscription")
+                subscription = connection.execute(
+                    """SELECT id, user_id, plan_id, currency
+                       FROM billing_subscriptions
+                       WHERE provider = 'stripe' AND provider_subscription_id = %s""",
+                    (str(subscription_id),),
+                ).fetchone() if subscription_id else None
+                if subscription:
+                    amount = int(event_object.get("amount_paid") or 0)
+                    invoice_id = str(event_object.get("id") or "")
+                    currency = str(event_object.get("currency") or subscription["currency"]).upper()
+                    if amount > 0 and invoice_id and currency == subscription["currency"]:
+                        connection.execute(
+                            """INSERT INTO billing_transactions
+                                   (user_id, subscription_id, plan_id, provider,
+                                    provider_reference, transaction_type, currency,
+                                    amount_minor, status, paid_at)
+                               VALUES (%s, %s, %s, 'stripe', %s, 'subscription',
+                                       %s, %s, 'paid', now())
+                               ON CONFLICT (provider, provider_reference) DO NOTHING""",
+                            (
+                                subscription["user_id"], subscription["id"], subscription["plan_id"],
+                                invoice_id, currency, amount,
+                            ),
+                        )
+                    lines = event_object.get("lines") or {}
+                    data_lines = lines.get("data") if isinstance(lines, dict) else []
+                    line_period = data_lines[0].get("period") if data_lines and isinstance(data_lines[0], dict) else {}
+                    period_start = parse_provider_datetime(line_period.get("start")) if isinstance(line_period, dict) else None
+                    period_end = parse_provider_datetime(line_period.get("end")) if isinstance(line_period, dict) else None
+                    connection.execute(
+                        """UPDATE billing_subscriptions
+                           SET status = 'active',
+                               current_period_start = COALESCE(%s, current_period_start),
+                               current_period_end = COALESCE(%s, current_period_end),
+                               updated_at = now()
+                           WHERE id = %s""",
+                        (period_start, period_end, subscription["id"]),
+                    )
+            elif event_type == "invoice.payment_failed":
+                subscription_id = event_object.get("subscription")
+                if not subscription_id and isinstance(event_object.get("parent"), dict):
+                    details = event_object["parent"].get("subscription_details")
+                    if isinstance(details, dict):
+                        subscription_id = details.get("subscription")
+                if subscription_id:
+                    connection.execute(
+                        """UPDATE billing_subscriptions SET status = 'past_due', updated_at = now()
+                           WHERE provider = 'stripe' AND provider_subscription_id = %s
+                             AND status <> 'cancelled'""",
+                        (str(subscription_id),),
+                    )
+            elif event_type in {"customer.subscription.updated", "customer.subscription.deleted"}:
+                provider_subscription_id = event_object.get("id")
+                status = (
+                    "cancelled" if event_type == "customer.subscription.deleted"
+                    or event_object.get("status") in {"canceled", "incomplete_expired"}
+                    else "past_due" if event_object.get("status") == "past_due"
+                    else "active" if event_object.get("status") in {"active", "trialing"}
+                    else "pending"
+                )
+                connection.execute(
+                    """UPDATE billing_subscriptions
+                       SET status = %s,
+                           cancel_at_period_end = %s,
+                           current_period_start = COALESCE(%s, current_period_start),
+                           current_period_end = COALESCE(%s, current_period_end),
+                           updated_at = now()
+                       WHERE provider = 'stripe' AND provider_subscription_id = %s""",
+                    (
+                        status,
+                        bool(event_object.get("cancel_at_period_end")),
+                        parse_provider_datetime(event_object.get("current_period_start")),
+                        parse_provider_datetime(event_object.get("current_period_end")),
+                        str(provider_subscription_id),
+                    ),
+                )
+
+    def process_paystack_event(event: Dict[str, Any]) -> None:
+        event_type = event.get("event")
+        data = event.get("data")
+        if not isinstance(data, dict):
+            raise ApiError(400, "invalid_webhook", "The payment event is invalid.")
+        with database.connection() as connection:
+            event_row = connection.execute(
+                """INSERT INTO billing_webhook_events (provider, event_id)
+                   VALUES ('paystack', %s)
+                   ON CONFLICT DO NOTHING
+                   RETURNING event_id""",
+                (str(data.get("id") or data.get("reference") or uuid4()),),
+            ).fetchone()
+            if not event_row:
+                return
+
+            if event_type in {"charge.success", "charge.failed"}:
+                reference = str(data.get("reference") or "")
+                transaction = connection.execute(
+                    """SELECT id, user_id, subscription_id, dating_product_id,
+                              provider, provider_reference, transaction_type, currency,
+                              amount_minor, status
+                       FROM billing_transactions
+                       WHERE provider = 'paystack' AND provider_reference = %s""",
+                    (reference,),
+                ).fetchone()
+                if event_type == "charge.failed":
+                    if transaction and transaction["transaction_type"] == "marketplace_order":
+                        fail_marketplace_transaction(connection, transaction["id"])
+                    return
+                subscription_data = data.get("subscription")
+                subscription_data = subscription_data if isinstance(subscription_data, dict) else {}
+                plan_data = data.get("plan")
+                plan_data = plan_data if isinstance(plan_data, dict) else {}
+                subscription_code = (
+                    subscription_data.get("subscription_code")
+                    or data.get("subscription_code")
+                )
+                customer_data = data.get("customer")
+                customer_data = customer_data if isinstance(customer_data, dict) else {}
+                if transaction:
+                    if (
+                        data.get("status") == "success"
+                        and int(data.get("amount") or -1) == int(transaction["amount_minor"])
+                        and str(data.get("currency") or "").upper() == transaction["currency"]
+                    ):
+                        activate_billing_transaction(
+                            connection,
+                            transaction,
+                            data,
+                            str(subscription_code) if subscription_code else None,
+                            str(customer_data.get("customer_code")) if customer_data.get("customer_code") else None,
+                        )
+                elif subscription_code:
+                    subscription = connection.execute(
+                        """SELECT id, user_id, plan_id, currency
+                           FROM billing_subscriptions
+                           WHERE provider = 'paystack' AND provider_subscription_id = %s""",
+                        (str(subscription_code),),
+                    ).fetchone()
+                    if subscription and int(data.get("amount") or 0) > 0:
+                        transaction_reference = reference or "paystack_" + str(data.get("id") or uuid4())
+                        connection.execute(
+                            """INSERT INTO billing_transactions
+                                   (user_id, subscription_id, plan_id, provider,
+                                    provider_reference, transaction_type, currency,
+                                    amount_minor, status, paid_at)
+                               VALUES (%s, %s, %s, 'paystack', %s, 'subscription',
+                                       %s, %s, 'paid', now())
+                               ON CONFLICT (provider, provider_reference) DO NOTHING""",
+                            (
+                                subscription["user_id"], subscription["id"], subscription["plan_id"],
+                                transaction_reference, subscription["currency"], int(data["amount"]),
+                            ),
+                        )
+                        connection.execute(
+                            """UPDATE billing_subscriptions
+                               SET status = 'active',
+                                   current_period_start = now(),
+                                   current_period_end = COALESCE(%s, now() + interval '30 days'),
+                                   updated_at = now()
+                               WHERE id = %s""",
+                            (
+                                parse_provider_datetime(subscription_data.get("next_payment_date")),
+                                subscription["id"],
+                            ),
+                        )
+            elif event_type == "subscription.create":
+                subscription_code = data.get("subscription_code")
+                plan_data = data.get("plan") if isinstance(data.get("plan"), dict) else {}
+                plan_code = plan_data.get("plan_code")
+                customer_data = data.get("customer") if isinstance(data.get("customer"), dict) else {}
+                customer_email = customer_data.get("email")
+                if subscription_code and plan_code and customer_email:
+                    pending = connection.execute(
+                        """SELECT subscription.id, subscription.user_id
+                           FROM billing_subscriptions subscription
+                           JOIN billing_transactions transaction
+                             ON transaction.subscription_id = subscription.id
+                           JOIN users ON users.id = subscription.user_id
+                           WHERE subscription.provider = 'paystack'
+                             AND transaction.provider_plan_code = %s
+                             AND lower(users.email) = lower(%s)
+                           ORDER BY transaction.created_at DESC LIMIT 1""",
+                        (str(plan_code), str(customer_email)),
+                    ).fetchone()
+                    if pending:
+                        connection.execute(
+                            """UPDATE billing_subscriptions
+                               SET provider_subscription_id = %s,
+                                   provider_customer_id = %s,
+                                   provider_email_token = %s,
+                                   current_period_start = COALESCE(%s, now()),
+                                   current_period_end = COALESCE(%s, now() + interval '30 days'),
+                                   updated_at = now()
+                               WHERE id = %s""",
+                            (
+                                str(subscription_code),
+                                str(customer_data.get("customer_code")) if customer_data.get("customer_code") else None,
+                                str(data.get("email_token")) if data.get("email_token") else None,
+                                parse_provider_datetime(data.get("createdAt")),
+                                parse_provider_datetime(data.get("next_payment_date")),
+                                pending["id"],
+                            ),
+                        )
+            elif event_type in {"invoice.payment_failed", "invoice.update"}:
+                subscription_data = data.get("subscription")
+                subscription_data = subscription_data if isinstance(subscription_data, dict) else {}
+                subscription_code = subscription_data.get("subscription_code") or data.get("subscription_code")
+                if subscription_code:
+                    if event_type == "invoice.payment_failed":
+                        connection.execute(
+                            """UPDATE billing_subscriptions SET status = 'past_due', updated_at = now()
+                               WHERE provider = 'paystack' AND provider_subscription_id = %s""",
+                            (str(subscription_code),),
+                        )
+                    elif data.get("status") in {"success", "paid"}:
+                        connection.execute(
+                            """UPDATE billing_subscriptions
+                               SET status = 'active',
+                                   current_period_start = COALESCE(%s, current_period_start),
+                                   current_period_end = COALESCE(%s, current_period_end),
+                                   updated_at = now()
+                               WHERE provider = 'paystack' AND provider_subscription_id = %s""",
+                            (
+                                parse_provider_datetime(data.get("period_start")),
+                                parse_provider_datetime(data.get("period_end")),
+                                str(subscription_code),
+                            ),
+                        )
+            elif event_type == "subscription.not_renew":
+                code = data.get("subscription_code")
+                if code:
+                    connection.execute(
+                        """UPDATE billing_subscriptions
+                           SET cancel_at_period_end = true, updated_at = now()
+                           WHERE provider = 'paystack' AND provider_subscription_id = %s""",
+                        (str(code),),
+                    )
+            elif event_type == "subscription.disable":
+                code = data.get("subscription_code")
+                if code:
+                    connection.execute(
+                        """UPDATE billing_subscriptions
+                           SET status = 'cancelled', cancel_at_period_end = false, updated_at = now()
+                           WHERE provider = 'paystack' AND provider_subscription_id = %s""",
+                        (str(code),),
+                    )
+
+    @app.post("/api/billing/webhooks/stripe")
+    async def stripe_billing_webhook(request: Request) -> Dict[str, str]:
+        if not settings.stripe_webhook_secret:
+            raise ApiError(503, "webhook_not_configured", "Stripe webhooks are not configured.")
+        payload = await request.body()
+        signature = request.headers.get("stripe-signature", "")
+        if not verify_stripe_signature(payload, signature, settings.stripe_webhook_secret):
+            raise ApiError(400, "invalid_webhook_signature", "The payment signature is invalid.")
+        try:
+            event = json.loads(payload)
+        except (json.JSONDecodeError, UnicodeDecodeError) as error:
+            raise ApiError(400, "invalid_webhook", "The payment event is invalid.") from error
+        if not isinstance(event, dict) or not isinstance(event.get("id"), str):
+            raise ApiError(400, "invalid_webhook", "The payment event is invalid.")
+        process_stripe_event(event)
+        return {"received": "true"}
+
+    @app.post("/api/billing/webhooks/paystack")
+    async def paystack_billing_webhook(request: Request) -> Dict[str, str]:
+        if not settings.paystack_secret_key:
+            raise ApiError(503, "webhook_not_configured", "Paystack webhooks are not configured.")
+        payload = await request.body()
+        signature = request.headers.get("x-paystack-signature", "")
+        if not verify_paystack_signature(payload, signature, settings.paystack_secret_key):
+            raise ApiError(400, "invalid_webhook_signature", "The payment signature is invalid.")
+        try:
+            event = json.loads(payload)
+        except (json.JSONDecodeError, UnicodeDecodeError) as error:
+            raise ApiError(400, "invalid_webhook", "The payment event is invalid.") from error
+        if not isinstance(event, dict) or not isinstance(event.get("event"), str):
+            raise ApiError(400, "invalid_webhook", "The payment event is invalid.")
+        process_paystack_event(event)
+        return {"received": "true"}
+
     def require_livekit() -> None:
         if not (
             settings.livekit_url
@@ -1981,6 +3169,7 @@ def create_app(
                 ).fetchone()
                 if not inserted:
                     raise ApiError(500, "internal_error", "The video could not be published.")
+                record_posting_usage(connection, user["id"], "videos", inserted["id"])
                 row = connection.execute(
                     """SELECT video.id, video.user_id, video.title, video.caption,
                               video.filename, video.content_type, video.file_size, video.created_at,
@@ -2838,6 +4027,262 @@ def create_app(
                 "newJobs7d": int(row["new_jobs_7d"]),
             },
         }
+
+    @app.get("/api/admin/monetization")
+    def get_admin_monetization(
+        _admin: Dict[str, Any] = Depends(require_super_admin),
+    ) -> Dict[str, Any]:
+        with database.connection() as connection:
+            plans = connection.execute(
+                """SELECT id, name, currency, amount_minor, posting_limits, active
+                   FROM subscription_plans ORDER BY currency, amount_minor, name"""
+            ).fetchall()
+            settings_row = connection.execute(
+                """SELECT free_monthly_limits, free_daily_dating_likes,
+                          marketplace_commission_bps
+                   FROM posting_quota_settings WHERE id = 1"""
+            ).fetchone()
+            dating_products = connection.execute(
+                """SELECT id, code, name, currency, amount_minor, quantity,
+                          duration_hours, active
+                   FROM dating_billing_products ORDER BY code, currency"""
+            ).fetchall()
+            revenue = connection.execute(
+                """SELECT currency,
+                          COALESCE(sum(amount_minor) FILTER (
+                              WHERE paid_at >= (date_trunc('month', now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC')
+                          ), 0) AS month_minor,
+                          COALESCE(sum(amount_minor) FILTER (WHERE status = 'paid'), 0) AS all_time_minor,
+                          count(*) FILTER (
+                              WHERE status = 'paid'
+                                AND paid_at >= (date_trunc('month', now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC')
+                          ) AS paid_transactions
+                   FROM billing_transactions
+                   WHERE transaction_type <> 'marketplace_order'
+                   GROUP BY currency ORDER BY currency"""
+            ).fetchall()
+            marketplace_revenue = connection.execute(
+                """SELECT currency,
+                          COALESCE(sum(amount_minor) FILTER (
+                              WHERE paid_at >= (date_trunc('month', now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC')
+                          ), 0) AS month_gross_minor,
+                          COALESCE(sum(marketplace_commission_minor) FILTER (
+                              WHERE paid_at >= (date_trunc('month', now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC')
+                          ), 0) AS month_commission_minor,
+                          COALESCE(sum(marketplace_commission_minor), 0) AS all_time_commission_minor,
+                          COALESCE(sum(seller_amount_minor), 0) AS seller_payout_due_minor
+                   FROM marketplace_orders
+                   WHERE status IN ('paid', 'fulfilled')
+                   GROUP BY currency"""
+            ).fetchall()
+            active_subscriptions = connection.execute(
+                """SELECT currency, count(*) AS total
+                   FROM billing_subscriptions
+                   WHERE status = 'active'
+                     AND (current_period_end IS NULL OR current_period_end > now())
+                   GROUP BY currency"""
+            ).fetchall()
+        if not settings_row:
+            raise ApiError(503, "billing_not_configured", "Monetization settings are unavailable.")
+        free_limits = settings_row["free_monthly_limits"]
+        if isinstance(free_limits, str):
+            free_limits = json.loads(free_limits)
+        return {
+            "plans": [public_billing_plan(plan) for plan in plans],
+            "settings": {
+                "freeMonthlyLimits": {
+                    category: int(free_limits.get(category, 0))
+                    for category in ("jobs", "products", "marketplace", "videos")
+                },
+                "freeDailyDatingLikes": int(settings_row["free_daily_dating_likes"]),
+                "marketplaceCommissionBps": int(settings_row["marketplace_commission_bps"]),
+            },
+            "datingProducts": [{
+                "id": str(product["id"]),
+                "code": product["code"],
+                "name": product["name"],
+                "currency": product["currency"],
+                "amountMinor": int(product["amount_minor"]),
+                "quantity": int(product["quantity"]),
+                "durationHours": int(product["duration_hours"]),
+                "active": bool(product["active"]),
+            } for product in dating_products],
+            "revenue": {
+                row["currency"]: {
+                    "thisMonthMinor": int(row["month_minor"]),
+                    "allTimeMinor": int(row["all_time_minor"]),
+                    "paidTransactions": int(row["paid_transactions"]),
+                }
+                for row in revenue
+            },
+            "marketplaceRevenue": {
+                row["currency"]: {
+                    "thisMonthGrossMinor": int(row["month_gross_minor"]),
+                    "thisMonthCommissionMinor": int(row["month_commission_minor"]),
+                    "allTimeCommissionMinor": int(row["all_time_commission_minor"]),
+                    "sellerPayoutDueMinor": int(row["seller_payout_due_minor"]),
+                }
+                for row in marketplace_revenue
+            },
+            "activeSubscriptions": {
+                row["currency"]: int(row["total"])
+                for row in active_subscriptions
+            },
+        }
+
+    @app.post("/api/admin/monetization/plans", status_code=201)
+    def create_admin_subscription_plan(
+        input: SubscriptionPlanInput,
+        request: Request,
+        admin: Dict[str, Any] = Depends(require_super_admin),
+    ) -> Dict[str, Any]:
+        posting_limits = {
+            "jobs": input.jobs_limit,
+            "products": input.products_limit,
+            "marketplace": input.marketplace_limit,
+            "videos": input.videos_limit,
+        }
+        with database.connection() as connection:
+            row = connection.execute(
+                """INSERT INTO subscription_plans
+                       (name, currency, amount_minor, posting_limits, active, created_by)
+                   VALUES (%s, %s, %s, %s::jsonb, %s, %s)
+                   RETURNING id, name, currency, amount_minor, posting_limits, active""",
+                (
+                    input.name, input.currency, input.amount_minor,
+                    json.dumps(posting_limits), input.active, admin["id"],
+                ),
+            ).fetchone()
+            connection.execute(
+                """INSERT INTO admin_audit_log (admin_user_id, action, details)
+                   VALUES (%s, 'update_monetization', %s::jsonb)""",
+                (admin["id"], json.dumps({"action": "create_plan", "plan_id": str(row["id"])})),
+            )
+        return {"plan": public_billing_plan(row)}
+
+    @app.put("/api/admin/monetization/plans/{plan_id}")
+    def update_admin_subscription_plan(
+        plan_id: UUID,
+        input: SubscriptionPlanInput,
+        admin: Dict[str, Any] = Depends(require_super_admin),
+    ) -> Dict[str, Any]:
+        posting_limits = {
+            "jobs": input.jobs_limit,
+            "products": input.products_limit,
+            "marketplace": input.marketplace_limit,
+            "videos": input.videos_limit,
+        }
+        with database.connection() as connection:
+            row = connection.execute(
+                """UPDATE subscription_plans
+                   SET name = %s, currency = %s, amount_minor = %s,
+                       posting_limits = %s::jsonb, active = %s,
+                       paystack_plan_code = NULL, updated_at = now()
+                   WHERE id = %s
+                   RETURNING id, name, currency, amount_minor, posting_limits, active""",
+                (
+                    input.name, input.currency, input.amount_minor,
+                    json.dumps(posting_limits), input.active, plan_id,
+                ),
+            ).fetchone()
+            if not row:
+                raise ApiError(404, "billing_plan_not_found", "That publisher plan could not be found.")
+            connection.execute(
+                """INSERT INTO admin_audit_log (admin_user_id, action, details)
+                   VALUES (%s, 'update_monetization', %s::jsonb)""",
+                (admin["id"], json.dumps({"action": "update_plan", "plan_id": str(plan_id)})),
+            )
+        return {"plan": public_billing_plan(row)}
+
+    @app.put("/api/admin/monetization/settings")
+    def update_admin_monetization_settings(
+        input: PostingQuotaSettingsInput,
+        admin: Dict[str, Any] = Depends(require_super_admin),
+    ) -> Dict[str, Any]:
+        free_limits = {
+            "jobs": input.free_jobs_limit,
+            "products": input.free_products_limit,
+            "marketplace": input.free_marketplace_limit,
+            "videos": input.free_videos_limit,
+        }
+        with database.connection() as connection:
+            row = connection.execute(
+                """UPDATE posting_quota_settings
+                   SET free_monthly_limits = %s::jsonb,
+                       free_daily_dating_likes = %s,
+                       marketplace_commission_bps = %s,
+                       updated_at = now()
+                   WHERE id = 1
+                   RETURNING free_monthly_limits, free_daily_dating_likes,
+                             marketplace_commission_bps""",
+                (
+                    json.dumps(free_limits),
+                    input.free_daily_dating_likes,
+                    input.marketplace_commission_bps,
+                ),
+            ).fetchone()
+            if not row:
+                raise ApiError(503, "billing_not_configured", "Monetization settings are unavailable.")
+            connection.execute(
+                """INSERT INTO admin_audit_log (admin_user_id, action, details)
+                   VALUES (%s, 'update_monetization', %s::jsonb)""",
+                (admin["id"], json.dumps({"action": "update_allowances", **free_limits,
+                                          "free_daily_dating_likes": input.free_daily_dating_likes,
+                                          "marketplace_commission_bps": input.marketplace_commission_bps})),
+            )
+        return {"settings": {
+            "freeMonthlyLimits": free_limits,
+            "freeDailyDatingLikes": input.free_daily_dating_likes,
+            "marketplaceCommissionBps": int(row["marketplace_commission_bps"]),
+        }}
+
+    @app.put("/api/admin/monetization/dating-products/{product_id}")
+    def update_admin_dating_billing_product(
+        product_id: UUID,
+        input: DatingBillingProductInput,
+        admin: Dict[str, Any] = Depends(require_super_admin),
+    ) -> Dict[str, Any]:
+        if input.active and input.amount_minor <= 0:
+            raise ApiError(400, "invalid_dating_product", "Set a price before enabling a dating add-on.")
+        with database.connection() as connection:
+            product = connection.execute(
+                "SELECT code FROM dating_billing_products WHERE id = %s",
+                (product_id,),
+            ).fetchone()
+            if not product:
+                raise ApiError(404, "dating_product_not_found", "That dating add-on could not be found.")
+            if product["code"] == "profile_boost" and input.duration_hours == 0:
+                raise ApiError(400, "invalid_dating_product", "Profile boosts must have a positive duration.")
+            row = connection.execute(
+                """UPDATE dating_billing_products
+                   SET name = %s, amount_minor = %s, quantity = %s,
+                       duration_hours = %s, active = %s, updated_at = now()
+                   WHERE id = %s
+                   RETURNING id, code, name, currency, amount_minor, quantity,
+                             duration_hours, active""",
+                (
+                    input.name, input.amount_minor, input.quantity,
+                    input.duration_hours, input.active, product_id,
+                ),
+            ).fetchone()
+            if not row:
+                raise ApiError(404, "dating_product_not_found", "That dating add-on could not be found.")
+            connection.execute(
+                """INSERT INTO admin_audit_log (admin_user_id, action, details)
+                   VALUES (%s, 'update_monetization', %s::jsonb)""",
+                (admin["id"], json.dumps({"action": "update_dating_product",
+                                          "product_id": str(product_id)})),
+            )
+        return {"datingProduct": {
+            "id": str(row["id"]),
+            "code": row["code"],
+            "name": row["name"],
+            "currency": row["currency"],
+            "amountMinor": int(row["amount_minor"]),
+            "quantity": int(row["quantity"]),
+            "durationHours": int(row["duration_hours"]),
+            "active": bool(row["active"]),
+        }}
 
     @app.get("/api/admin/users")
     def list_admin_users(
@@ -3833,6 +5278,176 @@ def create_app(
         })
         return {"comment": public_social_comment(row)}
 
+    @app.post("/api/marketplace/orders/checkout", status_code=201)
+    def create_marketplace_order_checkout(
+        input: MarketplaceCheckoutInput,
+        request: Request,
+    ) -> Dict[str, str]:
+        buyer = require_user(request)
+        if not settings.paystack_secret_key:
+            raise ApiError(
+                503,
+                "payment_provider_not_configured",
+                "Paystack checkout is not configured on this server yet.",
+            )
+        with database.connection() as connection:
+            release_expired_marketplace_orders(connection)
+            product = connection.execute(
+                """SELECT product.id, product.name, product.price, product.stock,
+                          product.published, product.seller_id, seller.display_name AS seller_name
+                   FROM marketplace_products product
+                   JOIN users seller ON seller.id = product.seller_id
+                   WHERE product.id = %s
+                   FOR UPDATE OF product""",
+                (input.product_id,),
+            ).fetchone()
+            if not product or not product["published"]:
+                raise ApiError(404, "product_not_found", "That product could not be found.")
+            if str(product["seller_id"]) == str(buyer["id"]):
+                raise ApiError(400, "cannot_buy_own_product", "You cannot purchase your own listing.")
+            if input.quantity > int(product["stock"]):
+                raise ApiError(409, "insufficient_stock", "The requested quantity is no longer available.")
+            settings_row = connection.execute(
+                "SELECT marketplace_commission_bps FROM posting_quota_settings WHERE id = 1"
+            ).fetchone()
+            if not settings_row:
+                raise ApiError(503, "billing_not_configured", "Marketplace checkout is unavailable.")
+            amount_minor = int(product["price"]) * 100 * input.quantity
+            commission_minor = (
+                amount_minor * int(settings_row["marketplace_commission_bps"]) + 5000
+            ) // 10000
+            updated_stock = connection.execute(
+                """UPDATE marketplace_products
+                   SET stock = stock - %s
+                   WHERE id = %s AND stock >= %s
+                   RETURNING stock""",
+                (input.quantity, product["id"], input.quantity),
+            ).fetchone()
+            if not updated_stock:
+                raise ApiError(409, "insufficient_stock", "The requested quantity is no longer available.")
+            order = connection.execute(
+                """INSERT INTO marketplace_orders
+                       (buyer_id, seller_id, product_id, product_name, quantity,
+                        unit_price_minor, amount_minor, marketplace_commission_minor,
+                        seller_amount_minor, currency)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, 'NGN')
+                   RETURNING id""",
+                (
+                    buyer["id"],
+                    product["seller_id"],
+                    product["id"],
+                    product["name"],
+                    input.quantity,
+                    int(product["price"]) * 100,
+                    amount_minor,
+                    commission_minor,
+                    amount_minor - commission_minor,
+                ),
+            ).fetchone()
+            if not order:
+                raise ApiError(500, "internal_error", "The marketplace order could not be created.")
+            reference = "ic_order_" + uuid4().hex
+            transaction = connection.execute(
+                """INSERT INTO billing_transactions
+                       (user_id, order_id, provider, provider_reference,
+                        transaction_type, currency, amount_minor)
+                   VALUES (%s, %s, 'paystack', %s, 'marketplace_order', 'NGN', %s)
+                   RETURNING id""",
+                (buyer["id"], order["id"], reference, amount_minor),
+            ).fetchone()
+            if not transaction:
+                raise ApiError(500, "internal_error", "The marketplace payment could not be created.")
+
+        try:
+            result = provider_request(
+                "paystack",
+                settings.paystack_secret_key,
+                "/transaction/initialize",
+                {
+                    "email": buyer["email"],
+                    "amount": amount_minor,
+                    "currency": "NGN",
+                    "reference": reference,
+                    "callback_url": settings.app_origin + "/app/orders?status=success&reference=" + reference,
+                    "metadata": {
+                        "transaction_id": str(transaction["id"]),
+                        "order_id": str(order["id"]),
+                    },
+                },
+            )
+        except BillingProviderError as provider_error:
+            logger.warning("Paystack marketplace checkout failed (HTTP %s)", provider_error.status_code)
+            with database.connection() as connection:
+                fail_marketplace_transaction(connection, transaction["id"])
+            raise ApiError(
+                502,
+                "checkout_initialization_failed",
+                "Paystack could not start checkout. Please try again.",
+            ) from provider_error
+        data = result.get("data") or {}
+        checkout_url = data.get("authorization_url") if isinstance(data, dict) else None
+        if not isinstance(checkout_url, str) or not checkout_url.startswith("https://"):
+            with database.connection() as connection:
+                fail_marketplace_transaction(connection, transaction["id"])
+            raise ApiError(
+                502,
+                "checkout_initialization_failed",
+                "The payment provider returned an invalid checkout link.",
+            )
+        return {
+            "checkoutUrl": checkout_url,
+            "reference": reference,
+            "orderId": str(order["id"]),
+        }
+
+    @app.get("/api/marketplace/orders")
+    def list_marketplace_orders(request: Request) -> Dict[str, Any]:
+        user = require_user(request)
+        with database.connection() as connection:
+            release_expired_marketplace_orders(connection)
+            rows = connection.execute(
+                """SELECT order_row.id, order_row.product_id, order_row.product_name,
+                          order_row.quantity, order_row.unit_price_minor, order_row.amount_minor,
+                          order_row.marketplace_commission_minor, order_row.seller_amount_minor,
+                          order_row.currency, order_row.status, order_row.created_at,
+                          order_row.paid_at, order_row.fulfilled_at,
+                          order_row.buyer_id, buyer.display_name AS buyer_name,
+                          buyer.username AS buyer_username,
+                          order_row.seller_id, seller.display_name AS seller_name,
+                          seller.username AS seller_username
+                   FROM marketplace_orders order_row
+                   JOIN users buyer ON buyer.id = order_row.buyer_id
+                   JOIN users seller ON seller.id = order_row.seller_id
+                   WHERE order_row.buyer_id = %s OR order_row.seller_id = %s
+                   ORDER BY order_row.created_at DESC, order_row.id DESC
+                   LIMIT 100""",
+                (user["id"], user["id"]),
+            ).fetchall()
+        return {"orders": [public_marketplace_order(row, user["id"]) for row in rows]}
+
+    @app.post("/api/marketplace/orders/{order_id}/fulfill")
+    def fulfill_marketplace_order(order_id: UUID, request: Request) -> Dict[str, Any]:
+        seller = require_user(request)
+        with database.connection() as connection:
+            order = connection.execute(
+                """UPDATE marketplace_orders
+                   SET status = 'fulfilled', fulfilled_at = COALESCE(fulfilled_at, now())
+                   WHERE id = %s AND seller_id = %s AND status = 'paid'
+                   RETURNING id""",
+                (order_id, seller["id"]),
+            ).fetchone()
+            if not order:
+                existing = connection.execute(
+                    """SELECT status FROM marketplace_orders
+                       WHERE id = %s AND seller_id = %s""",
+                    (order_id, seller["id"]),
+                ).fetchone()
+                if not existing:
+                    raise ApiError(404, "order_not_found", "That order could not be found.")
+                if existing["status"] != "fulfilled":
+                    raise ApiError(409, "order_not_ready", "Only paid orders can be marked fulfilled.")
+        return {"fulfilled": True}
+
     @app.get("/api/marketplace/products")
     def list_marketplace_products(
         request: Request,
@@ -3908,6 +5523,7 @@ def create_app(
             ).fetchone()
             if not inserted:
                 raise ApiError(500, "internal_error", "The product listing could not be created.")
+            record_posting_usage(connection, user["id"], "products", inserted["id"])
             row = connection.execute(
                 """SELECT p.id, p.name, p.category, p.price, p.stock,
                           p.description, p.image_url, p.image_urls, p.created_at,
@@ -3971,6 +5587,16 @@ def create_app(
     ) -> Dict[str, Any]:
         user = require_user(request)
         with database.connection() as connection:
+            order = connection.execute(
+                "SELECT id FROM marketplace_orders WHERE product_id = %s LIMIT 1",
+                (product_id,),
+            ).fetchone()
+            if order:
+                raise ApiError(
+                    409,
+                    "product_has_orders",
+                    "This product has order history and cannot be deleted. Set its available quantity to zero instead.",
+                )
             deleted = connection.execute(
                 """DELETE FROM marketplace_products
                    WHERE id = %s AND seller_id = %s
@@ -4090,6 +5716,7 @@ def create_app(
             ).fetchone()
             if not inserted:
                 raise ApiError(500, "internal_error", "The listing could not be created.")
+            record_posting_usage(connection, user["id"], "marketplace", inserted["id"])
             row = connection.execute(
                 """SELECT l.id, l.category, l.title, l.price, l.location,
                           l.detail, l.description, l.image_url, l.created_at,
@@ -5066,6 +6693,7 @@ def create_app(
             ).fetchone()
             if not inserted:
                 raise ApiError(500, "internal_error", "The job listing could not be created.")
+            record_posting_usage(connection, user["id"], "jobs", inserted["id"])
             row = job_record(connection, inserted["id"], user["id"])
         if not row:
             raise ApiError(500, "internal_error", "The job listing could not be created.")
@@ -5931,7 +7559,14 @@ def create_app(
                          WHERE (dating_block.blocker_id = %s AND dating_block.blocked_id = profile.user_id)
                             OR (dating_block.blocker_id = profile.user_id AND dating_block.blocked_id = %s)
                      )
-                   ORDER BY profile.updated_at DESC, profile.user_id
+                   ORDER BY EXISTS (
+                       SELECT 1
+                       FROM dating_entitlements entitlement
+                       JOIN dating_billing_products product ON product.id = entitlement.product_id
+                       WHERE entitlement.user_id = profile.user_id
+                         AND product.code = 'profile_boost'
+                         AND entitlement.expires_at > now()
+                   ) DESC, profile.updated_at DESC, profile.user_id
                    LIMIT %s""",
                 (
                     user["id"], own["gender"], own["gender"], own["gender"],
@@ -5993,6 +7628,51 @@ def create_app(
             ).fetchone()
             if blocked:
                 raise ApiError(404, "dating_profile_not_found", "That dating profile could not be found.")
+            if input.liked:
+                previous_swipe = connection.execute(
+                    """SELECT liked FROM dating_swipes
+                       WHERE user_id = %s AND target_user_id = %s""",
+                    (user["id"], target_user_id),
+                ).fetchone()
+                if not previous_swipe or not previous_swipe["liked"]:
+                    quota_settings = connection.execute(
+                        """SELECT free_daily_dating_likes
+                           FROM posting_quota_settings WHERE id = 1"""
+                    ).fetchone()
+                    if not quota_settings:
+                        raise ApiError(503, "billing_not_configured", "Dating allowances are unavailable.")
+                    used_likes = connection.execute(
+                        """SELECT count(*) AS used
+                           FROM dating_swipes
+                           WHERE user_id = %s AND liked
+                             AND created_at >= date_trunc('day', now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'""",
+                        (user["id"],),
+                    ).fetchone()
+                    if int(used_likes["used"]) >= int(quota_settings["free_daily_dating_likes"]):
+                        credit = connection.execute(
+                            """SELECT entitlement.id
+                               FROM dating_entitlements entitlement
+                               JOIN dating_billing_products product ON product.id = entitlement.product_id
+                               WHERE entitlement.user_id = %s
+                                 AND product.code = 'extra_likes'
+                                 AND entitlement.quantity_remaining > 0
+                                 AND (entitlement.expires_at IS NULL OR entitlement.expires_at > now())
+                               ORDER BY entitlement.created_at
+                               LIMIT 1 FOR UPDATE OF entitlement""",
+                            (user["id"],),
+                        ).fetchone()
+                        if not credit:
+                            raise ApiError(
+                                402,
+                                "dating_likes_limit_reached",
+                                "You’ve used today’s free likes. Get an extra-likes pack or come back tomorrow.",
+                            )
+                        connection.execute(
+                            """UPDATE dating_entitlements
+                               SET quantity_remaining = quantity_remaining - 1
+                               WHERE id = %s""",
+                            (credit["id"],),
+                        )
             connection.execute(
                 """INSERT INTO dating_swipes (user_id, target_user_id, liked)
                    VALUES (%s, %s, %s)
