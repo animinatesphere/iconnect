@@ -480,6 +480,100 @@ class LocalMarketplaceListingInput(StrictModel):
         return validate_image_reference(value)
 
 
+class IBookStayInput(StrictModel):
+    property_type: Literal["Apartment", "House", "Room", "Vacation rental"]
+    title: str = Field(min_length=4, max_length=120)
+    location: str = Field(min_length=2, max_length=120)
+    price: int = Field(gt=0, le=1000000000)
+    price_unit: Literal["night", "month"]
+    max_guests: int = Field(ge=1, le=30)
+    description: str = Field(min_length=20, max_length=2000)
+    image_urls: List[str] = Field(min_length=1, max_length=5)
+
+    @field_validator("title", "location", "description")
+    @classmethod
+    def clean_ibook_text(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("This field is required.")
+        return value
+
+    @field_validator("image_urls")
+    @classmethod
+    def validate_ibook_images(cls, values: List[str]) -> List[str]:
+        if not values:
+            raise ValueError("Upload at least one property photo.")
+        return [validate_image_reference(value) for value in values]
+
+
+class IBookStayBookingInput(StrictModel):
+    listing_id: UUID = Field(strict=False)
+    check_in: date = Field(strict=False)
+    check_out: date = Field(strict=False)
+    guests: int = Field(ge=1, le=30)
+    message: str = Field(default="", max_length=500)
+
+    @model_validator(mode="after")
+    def validate_stay_dates(self) -> "IBookStayBookingInput":
+        if self.check_out <= self.check_in:
+            raise ValueError("Check-out must be after check-in.")
+        if self.check_in < date.today():
+            raise ValueError("Check-in cannot be in the past.")
+        return self
+
+
+class IBookDriverInput(StrictModel):
+    vehicle_type: Literal["Car", "Motorcycle", "Tricycle"]
+    vehicle_description: str = Field(min_length=2, max_length=100)
+    service_area: str = Field(min_length=2, max_length=120)
+    seats: int = Field(ge=1, le=8)
+    available: bool = True
+
+    @field_validator("vehicle_description", "service_area")
+    @classmethod
+    def clean_driver_text(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("This field is required.")
+        return value
+
+
+class IBookRideInput(StrictModel):
+    driver_id: UUID = Field(strict=False)
+    pickup: str = Field(min_length=2, max_length=180)
+    destination: str = Field(min_length=2, max_length=180)
+    pickup_time: datetime = Field(strict=False)
+    passengers: int = Field(ge=1, le=8)
+    note: str = Field(default="", max_length=500)
+
+    @field_validator("pickup", "destination")
+    @classmethod
+    def clean_ride_location(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("Pickup and destination are required.")
+        return value
+
+    @model_validator(mode="after")
+    def validate_route(self) -> "IBookRideInput":
+        if self.pickup.casefold() == self.destination.casefold():
+            raise ValueError("Pickup and destination must be different.")
+        return self
+
+    @field_validator("pickup_time")
+    @classmethod
+    def validate_pickup_time(cls, value: datetime) -> datetime:
+        if value.tzinfo is None:
+            raise ValueError("Pickup time must include a timezone.")
+        if value < datetime.now(timezone.utc) - timedelta(minutes=2):
+            raise ValueError("Pickup time cannot be in the past.")
+        return value
+
+
+class IBookStatusInput(StrictModel):
+    status: Literal["confirmed", "declined", "cancelled", "accepted", "completed"]
+
+
 class CommunityInput(StrictModel):
     name: str = Field(min_length=1, max_length=80)
     description: str = Field(min_length=1, max_length=500)
@@ -5751,6 +5845,436 @@ def create_app(
         if not row:
             raise ApiError(404, "listing_not_found", "That listing could not be found.")
         return {"listing": public_local_marketplace_listing(row)}
+
+    def public_ibook_stay(row: Dict[str, Any]) -> Dict[str, Any]:
+        return {
+            "id": str(row["id"]),
+            "propertyType": row["property_type"],
+            "title": row["title"],
+            "location": row["location"],
+            "price": int(row["price"]),
+            "priceUnit": row["price_unit"],
+            "maxGuests": int(row["max_guests"]),
+            "description": row["description"],
+            "imageUrls": row["image_urls"],
+            "createdAt": row["created_at"].isoformat(),
+            "host": {
+                "id": str(row["host_id"]),
+                "name": row["host_name"],
+                "username": row["host_username"],
+            },
+        }
+
+    @app.get("/api/ibook/stays")
+    def list_ibook_stays(
+        request: Request,
+        location: Optional[str] = Query(default=None, max_length=80),
+        limit: int = Query(default=50, ge=1, le=100),
+    ) -> Dict[str, Any]:
+        require_user(request)
+        normalized_location = (location or "").strip().lower()
+        if normalized_location and len(normalized_location) < 2:
+            raise ApiError(400, "invalid_input", "Enter at least two characters to search.")
+        filters = ["listing.active"]
+        parameters: List[Any] = []
+        if normalized_location:
+            filters.append("lower(listing.location) LIKE %s")
+            parameters.append("%" + normalized_location.replace("%", "\\%").replace("_", "\\_") + "%")
+        parameters.append(limit)
+        with database.connection() as connection:
+            rows = connection.execute(
+                """SELECT listing.id, listing.property_type, listing.title, listing.location,
+                          listing.price, listing.price_unit, listing.max_guests, listing.description,
+                          listing.image_urls, listing.created_at, listing.host_id,
+                          host.display_name AS host_name, host.username AS host_username
+                   FROM ibook_stay_listings listing
+                   JOIN users host ON host.id = listing.host_id
+                   WHERE {} ORDER BY listing.created_at DESC, listing.id DESC LIMIT %s""".format(
+                    " AND ".join(filters)
+                ),
+                tuple(parameters),
+            ).fetchall()
+        return {"stays": [public_ibook_stay(row) for row in rows]}
+
+    @app.post("/api/ibook/stays", status_code=201, dependencies=[Depends(enforce_social_rate_limit)])
+    def create_ibook_stay(
+        input: IBookStayInput,
+        request: Request,
+    ) -> Dict[str, Any]:
+        host = require_user(request)
+        with database.connection() as connection:
+            inserted = connection.execute(
+                """INSERT INTO ibook_stay_listings
+                       (host_id, property_type, title, location, price, price_unit,
+                        max_guests, description, image_urls)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                   RETURNING id""",
+                (
+                    host["id"], input.property_type, input.title, input.location,
+                    input.price, input.price_unit, input.max_guests, input.description,
+                    input.image_urls,
+                ),
+            ).fetchone()
+            if not inserted:
+                raise ApiError(500, "internal_error", "The stay listing could not be created.")
+            row = connection.execute(
+                """SELECT listing.id, listing.property_type, listing.title, listing.location,
+                          listing.price, listing.price_unit, listing.max_guests, listing.description,
+                          listing.image_urls, listing.created_at, listing.host_id,
+                          host.display_name AS host_name, host.username AS host_username
+                   FROM ibook_stay_listings listing JOIN users host ON host.id = listing.host_id
+                   WHERE listing.id = %s""",
+                (inserted["id"],),
+            ).fetchone()
+        if not row:
+            raise ApiError(500, "internal_error", "The stay listing could not be loaded.")
+        return {"stay": public_ibook_stay(row)}
+
+    @app.post("/api/ibook/stay-bookings", status_code=201, dependencies=[Depends(enforce_social_rate_limit)])
+    def request_ibook_stay_booking(
+        input: IBookStayBookingInput,
+        request: Request,
+    ) -> Dict[str, Any]:
+        guest = require_user(request)
+        with database.connection() as connection:
+            listing = connection.execute(
+                """SELECT id, host_id, max_guests FROM ibook_stay_listings
+                   WHERE id = %s AND active FOR UPDATE""",
+                (input.listing_id,),
+            ).fetchone()
+            if not listing:
+                raise ApiError(404, "stay_not_found", "That stay is no longer available.")
+            if str(listing["host_id"]) == str(guest["id"]):
+                raise ApiError(400, "cannot_book_own_stay", "You cannot request your own property.")
+            if input.guests > int(listing["max_guests"]):
+                raise ApiError(400, "guest_limit_exceeded", "This property cannot accommodate that many guests.")
+            overlap = connection.execute(
+                """SELECT id FROM ibook_stay_bookings
+                   WHERE listing_id = %s AND status = 'confirmed'
+                     AND check_in < %s AND check_out > %s LIMIT 1""",
+                (input.listing_id, input.check_out, input.check_in),
+            ).fetchone()
+            if overlap:
+                raise ApiError(409, "stay_dates_unavailable", "Those dates have already been confirmed.")
+            booking = connection.execute(
+                """INSERT INTO ibook_stay_bookings
+                       (listing_id, guest_id, check_in, check_out, guests, message)
+                   VALUES (%s, %s, %s, %s, %s, %s) RETURNING id""",
+                (
+                    input.listing_id, guest["id"], input.check_in, input.check_out,
+                    input.guests, input.message.strip(),
+                ),
+            ).fetchone()
+        if not booking:
+            raise ApiError(500, "internal_error", "Your stay request could not be saved.")
+        return {"bookingId": str(booking["id"]), "status": "requested"}
+
+    @app.get("/api/ibook/stay-bookings")
+    def list_ibook_stay_bookings(request: Request) -> Dict[str, Any]:
+        user = require_user(request)
+        with database.connection() as connection:
+            rows = connection.execute(
+                """SELECT booking.id, booking.listing_id, listing.title,
+                          booking.guest_id, guest.display_name AS guest_name,
+                          guest.username AS guest_username, listing.host_id,
+                          host.display_name AS host_name, host.username AS host_username,
+                          booking.check_in, booking.check_out, booking.guests,
+                          booking.message, booking.status, booking.created_at
+                   FROM ibook_stay_bookings booking
+                   JOIN ibook_stay_listings listing ON listing.id = booking.listing_id
+                   JOIN users guest ON guest.id = booking.guest_id
+                   JOIN users host ON host.id = listing.host_id
+                   WHERE booking.guest_id = %s OR listing.host_id = %s
+                   ORDER BY booking.created_at DESC LIMIT 100""",
+                (user["id"], user["id"]),
+            ).fetchall()
+        return {"bookings": [{
+            "id": str(row["id"]),
+            "listingId": str(row["listing_id"]),
+            "title": row["title"],
+            "checkIn": row["check_in"].isoformat(),
+            "checkOut": row["check_out"].isoformat(),
+            "guests": int(row["guests"]),
+            "message": row["message"],
+            "status": row["status"],
+            "createdAt": row["created_at"].isoformat(),
+            "role": "guest" if str(row["guest_id"]) == str(user["id"]) else "host",
+            "otherParty": {
+                "id": str(row["host_id"] if str(row["guest_id"]) == str(user["id"]) else row["guest_id"]),
+                "name": row["host_name"] if str(row["guest_id"]) == str(user["id"]) else row["guest_name"],
+                "username": row["host_username"] if str(row["guest_id"]) == str(user["id"]) else row["guest_username"],
+            },
+        } for row in rows]}
+
+    @app.post("/api/ibook/stay-bookings/{booking_id}/status")
+    def update_ibook_stay_booking(
+        booking_id: UUID,
+        input: IBookStatusInput,
+        request: Request,
+    ) -> Dict[str, str]:
+        user = require_user(request)
+        if input.status not in {"confirmed", "declined", "cancelled"}:
+            raise ApiError(400, "invalid_booking_status", "That update is not valid for a stay request.")
+        with database.connection() as connection:
+            booking = connection.execute(
+                """SELECT booking.listing_id, booking.guest_id, booking.status, listing.host_id
+                   FROM ibook_stay_bookings booking
+                   JOIN ibook_stay_listings listing ON listing.id = booking.listing_id
+                   WHERE booking.id = %s""",
+                (booking_id,),
+            ).fetchone()
+            if not booking:
+                raise ApiError(404, "booking_not_found", "That stay request could not be found.")
+            is_guest = str(booking["guest_id"]) == str(user["id"])
+            is_host = str(booking["host_id"]) == str(user["id"])
+            if (input.status == "cancelled" and not is_guest) or (
+                input.status in {"confirmed", "declined"} and not is_host
+            ):
+                raise ApiError(403, "not_allowed", "You cannot update this stay request.")
+            allowed_current_statuses = (
+                {"requested", "confirmed"} if input.status == "cancelled" else {"requested"}
+            )
+            if booking["status"] not in allowed_current_statuses:
+                raise ApiError(409, "booking_already_updated", "This stay request has already been updated.")
+            if input.status == "confirmed":
+                connection.execute(
+                    "SELECT id FROM ibook_stay_listings WHERE id = %s FOR UPDATE",
+                    (booking["listing_id"],),
+                ).fetchone()
+                overlap = connection.execute(
+                    """SELECT id FROM ibook_stay_bookings
+                       WHERE listing_id = %s AND id <> %s AND status = 'confirmed'
+                         AND check_in < (SELECT check_out FROM ibook_stay_bookings WHERE id = %s)
+                         AND check_out > (SELECT check_in FROM ibook_stay_bookings WHERE id = %s)
+                       LIMIT 1""",
+                    (booking["listing_id"], booking_id, booking_id, booking_id),
+                ).fetchone()
+                if overlap:
+                    raise ApiError(409, "stay_dates_unavailable", "Those dates conflict with another confirmed stay.")
+            updated = connection.execute(
+                """UPDATE ibook_stay_bookings SET status = %s
+                   WHERE id = %s AND status = ANY(%s) RETURNING id""",
+                (input.status, booking_id, list(allowed_current_statuses)),
+            ).fetchone()
+            if not updated:
+                raise ApiError(409, "booking_already_updated", "This stay request has already been updated.")
+        return {"status": input.status}
+
+    @app.get("/api/ibook/drivers")
+    def list_ibook_drivers(
+        request: Request,
+        area: Optional[str] = Query(default=None, max_length=80),
+        passengers: int = Query(default=1, ge=1, le=8),
+    ) -> Dict[str, Any]:
+        user = require_user(request)
+        normalized_area = (area or "").strip().lower()
+        if normalized_area and len(normalized_area) < 2:
+            raise ApiError(400, "invalid_input", "Enter at least two characters to search.")
+        filters = ["profile.available", "profile.seats >= %s", "profile.driver_id <> %s"]
+        parameters: List[Any] = [passengers, user["id"]]
+        if normalized_area:
+            filters.append("lower(profile.service_area) LIKE %s")
+            parameters.append("%" + normalized_area.replace("%", "\\%").replace("_", "\\_") + "%")
+        with database.connection() as connection:
+            rows = connection.execute(
+                """SELECT profile.driver_id, profile.vehicle_type, profile.vehicle_description,
+                          profile.service_area, profile.seats, profile.updated_at,
+                          driver.display_name, driver.username
+                   FROM ibook_driver_profiles profile
+                   JOIN users driver ON driver.id = profile.driver_id
+                   WHERE {} ORDER BY profile.updated_at DESC LIMIT 100""".format(" AND ".join(filters)),
+                tuple(parameters),
+            ).fetchall()
+        return {"drivers": [{
+            "id": str(row["driver_id"]),
+            "name": row["display_name"],
+            "username": row["username"],
+            "vehicleType": row["vehicle_type"],
+            "vehicleDescription": row["vehicle_description"],
+            "serviceArea": row["service_area"],
+            "seats": int(row["seats"]),
+        } for row in rows]}
+
+    @app.put("/api/ibook/drivers/me")
+    def update_ibook_driver_profile(input: IBookDriverInput, request: Request) -> Dict[str, Any]:
+        driver = require_user(request)
+        with database.connection() as connection:
+            connection.execute(
+                "SELECT driver_id FROM ibook_driver_profiles WHERE driver_id = %s FOR UPDATE",
+                (driver["id"],),
+            ).fetchone()
+            if input.available:
+                active_ride = connection.execute(
+                    """SELECT id FROM ibook_ride_requests
+                       WHERE driver_id = %s AND status = 'accepted' LIMIT 1""",
+                    (driver["id"],),
+                ).fetchone()
+                if active_ride:
+                    raise ApiError(409, "driver_on_active_ride", "Finish your current ride before going available.")
+            row = connection.execute(
+                """INSERT INTO ibook_driver_profiles
+                       (driver_id, vehicle_type, vehicle_description, service_area, seats, available)
+                   VALUES (%s, %s, %s, %s, %s, %s)
+                   ON CONFLICT (driver_id) DO UPDATE SET
+                       vehicle_type = EXCLUDED.vehicle_type,
+                       vehicle_description = EXCLUDED.vehicle_description,
+                       service_area = EXCLUDED.service_area,
+                       seats = EXCLUDED.seats,
+                       available = EXCLUDED.available,
+                       updated_at = now()
+                   RETURNING driver_id, vehicle_type, vehicle_description, service_area, seats, available""",
+                (
+                    driver["id"], input.vehicle_type, input.vehicle_description,
+                    input.service_area, input.seats, input.available,
+                ),
+            ).fetchone()
+        if not row:
+            raise ApiError(500, "internal_error", "Your driver profile could not be saved.")
+        return {"driver": {
+            "id": str(row["driver_id"]),
+            "vehicleType": row["vehicle_type"],
+            "vehicleDescription": row["vehicle_description"],
+            "serviceArea": row["service_area"],
+            "seats": int(row["seats"]),
+            "available": bool(row["available"]),
+        }}
+
+    @app.get("/api/ibook/drivers/me")
+    def get_ibook_driver_profile(request: Request) -> Dict[str, Any]:
+        driver = require_user(request)
+        with database.connection() as connection:
+            row = connection.execute(
+                """SELECT driver_id, vehicle_type, vehicle_description, service_area,
+                          seats, available
+                   FROM ibook_driver_profiles WHERE driver_id = %s""",
+                (driver["id"],),
+            ).fetchone()
+        if not row:
+            return {"driver": None}
+        return {"driver": {
+            "id": str(row["driver_id"]),
+            "vehicleType": row["vehicle_type"],
+            "vehicleDescription": row["vehicle_description"],
+            "serviceArea": row["service_area"],
+            "seats": int(row["seats"]),
+            "available": bool(row["available"]),
+        }}
+
+    @app.get("/api/ibook/rides")
+    def list_ibook_rides(request: Request) -> Dict[str, Any]:
+        user = require_user(request)
+        with database.connection() as connection:
+            rows = connection.execute(
+                """SELECT ride.id, ride.rider_id, rider.display_name AS rider_name,
+                          rider.username AS rider_username, ride.driver_id,
+                          driver.display_name AS driver_name, driver.username AS driver_username,
+                          ride.pickup, ride.destination, ride.pickup_time, ride.passengers,
+                          ride.note, ride.status, ride.created_at
+                   FROM ibook_ride_requests ride
+                   JOIN users rider ON rider.id = ride.rider_id
+                   JOIN users driver ON driver.id = ride.driver_id
+                   WHERE ride.rider_id = %s OR ride.driver_id = %s
+                   ORDER BY ride.created_at DESC LIMIT 100""",
+                (user["id"], user["id"]),
+            ).fetchall()
+        return {"rides": [{
+            "id": str(row["id"]),
+            "pickup": row["pickup"],
+            "destination": row["destination"],
+            "pickupTime": row["pickup_time"].isoformat(),
+            "passengers": int(row["passengers"]),
+            "note": row["note"],
+            "status": row["status"],
+            "createdAt": row["created_at"].isoformat(),
+            "role": "rider" if str(row["rider_id"]) == str(user["id"]) else "driver",
+            "otherParty": {
+                "id": str(row["driver_id"] if str(row["rider_id"]) == str(user["id"]) else row["rider_id"]),
+                "name": row["driver_name"] if str(row["rider_id"]) == str(user["id"]) else row["rider_name"],
+                "username": row["driver_username"] if str(row["rider_id"]) == str(user["id"]) else row["rider_username"],
+            },
+        } for row in rows]}
+
+    @app.post("/api/ibook/rides", status_code=201, dependencies=[Depends(enforce_social_rate_limit)])
+    def request_ibook_ride(input: IBookRideInput, request: Request) -> Dict[str, str]:
+        rider = require_user(request)
+        with database.connection() as connection:
+            driver = connection.execute(
+                """SELECT driver_id, seats FROM ibook_driver_profiles
+                   WHERE driver_id = %s AND available FOR UPDATE""",
+                (input.driver_id,),
+            ).fetchone()
+            if not driver:
+                raise ApiError(409, "driver_unavailable", "That driver is no longer available.")
+            if str(driver["driver_id"]) == str(rider["id"]):
+                raise ApiError(400, "cannot_ride_with_self", "You cannot request yourself as a driver.")
+            if input.passengers > int(driver["seats"]):
+                raise ApiError(400, "passenger_limit_exceeded", "That vehicle does not have enough seats.")
+            ride = connection.execute(
+                """INSERT INTO ibook_ride_requests
+                       (rider_id, driver_id, pickup, destination, pickup_time, passengers, note)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING id""",
+                (
+                    rider["id"], driver["driver_id"], input.pickup, input.destination,
+                    input.pickup_time, input.passengers, input.note.strip(),
+                ),
+            ).fetchone()
+        if not ride:
+            raise ApiError(500, "internal_error", "Your ride request could not be saved.")
+        return {"rideId": str(ride["id"]), "status": "requested"}
+
+    @app.post("/api/ibook/rides/{ride_id}/status")
+    def update_ibook_ride_status(
+        ride_id: UUID,
+        input: IBookStatusInput,
+        request: Request,
+    ) -> Dict[str, str]:
+        user = require_user(request)
+        if input.status not in {"accepted", "declined", "cancelled", "completed"}:
+            raise ApiError(400, "invalid_ride_status", "That update is not valid for a ride request.")
+        with database.connection() as connection:
+            ride = connection.execute(
+                """SELECT rider_id, driver_id, status FROM ibook_ride_requests WHERE id = %s FOR UPDATE""",
+                (ride_id,),
+            ).fetchone()
+            if not ride:
+                raise ApiError(404, "ride_not_found", "That ride request could not be found.")
+            is_rider = str(ride["rider_id"]) == str(user["id"])
+            is_driver = str(ride["driver_id"]) == str(user["id"])
+            if (input.status == "cancelled" and not is_rider) or (
+                input.status in {"accepted", "declined", "completed"} and not is_driver
+            ):
+                raise ApiError(403, "not_allowed", "You cannot update this ride request.")
+            allowed = (
+                {"requested"} if input.status in {"accepted", "declined", "cancelled"}
+                else {"accepted"}
+            )
+            if ride["status"] not in allowed:
+                raise ApiError(409, "ride_already_updated", "This ride request cannot be updated in its current state.")
+            if input.status == "accepted":
+                available_driver = connection.execute(
+                    """SELECT driver_id FROM ibook_driver_profiles
+                       WHERE driver_id = %s AND available FOR UPDATE""",
+                    (user["id"],),
+                ).fetchone()
+                if not available_driver:
+                    raise ApiError(409, "driver_unavailable", "You must be available before accepting a ride.")
+                active_ride = connection.execute(
+                    """SELECT id FROM ibook_ride_requests
+                       WHERE driver_id = %s AND status = 'accepted' AND id <> %s LIMIT 1""",
+                    (user["id"], ride_id),
+                ).fetchone()
+                if active_ride:
+                    raise ApiError(409, "driver_busy", "Complete the current ride before accepting another.")
+                connection.execute(
+                    "UPDATE ibook_driver_profiles SET available = false, updated_at = now() WHERE driver_id = %s",
+                    (user["id"],),
+                )
+            connection.execute(
+                """UPDATE ibook_ride_requests SET status = %s, updated_at = now()
+                   WHERE id = %s""",
+                (input.status, ride_id),
+            )
+        return {"status": input.status}
 
     @app.get("/api/messages/users")
     def search_message_recipients(

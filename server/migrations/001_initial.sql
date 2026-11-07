@@ -772,3 +772,90 @@ VALUES
   ('extra_likes', '5 extra likes · NGN', 'NGN', 0, 5, 0),
   ('extra_likes', '5 extra likes · USD', 'USD', 0, 5, 0)
 ON CONFLICT (code, currency) DO NOTHING;
+
+CREATE TABLE IF NOT EXISTS ibook_stay_listings (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  host_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  property_type varchar(24) NOT NULL
+    CHECK (property_type IN ('Apartment', 'House', 'Room', 'Vacation rental')),
+  title varchar(120) NOT NULL,
+  location varchar(120) NOT NULL,
+  price bigint NOT NULL CHECK (price > 0),
+  price_unit varchar(8) NOT NULL CHECK (price_unit IN ('night', 'month')),
+  max_guests smallint NOT NULL CHECK (max_guests BETWEEN 1 AND 30),
+  description varchar(2000) NOT NULL,
+  image_urls text[] NOT NULL CHECK (cardinality(image_urls) BETWEEN 1 AND 5),
+  active boolean NOT NULL DEFAULT true,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS ibook_stays_active_created_idx
+  ON ibook_stay_listings(created_at DESC, id DESC)
+  WHERE active;
+
+CREATE INDEX IF NOT EXISTS ibook_stays_location_idx
+  ON ibook_stay_listings(lower(location))
+  WHERE active;
+
+CREATE TABLE IF NOT EXISTS ibook_stay_bookings (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  listing_id uuid NOT NULL REFERENCES ibook_stay_listings(id) ON DELETE RESTRICT,
+  guest_id uuid NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+  check_in date NOT NULL,
+  check_out date NOT NULL,
+  guests smallint NOT NULL CHECK (guests BETWEEN 1 AND 30),
+  message varchar(500) NOT NULL DEFAULT '',
+  status varchar(12) NOT NULL DEFAULT 'requested'
+    CHECK (status IN ('requested', 'confirmed', 'declined', 'cancelled')),
+  created_at timestamptz NOT NULL DEFAULT now(),
+  CHECK (check_out > check_in)
+);
+
+CREATE INDEX IF NOT EXISTS ibook_stay_bookings_listing_dates_idx
+  ON ibook_stay_bookings(listing_id, check_in, check_out)
+  WHERE status = 'confirmed';
+
+CREATE INDEX IF NOT EXISTS ibook_stay_bookings_guest_created_idx
+  ON ibook_stay_bookings(guest_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS ibook_driver_profiles (
+  driver_id uuid PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+  vehicle_type varchar(12) NOT NULL
+    CHECK (vehicle_type IN ('Car', 'Motorcycle', 'Tricycle')),
+  vehicle_description varchar(100) NOT NULL,
+  service_area varchar(120) NOT NULL,
+  seats smallint NOT NULL CHECK (seats BETWEEN 1 AND 8),
+  available boolean NOT NULL DEFAULT false,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS ibook_drivers_available_area_idx
+  ON ibook_driver_profiles(lower(service_area), updated_at DESC)
+  WHERE available;
+
+CREATE TABLE IF NOT EXISTS ibook_ride_requests (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  rider_id uuid NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+  driver_id uuid NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+  pickup varchar(180) NOT NULL,
+  destination varchar(180) NOT NULL,
+  pickup_time timestamptz NOT NULL,
+  passengers smallint NOT NULL CHECK (passengers BETWEEN 1 AND 8),
+  note varchar(500) NOT NULL DEFAULT '',
+  status varchar(12) NOT NULL DEFAULT 'requested'
+    CHECK (status IN ('requested', 'accepted', 'declined', 'cancelled', 'completed')),
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  CHECK (rider_id <> driver_id)
+);
+
+CREATE INDEX IF NOT EXISTS ibook_rides_rider_created_idx
+  ON ibook_ride_requests(rider_id, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS ibook_rides_driver_created_idx
+  ON ibook_ride_requests(driver_id, created_at DESC);
+
+CREATE UNIQUE INDEX IF NOT EXISTS ibook_one_active_ride_per_driver_idx
+  ON ibook_ride_requests(driver_id)
+  WHERE status = 'accepted';
