@@ -859,3 +859,73 @@ CREATE INDEX IF NOT EXISTS ibook_rides_driver_created_idx
 CREATE UNIQUE INDEX IF NOT EXISTS ibook_one_active_ride_per_driver_idx
   ON ibook_ride_requests(driver_id)
   WHERE status = 'accepted';
+
+-- iTrade paper desk (NH FX V13.4 risk engine). Paper and external-manual only; no broker transmission.
+CREATE TABLE IF NOT EXISTS trading_risk_profiles (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  version integer NOT NULL CHECK (version > 0),
+  settings jsonb NOT NULL,
+  effective_from timestamptz NOT NULL,
+  cancelled_at timestamptz,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (user_id, version)
+);
+
+CREATE INDEX IF NOT EXISTS trading_profiles_user_effective_idx
+  ON trading_risk_profiles(user_id, version DESC)
+  WHERE cancelled_at IS NULL;
+
+CREATE TABLE IF NOT EXISTS trading_tickets (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  profile_id uuid NOT NULL REFERENCES trading_risk_profiles(id) ON DELETE RESTRICT,
+  operating_mode varchar(16) NOT NULL CHECK (operating_mode IN ('paper', 'external_manual')),
+  pair varchar(7) NOT NULL,
+  side varchar(4) NOT NULL CHECK (side IN ('buy', 'sell')),
+  status varchar(16) NOT NULL CHECK (status IN (
+    'rejected', 'drafted', 'expired', 'declined', 'accepted_manual',
+    'open', 'not_filled', 'cancelled', 'closed'
+  )),
+  decision jsonb NOT NULL,
+  drafted_quantity integer CHECK (drafted_quantity IS NULL OR drafted_quantity > 0),
+  authorized_quantity integer CHECK (authorized_quantity IS NULL OR authorized_quantity > 0),
+  risk_amount numeric(18, 2),
+  entry_price numeric(18, 6) NOT NULL,
+  stop_price numeric(18, 6) NOT NULL,
+  target_price numeric(18, 6) NOT NULL,
+  fill_price numeric(18, 6),
+  exit_price numeric(18, 6),
+  realized_pnl numeric(18, 2),
+  execution_source varchar(20),
+  idempotency_key uuid NOT NULL UNIQUE DEFAULT gen_random_uuid(),
+  expires_at timestamptz,
+  authorized_at timestamptz,
+  closed_at timestamptz,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  CHECK (authorized_quantity IS NULL OR authorized_quantity <= drafted_quantity)
+);
+
+CREATE INDEX IF NOT EXISTS trading_tickets_user_created_idx
+  ON trading_tickets(user_id, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS trading_tickets_user_open_idx
+  ON trading_tickets(user_id)
+  WHERE status IN ('drafted', 'accepted_manual', 'open');
+
+CREATE INDEX IF NOT EXISTS trading_tickets_user_closed_idx
+  ON trading_tickets(user_id, closed_at DESC)
+  WHERE status = 'closed';
+
+CREATE TABLE IF NOT EXISTS trading_audit_events (
+  id bigserial PRIMARY KEY,
+  user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  ticket_id uuid REFERENCES trading_tickets(id) ON DELETE SET NULL,
+  action varchar(40) NOT NULL,
+  details jsonb NOT NULL DEFAULT '{}'::jsonb,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS trading_audit_user_created_idx
+  ON trading_audit_events(user_id, created_at DESC);

@@ -139,7 +139,15 @@ Configure that URL in the Paystack Dashboard's API Keys & Webhooks settings, wit
 
 ### iTrade / Deriv trading-bot proposal
 
-The owner has proposed an iTrade bot that can trade for users through a broker such as Deriv. The existing iTrade page is not an automated trading integration. Before implementation, establish the broker's official API and sandbox/test-account flow, account authorization model, permitted jurisdictions, and any required approvals. Prefer user-authorized access, demo trading first, explicit opt-in before live trades, user-set risk/loss limits, clear risk disclosure, revocable authorization, and an immediate stop control. Never promise profits or payouts; trading can lose money. Keep customer assets at the broker unless an independently approved custody/wallet arrangement is implemented.
+The owner has proposed an iTrade bot that can trade for users through a broker such as Deriv. The existing iTrade page is not an automated trading integration.
+
+**iTrade paper desk (current).** `/app/itrade` implements the risk-control parts of `NH_FX_TRADING_SYSTEM_ARCHITECTURE_V13.4.txt` that do not need market data. It is open to every signed-in member and is paper or external-manual only: nothing is ever sent to a broker.
+
+- Members first save a versioned risk profile (risk tolerance, minimum probability, per-idea/correlated/daily/weekly limits, quantity caps, permitted pairs). Risk-increasing changes wait 24 hours and are refused during a loss lock; reductions apply immediately.
+- A ticket runs the V13.4 gates in order on the server (`server/app/trading.py`): trader-confirmed data check, FULL_PRINT or later, spread/stability, 15–20 pip stop (above 20 is always NO TRADE), probability +1 point per pip above 15 with a 15 ÷ stop size cut, at least 2:1 net reward-to-risk after costs, then account limits. Quantity is the minimum of every limit, rounded down to 1,000 units.
+- Drafts expire after 120 seconds and need manual authorization; the trader can reduce quantity but never increase it. Repeated taps or two devices cannot authorize twice. Two losing trades in a UTC session, or a daily/weekly loss limit, lock new drafts.
+- The probability is the trader's own estimate and is labelled NOT YET CALIBRATED. Benzinga, calendar, IBKR, CME and rates feeds all show DISCONNECTED until the data-collection phase is built.
+- Every decision (including NO TRADE) and action is stored in `trading_tickets` and `trading_audit_events`. Run `npm run db:migrate` after deploying. Before implementation, establish the broker's official API and sandbox/test-account flow, account authorization model, permitted jurisdictions, and any required approvals. Prefer user-authorized access, demo trading first, explicit opt-in before live trades, user-set risk/loss limits, clear risk disclosure, revocable authorization, and an immediate stop control. Never promise profits or payouts; trading can lose money. Keep customer assets at the broker unless an independently approved custody/wallet arrangement is implemented.
 
 ### Deploying changes to the VPS
 
