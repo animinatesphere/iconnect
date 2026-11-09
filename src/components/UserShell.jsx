@@ -10,15 +10,15 @@ import { getSocialPosts } from '../utils/socialApi.js'
 
 const primaryLinks = [
   { to: '/app/home', label: 'Home', icon: Home },
-  { to: '/app/chat', label: 'Messages', icon: MessageCircle },
-  { to: '/app/create', label: 'Create', icon: PenLine },
+  { to: '/app/chat', label: 'iConnect Chat', icon: MessageCircle },
+  { to: '/app/create', label: 'iConnect Create', icon: PenLine },
 ]
 
 const mobileLinks = [
   { to: '/app/home', label: 'Home', icon: Home, end: true },
   { to: '/app/connect', label: 'Connect', icon: Users },
-  { to: '/app/create', label: 'Create', icon: Plus },
-  { to: '/app/chat', label: 'Messages', icon: MessageCircle },
+  { to: '/app/create', label: 'iConnect Create', icon: Plus },
+  { to: '/app/chat', label: 'iConnect Chat', icon: MessageCircle },
   { label: 'More', icon: CircleEllipsis, action: 'more' },
 ]
 
@@ -26,20 +26,20 @@ const exploreLinks = [
   { to: '/app/live', label: 'Live video', icon: Radio },
   { to: '/app/videos', label: 'Video hub', icon: Video },
   { to: '/app/studio', label: 'Creator studio', icon: Clapperboard },
-  { to: '/app/social', label: 'Social updates', icon: MessageCircle },
-  { to: '/app/wallet', label: 'Wallet', icon: WalletCards },
+  { to: '/app/social', label: 'iConnect Social', icon: MessageCircle },
+  { to: '/app/wallet', label: 'iConnect Wallet', icon: WalletCards },
   { to: '/app/payments', label: 'Payments', icon: Banknote },
-  { to: '/app/itrade', label: 'iTrade', icon: Bitcoin },
-  { to: '/app/ibuy', label: 'iBuy market', icon: ShoppingBag },
+  { to: '/app/itrade', label: 'iConnect Trade', icon: Bitcoin },
+  { to: '/app/ibuy', label: 'iConnect Market', icon: ShoppingBag },
   { to: '/app/orders', label: 'Marketplace orders', icon: PackageCheck },
   { to: '/app/marketplace', label: 'Homes & local services', icon: Store },
   { to: '/app/ibook', label: 'iBook journeys', icon: Plane },
-  { to: '/app/jobs', label: 'Job hub', icon: BriefcaseBusiness },
+  { to: '/app/jobs', label: 'iConnect Jobs', icon: BriefcaseBusiness },
   { to: '/app/connect', label: 'Connect', icon: Users },
-  { to: '/app/invest', label: 'Invest & save', icon: WalletCards },
-  { to: '/app/dating', label: 'Dating', icon: Heart },
-  { to: '/app/billing', label: 'Plans & billing', icon: CreditCard },
-  { to: '/app/assistant', label: 'AI assistant', icon: Bot },
+  { to: '/app/invest', label: 'iConnect Invest', icon: WalletCards },
+  { to: '/app/dating', label: 'iConnect Date', icon: Heart },
+  { to: '/app/billing', label: 'iConnect Premium', icon: CreditCard },
+  { to: '/app/assistant', label: 'iConnect AI', icon: Bot },
 ]
 
 function NavigationGroup({ title, links, onNavigate }) {
