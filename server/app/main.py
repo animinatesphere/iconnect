@@ -47,6 +47,7 @@ from .security import (
     verify_password,
 )
 from .job_sources import fetch_external_jobs
+from .trading import register_trading_routes
 
 
 LOGGER = logging.getLogger("iconnect.api")
@@ -8414,6 +8415,14 @@ def create_app(
                 (user["id"], target_user_id, input.reason, input.details),
             )
         return {"reported": True}
+
+    register_trading_routes(
+        app,
+        database=database,
+        require_user=require_user,
+        rate_limit=enforce_social_rate_limit,
+        api_error=ApiError,
+    )
 
     return app
 
