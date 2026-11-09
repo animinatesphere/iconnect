@@ -250,3 +250,64 @@ class PnlTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class LiveQuoteGateTest(unittest.TestCase):
+    def quote(self, bid=1.09995, ask=1.10005):
+        return {"bid": bid, "ask": ask, "epoch": 0, "age": 1}
+
+    def test_live_quote_passes_and_widens_spread(self):
+        decision = evaluate_ticket(profile(), account(), dict(ticket(spread_pips=0.2), live_quote=self.quote(1.0999, 1.1000)))
+        self.assertTrue(decision["qualified"], decision["reason"])
+        self.assertEqual(decision["metrics"]["liveSpreadPips"], 1.0)
+        self.assertIn("Live Deriv ask", decision["gates"][0]["detail"])
+
+    def test_entry_far_from_live_price_is_refused(self):
+        decision = evaluate_ticket(profile(), account(), dict(ticket(), live_quote=self.quote(1.1029, 1.1030)))
+        self.assertEqual(failed_gate(decision), "G1")
+        self.assertIn("AWAY FROM THE LIVE PRICE", decision["reason"])
+
+    def test_sell_uses_bid(self):
+        sell = ticket(side="sell", stop_price=1.1015, target_price=1.0960)
+        decision = evaluate_ticket(profile(), account(), dict(sell, live_quote=self.quote(1.1000, 1.1001)))
+        self.assertTrue(decision["qualified"], decision["reason"])
+
+    def test_deriv_mode_requires_live_quote(self):
+        decision = evaluate_ticket(profile(), account(), dict(ticket(), live_quote=None, require_live_quote=True))
+        self.assertEqual(failed_gate(decision), "G1")
+
+
+class DerivSizingTest(unittest.TestCase):
+    def test_multiplier_plan_matches_stop_and_target(self):
+        from server.app.deriv import plan_multiplier_order
+
+        # 60,000 EUR/USD at 1.1000 = $66,000 notional; 15-pip stop = $90, 40-pip target = $240.
+        plans = plan_multiplier_order(66000, 1.1000, 1.0985, 1.1040)
+        first = plans[0]
+        # x50 and x100 need stakes above Deriv's $500 maximum, so x150 is the lowest that fits.
+        self.assertEqual(first["multiplier"], 150)
+        self.assertEqual(first["stake"], 440.0)
+        self.assertAlmostEqual(first["stop_loss"], 90.0, places=1)
+        self.assertAlmostEqual(first["take_profit"], 240.0, places=1)
+        for plan in plans:
+            self.assertLess(plan["stop_loss"], plan["stake"] * 0.9)
+
+    def test_tiny_position_has_no_plan(self):
+        from server.app.deriv import plan_multiplier_order
+
+        self.assertEqual(plan_multiplier_order(40, 1.1, 1.0985, 1.104), [])
+
+    def test_position_above_deriv_maximum_has_no_plan(self):
+        from server.app.deriv import plan_multiplier_order
+
+        # $500 stake x 500 = $250,000 is Deriv's largest position.
+        self.assertEqual(plan_multiplier_order(300000, 1.1, 1.0985, 1.104), [])
+
+    def test_usd_notional(self):
+        from server.app.trading import usd_notional
+
+        quotes = {"EUR/USD": {"bid": 1.0999, "ask": 1.1001}, "GBP/USD": {"bid": 1.2999, "ask": 1.3001}}
+        self.assertEqual(usd_notional("USD/JPY", 10000, quotes), 10000.0)
+        self.assertAlmostEqual(usd_notional("EUR/JPY", 10000, quotes), 11000.0)
+        self.assertAlmostEqual(usd_notional("GBP/CAD", 10000, quotes), 13000.0)
+        self.assertIsNone(usd_notional("EUR/GBP", 10000, {}))

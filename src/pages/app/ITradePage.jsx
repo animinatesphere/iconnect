@@ -16,11 +16,14 @@ import {
 import AppPageHeader from '../../components/AppPageHeader.jsx'
 import {
   authorizeTradingTicket,
+  closeDerivTicket,
   closeTradingTicket,
   declineTradingTicket,
   draftTradingTicket,
   getTradingOverview,
+  getTradingQuotes,
   reportExternalTicket,
+  resolveDerivTicket,
   saveTradingProfile,
 } from '../../utils/tradingApi.js'
 
@@ -77,6 +80,8 @@ const STATUS_LABELS = {
   not_filled: 'Not filled',
   cancelled: 'Cancelled',
   closed: 'Closed',
+  submitting: 'Sending to Deriv',
+  broker_rejected: 'Deriv did not open it',
 }
 
 const LIMIT_LABELS = {
@@ -87,7 +92,7 @@ const LIMIT_LABELS = {
   absoluteMaximum: 'absolute maximum',
 }
 
-const MODE_LABELS = { paper: 'PAPER', external_manual: 'EXTERNAL MANUAL' }
+const MODE_LABELS = { paper: 'PAPER', external_manual: 'EXTERNAL MANUAL', deriv_demo: 'DERIV DEMO' }
 
 const AUDIT_LABELS = {
   profile_saved: 'Risk profile saved',
@@ -101,6 +106,11 @@ const AUDIT_LABELS = {
   external_not_filled: 'External: not filled',
   external_cancelled: 'External: cancelled',
   position_closed: 'Position closed',
+  deriv_bought: 'Opened on Deriv demo',
+  deriv_rejected: 'Deriv refused the order',
+  deriv_outcome_unknown: 'Deriv buy outcome unknown',
+  deriv_resolved_opened: 'Resolved: opened on Deriv',
+  deriv_resolved_not_opened: 'Resolved: not opened',
 }
 
 function pipSize(pair) {
@@ -165,6 +175,7 @@ function DecisionCard({ ticket, currency, mode, now, busy, onAuthorize, onDeclin
   const quantityValid = quantityNumber >= 1000 && quantityNumber % 1000 === 0 && quantityNumber <= ticket.draftedQuantity
   const riskForQuantity = draft && quantityValid ? quantityNumber * draft.lossPerUnit : null
   const external = ticket.operatingMode === 'external_manual'
+  const derivMode = ticket.operatingMode === 'deriv_demo'
 
   return (
     <article className={`itrade-decision ${decision.qualified ? 'qualified' : 'rejected'}`}>
@@ -217,14 +228,57 @@ function DecisionCard({ ticket, currency, mode, now, busy, onAuthorize, onDeclin
           </div>
           <div className="itrade-authorize-actions">
             <button type="button" className="itrade-approve" disabled={busy || !quantityValid} onClick={() => onAuthorize(ticket, quantityNumber)}>
-              <ShieldCheck size={15} /> {external ? 'Accept for manual entry' : `Authorize paper ${ticket.side.toUpperCase()}`}
+              <ShieldCheck size={15} /> {external ? 'Accept for manual entry' : derivMode ? `${ticket.side === 'buy' ? 'Buy' : 'Sell'} on Deriv demo` : `Authorize paper ${ticket.side.toUpperCase()}`}
             </button>
             <button type="button" className="itrade-decline" disabled={busy} onClick={() => onDecline(ticket)}>Decline</button>
           </div>
-          <small className="itrade-mode-note">{mode === 'paper' ? 'Paper only — no order is sent to any broker.' : 'Nothing is sent to your broker. You place the trade yourself.'}</small>
+          <small className="itrade-mode-note">{derivMode
+            ? 'Opens a Multiplier on your Deriv DEMO account with the stop-loss and take-profit attached. The price is checked again first.'
+            : mode === 'paper' ? 'Paper only — no order is sent to any broker.' : 'Nothing is sent to your broker. You place the trade yourself.'}</small>
         </div>
       )}
       {ticket.status === 'drafted' && secondsLeft === 0 && <p className="itrade-expired-note">This draft has expired. Draft a fresh ticket with current prices.</p>}
+      {ticket.broker?.error && <p className="itrade-expired-note">Deriv: {ticket.broker.error}</p>}
+      {ticket.broker?.contractId && <p className="itrade-mode-note">Deriv contract {ticket.broker.contractId} · stake {formatMoney(ticket.broker.stake, currency)} × {ticket.broker.multiplier}</p>}
+    </article>
+  )
+}
+
+function DerivPositionRow({ ticket, currency, live, busy, onClose, onResolve }) {
+  const [contractId, setContractId] = useState('')
+  const broker = ticket.broker || {}
+  const unknown = ticket.status === 'submitting'
+  return (
+    <article className="itrade-position">
+      <div className="itrade-position-head">
+        <strong>{ticket.pair} <span className={`itrade-side ${ticket.side}`}>{ticket.side.toUpperCase()}</span></strong>
+        <span className="itrade-mode-badge deriv_demo">DERIV DEMO</span>
+      </div>
+      {unknown ? (
+        <>
+          <p className="itrade-external-warning"><AlertTriangle size={14} /> {broker.outcomeUnknown ? 'The connection dropped during the buy. Check your Deriv demo account: did this trade open?' : 'Sending to Deriv…'}</p>
+          {broker.outcomeUnknown && <div className="itrade-position-actions">
+            <input type="number" placeholder="Deriv contract ID" value={contractId} onChange={(event) => setContractId(event.target.value)} />
+            <button type="button" disabled={busy || !contractId} onClick={() => onResolve(ticket, true, contractId)}>It opened</button>
+            <button type="button" disabled={busy} onClick={() => onResolve(ticket, false)}>It did not open</button>
+          </div>}
+        </>
+      ) : (
+        <>
+          <dl className="itrade-position-terms">
+            <div><dt>Live P&L</dt><dd className={live?.profit < 0 ? 'neg' : ''}>{live ? formatMoney(live.profit, currency) : '—'}</dd></div>
+            <div><dt>Stake × mult.</dt><dd>{formatMoney(broker.stake, currency)} × {broker.multiplier}</dd></div>
+            <div><dt>Contract</dt><dd>{broker.contractId}</dd></div>
+            <div><dt>Stop-loss</dt><dd>{broker.stopLevel ?? formatPrice(ticket.pair, ticket.stopPrice)}<small> −{formatMoney(broker.stopLoss, currency)}</small></dd></div>
+            <div><dt>Take-profit</dt><dd>{broker.takeProfitLevel ?? formatPrice(ticket.pair, ticket.targetPrice)}<small> +{formatMoney(broker.takeProfit, currency)}</small></dd></div>
+            <div><dt>Spot now</dt><dd>{live?.currentSpot ?? '—'}</dd></div>
+          </dl>
+          <div className="itrade-position-actions">
+            <button type="button" className="itrade-close-button" disabled={busy} onClick={() => { if (window.confirm(`Close ${ticket.pair} on Deriv demo at the current market price?`)) onClose(ticket) }}>Close on Deriv now</button>
+          </div>
+          <small className="itrade-mode-note">Deriv closes this automatically at the stop-loss or take-profit. iTrade records the result on the next refresh.</small>
+        </>
+      )}
     </article>
   )
 }
@@ -282,6 +336,7 @@ export default function ITradePage() {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
+  const [quotes, setQuotes] = useState({})
 
   const load = useCallback(async () => {
     try {
@@ -315,6 +370,15 @@ export default function ITradePage() {
   }, [load])
 
   useEffect(() => {
+    if (section !== 'desk') return undefined
+    let active = true
+    const pull = () => getTradingQuotes().then((result) => { if (active) setQuotes(result.quotes || {}) }).catch(() => {})
+    pull()
+    const timer = window.setInterval(() => { if (document.visibilityState === 'visible') pull() }, 3000)
+    return () => { active = false; window.clearInterval(timer) }
+  }, [section])
+
+  useEffect(() => {
     const timer = window.setInterval(() => setNow(Date.now() + clockOffset), 1000)
     return () => window.clearInterval(timer)
   }, [clockOffset])
@@ -325,8 +389,11 @@ export default function ITradePage() {
   const currency = profile?.account_currency || profileDraft.accountCurrency
   const tickets = useMemo(() => overview?.tickets ?? [], [overview])
   const activeTicket = tickets.find((ticket) => ticket.id === activeTicketId) || tickets.find((ticket) => ticket.status === 'drafted')
-  const openPositions = tickets.filter((ticket) => ticket.status === 'open' || ticket.status === 'accepted_manual')
-  const history = tickets.filter((ticket) => !['open', 'accepted_manual'].includes(ticket.status))
+  const openPositions = tickets.filter((ticket) => ['open', 'accepted_manual', 'submitting'].includes(ticket.status))
+  const history = tickets.filter((ticket) => !['open', 'accepted_manual', 'submitting'].includes(ticket.status))
+  const derivAvailable = Boolean(system?.brokerModes?.find((item) => item.id === 'deriv_demo')?.available)
+  const derivPairs = system?.derivPairs ?? []
+  const liveQuote = quotes[ticketDraft.pair]
   const locks = account?.locks ?? []
 
   const preview = useMemo(() => {
@@ -410,9 +477,20 @@ export default function ITradePage() {
 
   const authorize = (ticket, quantity) => run(
     () => authorizeTradingTicket(ticket.id, ticket.idempotencyKey, quantity),
-    (result) => (result.alreadyAuthorized ? 'This ticket was already authorized — nothing was duplicated.' : ticket.operatingMode === 'paper' ? 'Paper position opened.' : 'Accepted for manual entry. Report the fill once your broker confirms it.'),
+    (result) => (result.alreadyAuthorized ? 'This ticket was already authorized — nothing was duplicated.' : ticket.operatingMode === 'paper' ? 'Paper position opened.' : ticket.operatingMode === 'deriv_demo' ? `Opened on Deriv demo (contract ${result.ticket.broker?.contractId}).` : 'Accepted for manual entry. Report the fill once your broker confirms it.'),
   )
   const decline = (ticket) => run(() => declineTradingTicket(ticket.id), 'Ticket declined.')
+  const closeDeriv = (ticket) => run(() => closeDerivTicket(ticket.id), (result) => `Closed on Deriv. Realized ${formatMoney(result.ticket.realizedPnl, currency)}.`)
+  const resolve = (ticket, opened, contractId) => run(() => resolveDerivTicket(ticket.id, opened, contractId), opened ? 'Linked to the Deriv contract.' : 'Marked as not opened. The reserved risk is released.')
+
+  function useLivePrice() {
+    if (!liveQuote) return
+    setTicketDraft((current) => ({
+      ...current,
+      entryPrice: String(current.side === 'buy' ? liveQuote.ask : liveQuote.bid),
+      spreadPips: String(liveQuote.spreadPips),
+    }))
+  }
   const closePosition = (ticket, exitPrice) => run(() => closeTradingTicket(ticket.id, exitPrice), (result) => `Closed. Realized ${formatMoney(result.ticket.realizedPnl, currency)}.`)
   const report = (ticket, values) => run(() => reportExternalTicket(ticket.id, values), 'Recorded as user-reported.')
 
@@ -423,14 +501,16 @@ export default function ITradePage() {
   return (
     <div className="app-content-width itrade-page">
       <AppPageHeader
-        eyebrow="ICONNECT TRADE · PAPER DESK"
+        eyebrow={profile?.operating_mode === 'deriv_demo' ? 'ICONNECT TRADE · DERIV DEMO' : 'ICONNECT TRADE · PAPER DESK'}
         title="iTrade"
-        description="Draft protected FX tickets against your saved risk profile. Every order needs your manual authorization, and nothing is sent to a broker."
+        description={profile?.operating_mode === 'deriv_demo'
+          ? 'Draft protected FX tickets against your saved risk profile. Each approved ticket opens a Multiplier on your Deriv demo account, only after your manual authorization.'
+          : 'Draft protected FX tickets against your saved risk profile. Every order needs your manual authorization, and nothing is sent to a broker.'}
       />
 
       <section className="itrade-status-strip" aria-label="Trading status">
         <span className={`itrade-mode-badge large ${profile?.operating_mode || 'paper'}`}>{MODE_LABELS[profile?.operating_mode || 'paper']}</span>
-        <span><LockKeyhole size={13} /> Order transmission: <b>disabled</b></span>
+        <span><LockKeyhole size={13} /> Orders: <b>{profile?.operating_mode === 'deriv_demo' ? 'Deriv demo only' : 'not sent to any broker'}</b></span>
         <span><Gauge size={13} /> Probability: <b>not yet calibrated</b></span>
         <span><RadioTower size={13} /> Live feeds: <b>{system?.feeds.filter((feed) => feed.state !== 'DISCONNECTED').length ?? 0} of {system?.feeds.length ?? 0} connected</b></span>
         <span className="itrade-server-time">Server {new Date(now).toLocaleTimeString([], { timeZone: 'UTC', hour: '2-digit', minute: '2-digit', second: '2-digit' })} UTC</span>
@@ -442,6 +522,7 @@ export default function ITradePage() {
       {overview?.pendingProfile && (
         <p className="itrade-pending-banner"><History size={14} /> Profile version {overview.pendingProfile.version} increases risk and takes effect {formatTime(overview.pendingProfile.effectiveFrom)}. Saving a new version replaces it.</p>
       )}
+      {overview?.broker?.error && <p className="itrade-lock-banner" role="alert"><AlertTriangle size={15} /><span><b>Deriv connection problem.</b> {overview.broker.error}</span></p>}
       {error && <p className="feed-interaction-notice feed-error" role="alert">{error}</p>}
       {notice && <p className="feed-interaction-notice" role="status">{notice}</p>}
 
@@ -457,11 +538,20 @@ export default function ITradePage() {
           <form className="itrade-panel itrade-ticket-form" onSubmit={submitTicket}>
             <div className="itrade-panel-heading"><span className="app-page-eyebrow">NEW TICKET</span><h2>Describe the setup</h2><p>The server runs all eight gates in order and drafts the quantity from your profile.</p></div>
             <div className="itrade-field-row">
-              <label>Pair<select value={ticketDraft.pair} onChange={(event) => updateTicket('pair', event.target.value)}>{PAIR_NAMES.map((pair) => <option key={pair} disabled={!profile.permitted_pairs.includes(pair)}>{pair}</option>)}</select></label>
+              <label>Pair<select value={ticketDraft.pair} onChange={(event) => updateTicket('pair', event.target.value)}>{PAIR_NAMES.map((pair) => <option key={pair} disabled={!profile.permitted_pairs.includes(pair) || (profile.operating_mode === 'deriv_demo' && !derivPairs.includes(pair))}>{pair}</option>)}</select></label>
               <div className="itrade-side-toggle" role="group" aria-label="Direction">
                 <button type="button" className={ticketDraft.side === 'buy' ? 'active buy' : ''} onClick={() => updateTicket('side', 'buy')}>BUY</button>
                 <button type="button" className={ticketDraft.side === 'sell' ? 'active sell' : ''} onClick={() => updateTicket('side', 'sell')}>SELL</button>
               </div>
+            </div>
+            <div className={`itrade-live-quote ${liveQuote ? '' : 'missing'}`}>
+              {liveQuote ? (
+                <>
+                  <span><RadioTower size={13} /> Live Deriv · {ticketDraft.pair}</span>
+                  <b>Bid {liveQuote.bid}</b><b>Ask {liveQuote.ask}</b><span>{liveQuote.spreadPips} pip spread · {liveQuote.age}s old</span>
+                  <button type="button" onClick={useLivePrice}>Use live {ticketDraft.side === 'buy' ? 'ask' : 'bid'}</button>
+                </>
+              ) : <span><RadioTower size={13} /> No live Deriv price for {ticketDraft.pair}{derivPairs.includes(ticketDraft.pair) ? ' right now (market closed or feed down).' : ' — not offered on Deriv.'}</span>}
             </div>
             <div className="itrade-field-row three">
               <label>Entry (executable side)<input type="number" step="any" required value={ticketDraft.entryPrice} onChange={(event) => updateTicket('entryPrice', event.target.value)} /></label>
@@ -482,7 +572,7 @@ export default function ITradePage() {
             </div>
             <label>One-line reason<input maxLength="200" required value={ticketDraft.rationale} onChange={(event) => updateTicket('rationale', event.target.value)} placeholder="e.g. US CPI beat; 2-year yields and USD crosses confirm" /></label>
             <label>Event (optional)<input maxLength="120" value={ticketDraft.eventLabel} onChange={(event) => updateTicket('eventLabel', event.target.value)} placeholder="e.g. US CPI, 15:30 Jerusalem" /></label>
-            <label className="itrade-check"><input type="checkbox" checked={ticketDraft.dataChecked} onChange={(event) => updateTicket('dataChecked', event.target.checked)} /> I checked current prices and breaking news myself (live feeds are not connected).</label>
+            <label className="itrade-check"><input type="checkbox" checked={ticketDraft.dataChecked} onChange={(event) => updateTicket('dataChecked', event.target.checked)} /> I checked breaking news myself{liveQuote ? '' : ' and the current price'} (the news feed is not connected).</label>
             <label className="itrade-check"><input type="checkbox" checked={ticketDraft.microstructureUsable} onChange={(event) => updateTicket('microstructureUsable', event.target.checked)} /> The order book is stable and liquid — the post-release spike is over.</label>
             <button type="submit" className="app-primary-button" disabled={busy}>{busy ? 'Checking…' : 'Run gates and draft ticket'}</button>
           </form>
@@ -495,7 +585,7 @@ export default function ITradePage() {
             )}
             {account && (
               <article className="itrade-panel itrade-account">
-                <span className="app-page-eyebrow">ACCOUNT · {account.equitySource === 'PAPER_LEDGER' ? 'PAPER LEDGER' : 'USER-REPORTED'}</span>
+                <span className="app-page-eyebrow">ACCOUNT · {{ PAPER_LEDGER: 'PAPER LEDGER', USER_REPORTED: 'USER-REPORTED', DERIV_DEMO: 'DERIV DEMO BALANCE' }[account.equitySource] ?? account.equitySource}</span>
                 <dl>
                   <div><dt>Equity</dt><dd>{formatMoney(account.equity, currency)}</dd></div>
                   <div><dt>Today</dt><dd className={account.todayPnl < 0 ? 'neg' : ''}>{formatMoney(account.todayPnl, currency)}</dd></div>
@@ -514,8 +604,9 @@ export default function ITradePage() {
         <div className="itrade-positions-layout">
           <section className="itrade-panel">
             <div className="itrade-panel-heading"><span className="app-page-eyebrow">OPEN</span><h2>Positions</h2></div>
-            {openPositions.length ? openPositions.map((ticket) => (
-              <PositionRow key={ticket.id} ticket={ticket} currency={currency} busy={busy} onClose={closePosition} onReport={report} />
+            {openPositions.length ? openPositions.map((ticket) => (ticket.operatingMode === 'deriv_demo'
+              ? <DerivPositionRow key={ticket.id} ticket={ticket} currency={currency} live={overview?.broker?.live?.[ticket.id]} busy={busy} onClose={closeDeriv} onResolve={resolve} />
+              : <PositionRow key={ticket.id} ticket={ticket} currency={currency} busy={busy} onClose={closePosition} onReport={report} />
             )) : <p className="itrade-muted">No open positions.</p>}
             <div className="itrade-panel-heading"><span className="app-page-eyebrow">CURRENCY EXPOSURE</span><h3>Risk at stop by currency and direction</h3></div>
             <table className="itrade-table">
@@ -558,7 +649,9 @@ export default function ITradePage() {
             <legend>How will you trade?</legend>
             <label className={profileDraft.operatingMode === 'paper' ? 'active' : ''}><input type="radio" name="mode" checked={profileDraft.operatingMode === 'paper'} onChange={() => updateProfile('operatingMode', 'paper')} /><b>Paper</b><span>The desk keeps a simulated ledger. No real money.</span></label>
             <label className={profileDraft.operatingMode === 'external_manual' ? 'active' : ''}><input type="radio" name="mode" checked={profileDraft.operatingMode === 'external_manual'} onChange={() => updateProfile('operatingMode', 'external_manual')} /><b>External manual</b><span>You type the drafted trade into your own broker and report what happened.</span></label>
-            <label className="disabled"><input type="radio" disabled /><b>Linked broker</b><span>Not available — no broker is connected.</span></label>
+            {derivAvailable
+              ? <label className={profileDraft.operatingMode === 'deriv_demo' ? 'active' : ''}><input type="radio" name="mode" checked={profileDraft.operatingMode === 'deriv_demo'} onChange={() => updateProfile('operatingMode', 'deriv_demo')} /><b>Deriv demo (linked)</b><span>Approved tickets open real Multiplier trades on your Deriv DEMO account. Demo money only.</span></label>
+              : <label className="disabled"><input type="radio" disabled /><b>Linked broker</b><span>Not available for your account.</span></label>}
           </fieldset>
           <div className="itrade-field-row">
             <label>Account currency<select value={profileDraft.accountCurrency} onChange={(event) => updateProfile('accountCurrency', event.target.value)}>{['USD', 'EUR', 'GBP', 'JPY', 'CAD'].map((code) => <option key={code}>{code}</option>)}</select></label>

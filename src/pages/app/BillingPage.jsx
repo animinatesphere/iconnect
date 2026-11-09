@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react'
-import { ArrowUpRight, BadgeCheck, CreditCard, Heart, RefreshCw, ShieldCheck } from 'lucide-react'
+import { ArrowUpRight, BadgeCheck, CreditCard, Heart, MapPin, RefreshCw, ShieldCheck } from 'lucide-react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import AppPageHeader from '../../components/AppPageHeader.jsx'
 import { cancelBillingSubscription, confirmBillingPayment, getBillingCatalog, getMyBilling, startBillingCheckout } from '../../utils/billingApi.js'
@@ -17,6 +17,14 @@ function formatPrice(amountMinor, currency) {
     currency,
     maximumFractionDigits: currency === 'NGN' ? 0 : 2,
   }).format(amountMinor / 100)
+}
+
+function countryName(code) {
+  try {
+    return new Intl.DisplayNames(undefined, { type: 'region' }).of(code) || code
+  } catch {
+    return code
+  }
 }
 
 function formatDate(value) {
@@ -106,8 +114,15 @@ export default function BillingPage() {
   }
 
   if (loading) return <div className="app-content-width"><p role="status">Loading billing…</p></div>
-  const plans = catalog?.plans?.filter((plan) => plan.currency === currency) ?? []
-  const datingProducts = catalog?.datingProducts?.filter((product) => product.currency === currency) ?? []
+  const country = catalog?.location?.country
+  // With a detected country the server already returns only local prices.
+  // Without one, every plan comes back and the member picks a currency.
+  const availableCurrencies = [...new Set((catalog?.plans ?? []).map((plan) => plan.currency))]
+  const pickedCurrency = availableCurrencies.includes(currency) ? currency : availableCurrencies[0]
+  const plans = country ? catalog?.plans ?? [] : catalog?.plans?.filter((plan) => plan.currency === pickedCurrency) ?? []
+  const datingProducts = country
+    ? catalog?.datingProducts ?? []
+    : catalog?.datingProducts?.filter((product) => product.currency === pickedCurrency) ?? []
   const subscription = billing?.subscription
   const hasCurrentSubscription = Boolean(subscription && ['active', 'past_due'].includes(subscription.status))
 
@@ -151,12 +166,13 @@ export default function BillingPage() {
       <section className="billing-section">
         <div className="billing-section-heading">
           <div><span className="app-page-eyebrow">MONTHLY PLANS</span><h2>Choose your publishing plan</h2></div>
-          <label className="billing-currency-picker">Currency
-            <select value={currency} onChange={(event) => setCurrency(event.target.value)} aria-label="Payment currency">
-              <option value="NGN">Nigerian naira (NGN)</option>
-              <option value="USD">US dollar (USD)</option>
-            </select>
-          </label>
+          {country
+            ? <p className="billing-location-note"><MapPin size={14} /> Prices for {countryName(country)}</p>
+            : <label className="billing-currency-picker">Currency
+              <select value={pickedCurrency ?? ''} onChange={(event) => setCurrency(event.target.value)} aria-label="Payment currency">
+                {availableCurrencies.map((code) => <option key={code} value={code}>{code}</option>)}
+              </select>
+            </label>}
         </div>
         <div className="billing-plan-grid">
           {plans.map((plan) => <article className="billing-plan-card" key={plan.id}>
@@ -168,7 +184,7 @@ export default function BillingPage() {
               {busy === `plan-${plan.id}` ? 'Opening checkout…' : subscription?.status === 'active' && subscription.planId === plan.id ? 'Current plan' : hasCurrentSubscription ? 'Publisher plan active' : <>Choose plan <ArrowUpRight size={15} /></>}
             </button>
           </article>)}
-          {!plans.length && <p className="billing-empty">No publisher plans are available in this currency right now.</p>}
+          {!plans.length && <p className="billing-empty">{country ? `No publisher plans are available in ${countryName(country)} yet.` : 'No publisher plans are available in this currency right now.'}</p>}
         </div>
       </section>
 

@@ -137,6 +137,37 @@ https://api.iconnectdworld.com/api/billing/webhooks/paystack
 
 Configure that URL in the Paystack Dashboard's API Keys & Webhooks settings, with webhook signing enabled. `PAYSTACK_SECRET_KEY` belongs only in the backend/VPS environment (for example, `/home/iconnect/iconnect/.env`, mode `600`). Start in Paystack test mode and verify the backend is deployed before using live mode. Deployment and payment setup details are in [server/README.md](./server/README.md). The webhook is for payment events; it does not create wallet, FX, or crypto features.
 
+### iTrade on Deriv (demo)
+
+iTrade reads live FX bid/ask from Deriv's public API for every member, so tickets are checked against the real price (entry must be within 2 pips of the live ask/bid). Deriv offers these iTrade pairs as Multipliers: EUR/USD, GBP/USD, USD/JPY, USD/CAD, EUR/GBP, EUR/JPY, EUR/CAD, GBP/JPY (not GBP/CAD or CAD/JPY).
+
+The site owner (any email in `ADMIN_EMAILS`) can switch their risk profile to **Deriv demo**. An authorized ticket then opens a Multiplier contract on the owner's Deriv **demo** account with a stop-loss and take-profit set at the ticket's stop and target prices (adjusted for Deriv's commission, which is also counted in the 2:1 check). The code refuses real Deriv accounts. A buy is attempted once and never retried; if the connection drops mid-buy the ticket stays "submitting" until the owner checks Deriv and resolves it in Positions.
+
+Server settings (VPS `.env` only, never in the frontend):
+
+```dotenv
+DERIV_APP_ID=your_app_id
+DERIV_API_TOKEN=your_personal_access_token   # Read + Trade scopes only
+# DERIV_ACCOUNT_ID=DOT...                    # optional: pick a specific demo account
+```
+
+### Location-based plan prices
+
+Members see publisher plans priced for the country they are browsing from. In **Admin → Monetization**, each plan has a currency and a **Countries** field (two-letter codes, e.g. `GB`, `CA`, `US`). A plan with no countries is the default price for every country that has no plan of its own. Existing NGN plans were set to `NG`; the USD plans are the default. Checkout re-checks the country on the server, so a member cannot buy another country's plan. Dating extras use NGN in Nigeria and USD elsewhere.
+
+The API finds the country from the `x-vercel-ip-country` (or `cf-ipcountry`) header, then falls back to an IP-to-country database if `GEOIP_COUNTRY_DB` points at one. When neither works, members see every plan with a currency picker. Signed-in members can check detection at `/api/billing/location`.
+
+To enable the fallback on the VPS (free DB-IP Lite database, CC BY 4.0 — credit db-ip.com on the site):
+
+```sh
+sudo mkdir -p /var/lib/iconnect && cd /var/lib/iconnect
+sudo curl -fsSL -o country.mmdb.gz "https://download.db-ip.com/free/dbip-country-lite-$(date +%Y-%m).mmdb.gz"
+sudo gunzip -f country.mmdb.gz
+# then add GEOIP_COUNTRY_DB=/var/lib/iconnect/country.mmdb to /home/iconnect/iconnect/.env and restart the API
+```
+
+NGN plans are charged through Paystack. Every other currency (GBP, CAD, USD, …) is charged through Stripe, which must be configured before those checkouts work.
+
 ### iTrade / Deriv trading-bot proposal
 
 The owner has proposed an iTrade bot that can trade for users through a broker such as Deriv. The existing iTrade page is not an automated trading integration.

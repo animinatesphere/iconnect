@@ -880,12 +880,12 @@ CREATE TABLE IF NOT EXISTS trading_tickets (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   profile_id uuid NOT NULL REFERENCES trading_risk_profiles(id) ON DELETE RESTRICT,
-  operating_mode varchar(16) NOT NULL CHECK (operating_mode IN ('paper', 'external_manual')),
+  operating_mode varchar(16) NOT NULL CHECK (operating_mode IN ('paper', 'external_manual', 'deriv_demo')),
   pair varchar(7) NOT NULL,
   side varchar(4) NOT NULL CHECK (side IN ('buy', 'sell')),
   status varchar(16) NOT NULL CHECK (status IN (
     'rejected', 'drafted', 'expired', 'declined', 'accepted_manual',
-    'open', 'not_filled', 'cancelled', 'closed'
+    'open', 'not_filled', 'cancelled', 'closed', 'submitting', 'broker_rejected'
   )),
   decision jsonb NOT NULL,
   drafted_quantity integer CHECK (drafted_quantity IS NULL OR drafted_quantity > 0),
@@ -906,6 +906,17 @@ CREATE TABLE IF NOT EXISTS trading_tickets (
   updated_at timestamptz NOT NULL DEFAULT now(),
   CHECK (authorized_quantity IS NULL OR authorized_quantity <= drafted_quantity)
 );
+
+-- Deriv demo execution (existing databases get the wider checks and broker column).
+ALTER TABLE trading_tickets DROP CONSTRAINT IF EXISTS trading_tickets_operating_mode_check;
+ALTER TABLE trading_tickets ADD CONSTRAINT trading_tickets_operating_mode_check
+  CHECK (operating_mode IN ('paper', 'external_manual', 'deriv_demo'));
+ALTER TABLE trading_tickets DROP CONSTRAINT IF EXISTS trading_tickets_status_check;
+ALTER TABLE trading_tickets ADD CONSTRAINT trading_tickets_status_check CHECK (status IN (
+  'rejected', 'drafted', 'expired', 'declined', 'accepted_manual',
+  'open', 'not_filled', 'cancelled', 'closed', 'submitting', 'broker_rejected'
+));
+ALTER TABLE trading_tickets ADD COLUMN IF NOT EXISTS broker jsonb;
 
 CREATE INDEX IF NOT EXISTS trading_tickets_user_created_idx
   ON trading_tickets(user_id, created_at DESC);
@@ -929,3 +940,30 @@ CREATE TABLE IF NOT EXISTS trading_audit_events (
 
 CREATE INDEX IF NOT EXISTS trading_audit_user_created_idx
   ON trading_audit_events(user_id, created_at DESC);
+
+-- Location-based plan prices. A plan with no country codes is the default
+-- price for every country that has no plan of its own.
+ALTER TABLE subscription_plans DROP CONSTRAINT IF EXISTS subscription_plans_currency_check;
+ALTER TABLE subscription_plans ADD CONSTRAINT subscription_plans_currency_check
+  CHECK (currency IN ('NGN', 'USD', 'GBP', 'EUR', 'CAD', 'AUD', 'NZD', 'GHS', 'KES', 'ZAR', 'INR', 'AED'));
+ALTER TABLE billing_subscriptions DROP CONSTRAINT IF EXISTS billing_subscriptions_currency_check;
+ALTER TABLE billing_subscriptions ADD CONSTRAINT billing_subscriptions_currency_check
+  CHECK (currency IN ('NGN', 'USD', 'GBP', 'EUR', 'CAD', 'AUD', 'NZD', 'GHS', 'KES', 'ZAR', 'INR', 'AED'));
+ALTER TABLE billing_transactions DROP CONSTRAINT IF EXISTS billing_transactions_currency_check;
+ALTER TABLE billing_transactions ADD CONSTRAINT billing_transactions_currency_check
+  CHECK (currency IN ('NGN', 'USD', 'GBP', 'EUR', 'CAD', 'AUD', 'NZD', 'GHS', 'KES', 'ZAR', 'INR', 'AED'));
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_name = 'subscription_plans' AND column_name = 'country_codes'
+  ) THEN
+    ALTER TABLE subscription_plans ADD COLUMN country_codes text[] NOT NULL DEFAULT '{}';
+    -- One-time: existing naira plans become the Nigeria price; USD plans stay the default.
+    UPDATE subscription_plans SET country_codes = '{NG}' WHERE currency = 'NGN';
+  END IF;
+END $$;
+
+CREATE INDEX IF NOT EXISTS subscription_plans_country_codes_idx
+  ON subscription_plans USING gin (country_codes);
