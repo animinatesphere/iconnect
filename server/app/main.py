@@ -767,8 +767,8 @@ class DatingBillingProductInput(StrictModel):
 
 
 class BillingCheckoutInput(StrictModel):
-    plan_id: Optional[UUID] = None
-    dating_product_id: Optional[UUID] = None
+    plan_id: Optional[UUID] = Field(default=None, strict=False)
+    dating_product_id: Optional[UUID] = Field(default=None, strict=False)
 
     @model_validator(mode="after")
     def validate_checkout_item(self) -> "BillingCheckoutInput":
