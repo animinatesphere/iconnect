@@ -10,8 +10,24 @@ from typing import Any, Dict, Optional
 
 
 class BillingProviderError(Exception):
-    def __init__(self, status_code: Optional[int] = None):
+    def __init__(self, status_code: Optional[int] = None, detail: Optional[str] = None):
+        super().__init__(detail or "")
         self.status_code = status_code
+        self.detail = detail
+
+
+def _provider_error_detail(raw: Any) -> Optional[str]:
+    """Pull the provider's human-readable error message (never contains secrets)."""
+    try:
+        data = json.loads(raw) if isinstance(raw, (bytes, str)) else raw
+    except (ValueError, UnicodeDecodeError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    message = data.get("message")
+    if not message and isinstance(data.get("error"), dict):
+        message = data["error"].get("message")
+    return str(message)[:300] if message else None
 
 
 def provider_request(
@@ -47,14 +63,18 @@ def provider_request(
         with urllib.request.urlopen(request, timeout=20) as response:
             result = json.loads(response.read(1024 * 1024))
     except urllib.error.HTTPError as error:
-        raise BillingProviderError(error.code) from error
+        try:
+            detail = _provider_error_detail(error.read(64 * 1024))
+        except OSError:
+            detail = None
+        raise BillingProviderError(error.code, detail) from error
     except (urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError) as error:
-        raise BillingProviderError() from error
+        raise BillingProviderError(None, type(error).__name__ + ": " + str(error)[:200]) from error
 
     if not isinstance(result, dict):
         raise BillingProviderError()
     if not is_stripe and result.get("status") is False:
-        raise BillingProviderError()
+        raise BillingProviderError(None, _provider_error_detail(result))
     return result
 
 

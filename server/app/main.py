@@ -2111,7 +2111,10 @@ def create_app(
         try:
             return provider_request(provider, secret, path)
         except BillingProviderError as error:
-            logger.warning("%s billing verification failed (HTTP %s)", provider, error.status_code)
+            logger.warning(
+                "%s billing verification failed (HTTP %s): %s",
+                provider, error.status_code, error.detail,
+            )
             raise ApiError(
                 502,
                 "payment_verification_failed",
@@ -2546,7 +2549,10 @@ def create_app(
                             (reference, inserted["id"]),
                         )
         except BillingProviderError as error:
-            logger.warning("%s checkout initialization failed (HTTP %s)", provider, error.status_code)
+            logger.warning(
+                "%s checkout initialization failed (HTTP %s): %s",
+                provider, error.status_code, error.detail,
+            )
             with database.connection() as connection:
                 connection.execute(
                     "UPDATE billing_transactions SET status = 'failed' WHERE id = %s",
@@ -5470,7 +5476,7 @@ def create_app(
                 },
             )
         except BillingProviderError as provider_error:
-            logger.warning("Paystack marketplace checkout failed (HTTP %s)", provider_error.status_code)
+            logger.warning("Paystack marketplace checkout failed (HTTP %s): %s", provider_error.status_code, provider_error.detail)
             with database.connection() as connection:
                 fail_marketplace_transaction(connection, transaction["id"])
             raise ApiError(
