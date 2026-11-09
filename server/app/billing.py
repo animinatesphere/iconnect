@@ -41,7 +41,8 @@ def provider_request(
     base_url = "https://api.stripe.com" if is_stripe else "https://api.paystack.co"
     url = base_url + path
     body = None
-    headers = {"Accept": "application/json"}
+    # Paystack's Cloudflare firewall rejects Python's default "Python-urllib" agent with HTTP 403.
+    headers = {"Accept": "application/json", "User-Agent": "iConnect-API/1.0"}
     if is_stripe:
         headers["Authorization"] = "Bearer " + secret_key
         if payload is not None:
@@ -64,7 +65,10 @@ def provider_request(
             result = json.loads(response.read(1024 * 1024))
     except urllib.error.HTTPError as error:
         try:
-            detail = _provider_error_detail(error.read(64 * 1024))
+            raw = error.read(64 * 1024)
+            detail = _provider_error_detail(raw) or (
+                "non-JSON response: " + raw[:200].decode("utf-8", "replace").replace("\n", " ")
+            )
         except OSError:
             detail = None
         raise BillingProviderError(error.code, detail) from error
