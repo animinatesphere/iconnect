@@ -46,6 +46,10 @@ class Settings:
     paystack_secret_key: str = ""
     stripe_secret_key: str = ""
     stripe_webhook_secret: str = ""
+    geoip_country_db: str = ""
+    deriv_app_id: str = ""
+    deriv_api_token: str = ""
+    deriv_account_id: str = ""
 
 
 def _required_secret(name: str) -> str:
@@ -195,4 +199,8 @@ def load_settings() -> Settings:
         paystack_secret_key=paystack_secret_key,
         stripe_secret_key=stripe_secret_key,
         stripe_webhook_secret=stripe_webhook_secret,
+        geoip_country_db=os.getenv("GEOIP_COUNTRY_DB", "").strip(),
+        deriv_app_id=os.getenv("DERIV_APP_ID", "").strip(),
+        deriv_api_token=os.getenv("DERIV_API_TOKEN", "").strip(),
+        deriv_account_id=os.getenv("DERIV_ACCOUNT_ID", "").strip(),
     )

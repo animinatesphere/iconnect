@@ -48,6 +48,8 @@ from .security import (
 )
 from .job_sources import fetch_external_jobs
 from .trading import register_trading_routes
+from .deriv import DerivAccount, DerivMarketData
+from .geo import SUPPORTED_CURRENCIES, normalize_country, plan_visible_in_country, resolve_country
 
 
 LOGGER = logging.getLogger("iconnect.api")
@@ -725,7 +727,8 @@ class AssistantChatInput(StrictModel):
 
 class SubscriptionPlanInput(StrictModel):
     name: str = Field(min_length=1, max_length=80)
-    currency: Literal["NGN", "USD"]
+    currency: str = Field(min_length=3, max_length=3)
+    country_codes: List[str] = Field(default_factory=list, max_length=250)
     amount_minor: int = Field(ge=1, le=100_000_000_000)
     jobs_limit: int = Field(ge=0, le=10000)
     products_limit: int = Field(ge=0, le=10000)
@@ -740,6 +743,26 @@ class SubscriptionPlanInput(StrictModel):
         if not value:
             raise ValueError("A plan name is required.")
         return value
+
+    @field_validator("currency")
+    @classmethod
+    def supported_plan_currency(cls, value: str) -> str:
+        value = value.strip().upper()
+        if value not in SUPPORTED_CURRENCIES:
+            raise ValueError("Unsupported currency.")
+        return value
+
+    @field_validator("country_codes")
+    @classmethod
+    def clean_country_codes(cls, values: List[str]) -> List[str]:
+        cleaned: List[str] = []
+        for value in values:
+            code = normalize_country(value)
+            if not code:
+                raise ValueError("Use two-letter country codes such as US, GB or CA.")
+            if code not in cleaned:
+                cleaned.append(code)
+        return cleaned
 
 
 class PostingQuotaSettingsInput(StrictModel):
@@ -2106,7 +2129,28 @@ def create_app(
                 for category in ("jobs", "products", "marketplace", "videos")
             },
             "active": bool(row["active"]),
+            "countryCodes": list(row.get("country_codes") or []),
         }
+
+    def billing_location(request: Request) -> Tuple[Optional[str], str]:
+        return resolve_country(
+            request.headers,
+            request.client.host if request.client else None,
+            settings.trust_proxy,
+            settings.geoip_country_db,
+        )
+
+    def plans_for_country(rows: List[Dict[str, Any]], country: Optional[str]) -> List[Dict[str, Any]]:
+        has_country_plans = bool(country) and any(country in (row.get("country_codes") or []) for row in rows)
+        return [
+            row for row in rows
+            if plan_visible_in_country(row.get("country_codes"), country, has_country_plans)
+        ]
+
+    def dating_currency_for_country(country: Optional[str]) -> Optional[str]:
+        if country is None:
+            return None
+        return "NGN" if country == "NG" else "USD"
 
     def verify_billing_provider(provider: str, secret: str, path: str) -> Dict[str, Any]:
         try:
@@ -2269,12 +2313,19 @@ def create_app(
                 (order["quantity"], order["product_id"]),
             )
 
+    @app.get("/api/billing/location")
+    def get_billing_location(request: Request) -> Dict[str, Any]:
+        require_user(request)
+        country, source = billing_location(request)
+        return {"country": country, "source": source}
+
     @app.get("/api/billing/catalog")
     def get_billing_catalog(request: Request) -> Dict[str, Any]:
         require_user(request)
+        country, source = billing_location(request)
         with database.connection() as connection:
             plans = connection.execute(
-                """SELECT id, name, currency, amount_minor, posting_limits, active
+                """SELECT id, name, currency, amount_minor, posting_limits, active, country_codes
                    FROM subscription_plans WHERE active
                    ORDER BY currency, amount_minor, name"""
             ).fetchall()
@@ -2285,8 +2336,12 @@ def create_app(
                    WHERE active AND amount_minor > 0
                    ORDER BY currency, code, amount_minor"""
             ).fetchall()
+        dating_currency = dating_currency_for_country(country)
+        if dating_currency:
+            products = [product for product in products if product["currency"] == dating_currency]
         return {
-            "plans": [public_billing_plan(plan) for plan in plans],
+            "location": {"country": country, "source": source},
+            "plans": [public_billing_plan(plan) for plan in plans_for_country(plans, country)],
             "datingProducts": [{
                 "id": str(product["id"]),
                 "code": product["code"],
@@ -2388,16 +2443,31 @@ def create_app(
         request: Request,
     ) -> Dict[str, str]:
         user = require_user(request)
+        country, _source = billing_location(request)
         plan = None
         product = None
         if input.plan_id:
             with database.connection() as connection:
                 plan = connection.execute(
                     """SELECT id, name, currency, amount_minor, posting_limits,
-                              paystack_plan_code
+                              paystack_plan_code, country_codes
                        FROM subscription_plans WHERE id = %s AND active""",
                     (input.plan_id,),
                 ).fetchone()
+                if plan and country:
+                    has_country_plans = connection.execute(
+                        """SELECT EXISTS (
+                               SELECT 1 FROM subscription_plans
+                               WHERE active AND %s = ANY(country_codes)
+                           ) AS present""",
+                        (country,),
+                    ).fetchone()["present"]
+                    if not plan_visible_in_country(plan["country_codes"], country, has_country_plans):
+                        raise ApiError(
+                            403,
+                            "plan_not_available_in_region",
+                            "This plan is not available in your country. Refresh to see your local prices.",
+                        )
                 active = connection.execute(
                     """SELECT id FROM billing_subscriptions
                        WHERE user_id = %s AND status IN ('active', 'past_due')
@@ -2421,6 +2491,13 @@ def create_app(
                 ).fetchone()
             if not product:
                 raise ApiError(404, "dating_product_not_found", "That dating add-on is not available.")
+            local_currency = dating_currency_for_country(country)
+            if local_currency and product["currency"] != local_currency:
+                raise ApiError(
+                    403,
+                    "product_not_available_in_region",
+                    "This add-on is not available in your country. Refresh to see your local prices.",
+                )
             transaction_type = "dating_boost" if product["code"] == "profile_boost" else "dating_likes"
 
         provider = "paystack" if (plan or product)["currency"] == "NGN" else "stripe"
@@ -2524,7 +2601,7 @@ def create_app(
                     "customer_email": user["email"],
                     "client_reference_id": reference,
                     "metadata[transaction_id]": str(inserted["id"]),
-                    "line_items[0][price_data][currency]": "usd",
+                    "line_items[0][price_data][currency]": str(item["currency"]).lower(),
                     "line_items[0][price_data][unit_amount]": str(int(item["amount_minor"])),
                     "line_items[0][price_data][product_data][name]": item["name"],
                     "line_items[0][quantity]": "1",
@@ -4135,7 +4212,7 @@ def create_app(
     ) -> Dict[str, Any]:
         with database.connection() as connection:
             plans = connection.execute(
-                """SELECT id, name, currency, amount_minor, posting_limits, active
+                """SELECT id, name, currency, amount_minor, posting_limits, active, country_codes
                    FROM subscription_plans ORDER BY currency, amount_minor, name"""
             ).fetchall()
             settings_row = connection.execute(
@@ -4246,12 +4323,12 @@ def create_app(
         with database.connection() as connection:
             row = connection.execute(
                 """INSERT INTO subscription_plans
-                       (name, currency, amount_minor, posting_limits, active, created_by)
-                   VALUES (%s, %s, %s, %s::jsonb, %s, %s)
-                   RETURNING id, name, currency, amount_minor, posting_limits, active""",
+                       (name, currency, amount_minor, posting_limits, active, created_by, country_codes)
+                   VALUES (%s, %s, %s, %s::jsonb, %s, %s, %s)
+                   RETURNING id, name, currency, amount_minor, posting_limits, active, country_codes""",
                 (
                     input.name, input.currency, input.amount_minor,
-                    json.dumps(posting_limits), input.active, admin["id"],
+                    json.dumps(posting_limits), input.active, admin["id"], input.country_codes,
                 ),
             ).fetchone()
             connection.execute(
@@ -4277,13 +4354,13 @@ def create_app(
             row = connection.execute(
                 """UPDATE subscription_plans
                    SET name = %s, currency = %s, amount_minor = %s,
-                       posting_limits = %s::jsonb, active = %s,
+                       posting_limits = %s::jsonb, active = %s, country_codes = %s,
                        paystack_plan_code = NULL, updated_at = now()
                    WHERE id = %s
-                   RETURNING id, name, currency, amount_minor, posting_limits, active""",
+                   RETURNING id, name, currency, amount_minor, posting_limits, active, country_codes""",
                 (
                     input.name, input.currency, input.amount_minor,
-                    json.dumps(posting_limits), input.active, plan_id,
+                    json.dumps(posting_limits), input.active, input.country_codes, plan_id,
                 ),
             ).fetchone()
             if not row:
@@ -8422,6 +8499,10 @@ def create_app(
         require_user=require_user,
         rate_limit=enforce_social_rate_limit,
         api_error=ApiError,
+        market=DerivMarketData(),
+        deriv=DerivAccount(settings.deriv_app_id, settings.deriv_api_token, settings.deriv_account_id),
+        # The Deriv token belongs to the site owner, so only admin emails may trade with it.
+        is_owner=lambda user: str(user.get("email") or "").strip().lower() in settings.admin_emails,
     )
 
     return app

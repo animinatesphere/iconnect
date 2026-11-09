@@ -47,6 +47,8 @@ MAX_SPREAD_PIPS: Dict[str, float] = {
     "CAD/JPY": 4.0,
 }
 
+MAX_ENTRY_DEVIATION_PIPS = 2.0
+QUOTE_MAX_AGE_SECONDS = 30
 STOP_MIN_PIPS = 15.0
 STOP_MAX_PIPS = 20.0
 MIN_NET_REWARD_TO_RISK = 2.0
@@ -119,17 +121,21 @@ def public_config() -> Dict[str, Any]:
     }
 
 
-def system_status() -> Dict[str, Any]:
+def system_status(market_state: str = "DISCONNECTED", deriv_available: bool = False,
+                  deriv_pairs: Optional[List[str]] = None) -> Dict[str, Any]:
+    feeds = [{"id": "deriv_market", "name": "Deriv live FX quotes", "state": market_state}]
+    feeds += [{"id": key, "name": name, "state": "DISCONNECTED"} for key, name in FEEDS]
     return {
-        "stage": "PAPER",
-        "orderTransmission": "DISABLED",
+        "stage": "DERIV_DEMO" if deriv_available else "PAPER",
+        "orderTransmission": "DERIV_DEMO_ONLY" if deriv_available else "DISABLED",
         "calibration": "NOT_YET_CALIBRATED",
-        "feeds": [{"id": key, "name": name, "state": "DISCONNECTED"} for key, name in FEEDS],
+        "feeds": feeds,
+        "derivPairs": deriv_pairs or [],
         "brokerModes": [
             {"id": "paper", "label": "Paper (system-tracked)", "available": True},
             {"id": "external_manual", "label": "External manual", "available": True},
+            {"id": "deriv_demo", "label": "Deriv demo (linked)", "available": deriv_available},
             {"id": "owner_linked_ibkr", "label": "Owner linked IBKR", "available": False},
-            {"id": "linked_broker", "label": "Linked broker", "available": False},
         ],
         "config": public_config(),
     }
@@ -145,7 +151,7 @@ class TradingModel(BaseModel):
 
 
 class RiskProfileInput(TradingModel):
-    operating_mode: Literal["paper", "external_manual"]
+    operating_mode: Literal["paper", "external_manual", "deriv_demo"]
     account_currency: Literal["USD", "EUR", "GBP", "JPY", "CAD"]
     capital: float = Field(gt=0, le=1_000_000_000)
     risk_tolerance: Literal["capital_preservation", "conservative", "balanced", "custom_restrictive"]
@@ -241,8 +247,13 @@ class ReportInput(TradingModel):
     quantity: Optional[int] = Field(default=None, ge=1, le=SAFETY_BOUNDS["max_quantity"])
 
 
+class ResolveInput(TradingModel):
+    opened: bool
+    contract_id: Optional[int] = Field(default=None, ge=1)
+
+
 class CloseInput(TradingModel):
-    exit_price: float = Field(gt=0, le=100000)
+    exit_price: Optional[float] = Field(default=None, gt=0, le=100000)
 
 
 # ---------------------------------------------------------------------------
@@ -341,11 +352,29 @@ def evaluate_ticket(profile: Dict[str, Any], account: Dict[str, Any], ticket: Di
             "probabilitySource": "TRADER_ESTIMATE_NOT_CALIBRATED",
         }
 
-    # G1 — data freshness. No feeds are connected, so the paper desk relies on the trader's check.
+    # G1 — data freshness. A live Deriv quote checks the price; news is still the trader's check.
     pip_value = pip_value_per_unit(pair, profile["account_currency"], entry, ticket.get("quote_to_account_rate"))
+    live = ticket.get("live_quote")
+    live_detail = ""
+    if ticket.get("require_live_quote") and not live:
+        reason = "NO TRADE — LIVE PRICE UNAVAILABLE"
+        gates.append(_gate("G1", GATE_NAMES[0][1], "fail", "No fresh Deriv price for {}. It may not be offered on Deriv, the market may be closed, or the feed is down.".format(pair)))
+        return finish(False)
+    if live:
+        executable = float(live["ask"] if side == "buy" else live["bid"])
+        live_spread = round((float(live["ask"]) - float(live["bid"])) / size, 1)
+        deviation = round(abs(entry - executable) / size, 1)
+        metrics.update({"liveBid": live["bid"], "liveAsk": live["ask"], "liveSpreadPips": live_spread, "entryDeviationPips": deviation})
+        if deviation > MAX_ENTRY_DEVIATION_PIPS:
+            reason = "NO TRADE — ENTRY IS AWAY FROM THE LIVE PRICE"
+            gates.append(_gate("G1", GATE_NAMES[0][1], "fail",
+                               "Entry {} is {:.1f} pips from the live {} {} (limit {:.0f} pips). Use the live price.".format(
+                                   entry, deviation, "ask" if side == "buy" else "bid", executable, MAX_ENTRY_DEVIATION_PIPS)))
+            return finish(False)
+        live_detail = "Live Deriv {} {} ({:.1f}-pip spread). ".format("ask" if side == "buy" else "bid", executable, live_spread)
     if not ticket["data_checked"]:
         reason = "NO TRADE — PRICE AND NEWS DATA NOT CONFIRMED"
-        gates.append(_gate("G1", GATE_NAMES[0][1], "fail", "Live feeds are not connected. Confirm you checked current prices and breaking news."))
+        gates.append(_gate("G1", GATE_NAMES[0][1], "fail", "Confirm you checked breaking news{}.".format("" if live else " and current prices")))
         return finish(False)
     if pip_value is None:
         reason = "NO TRADE — ACCOUNT CONVERSION RATE MISSING"
@@ -353,7 +382,7 @@ def evaluate_ticket(profile: Dict[str, Any], account: Dict[str, Any], ticket: Di
                            "Enter the {}→{} conversion rate so pip value can be calculated. It is never assumed.".format(
                                PAIRS[pair][1], profile["account_currency"])))
         return finish(False)
-    gates.append(_gate("G1", GATE_NAMES[0][1], "pass", "Trader-confirmed (paper). Live feeds are not connected."))
+    gates.append(_gate("G1", GATE_NAMES[0][1], "pass", live_detail + ("News: trader-confirmed." if live else "Prices and news trader-confirmed (no live price for this pair).")))
 
     # G2 — release state. No ticket from SCHEDULED or HEADLINE_ONLY.
     if RELEASE_STATES.index(ticket["release_state"]) < RELEASE_STATES.index("FULL_PRINT"):
@@ -364,6 +393,8 @@ def evaluate_ticket(profile: Dict[str, Any], account: Dict[str, Any], ticket: Di
 
     # G3 — microstructure and spread.
     spread = float(ticket["spread_pips"])
+    if live:
+        spread = max(spread, metrics["liveSpreadPips"])
     max_spread = MAX_SPREAD_PIPS[pair]
     if not ticket["microstructure_usable"]:
         reason = "WAIT — MARKET NOT STABLE"
@@ -539,11 +570,13 @@ def compute_locks(profile: Dict[str, Any], capital: float, today_pnl: float, wee
 # ---------------------------------------------------------------------------
 
 OPEN_STATUSES = ("accepted_manual", "open")
+# Submitting tickets already reserve risk: the order may be live at the broker.
+EXPOSURE_STATUSES = ("accepted_manual", "open", "submitting")
 
 TICKET_COLUMNS = """id, user_id, profile_id, operating_mode, pair, side, status, decision,
                     drafted_quantity, authorized_quantity, risk_amount, entry_price, stop_price,
                     target_price, fill_price, exit_price, realized_pnl, execution_source,
-                    idempotency_key, expires_at, authorized_at, closed_at, created_at"""
+                    idempotency_key, expires_at, authorized_at, closed_at, created_at, broker"""
 
 
 def _float(value: Any) -> Optional[float]:
@@ -584,6 +617,7 @@ def public_ticket(row: Dict[str, Any]) -> Dict[str, Any]:
         "exitPrice": _float(row["exit_price"]),
         "realizedPnl": _float(row["realized_pnl"]),
         "executionSource": row["execution_source"],
+        "broker": row.get("broker"),
         "idempotencyKey": str(row["idempotency_key"]) if row["status"] == "drafted" else None,
         "expiresAt": _iso(row["expires_at"]),
         "authorizedAt": _iso(row["authorized_at"]),
@@ -592,13 +626,55 @@ def public_ticket(row: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def usd_notional(pair: str, units: int, quotes: Dict[str, Dict[str, Any]]) -> Optional[float]:
+    """USD value of a position, needed because a Deriv stake x multiplier is in USD."""
+    base = PAIRS[pair][0]
+    if base == "USD":
+        return float(units)
+    reference = {"EUR": "EUR/USD", "GBP": "GBP/USD"}.get(base)
+    quote = quotes.get(reference) if reference else None
+    if not quote:
+        return None
+    return float(units) * (float(quote["bid"]) + float(quote["ask"])) / 2.0
+
+
 def register_trading_routes(
     app: FastAPI,
     database: Any,
     require_user: Callable[..., Dict[str, Any]],
     rate_limit: Callable[..., None],
     api_error: Callable[[int, str, str], Exception],
+    market: Any = None,
+    deriv: Any = None,
+    is_owner: Optional[Callable[[Dict[str, Any]], bool]] = None,
 ) -> None:
+    from .deriv import DERIV_SYMBOLS, DerivError, plan_multiplier_order
+
+    balance_cache: Dict[str, Any] = {"value": None, "at": None}
+
+    def deriv_ready(user: Dict[str, Any]) -> bool:
+        return bool(deriv is not None and deriv.configured and is_owner and is_owner(user))
+
+    def live_quote(pair: str) -> Optional[Dict[str, Any]]:
+        if market is None or pair not in DERIV_SYMBOLS:
+            return None
+        quote = market.quote(pair)
+        if not quote:
+            return None
+        age = max(0, int(datetime.now(timezone.utc).timestamp()) - int(quote["epoch"]))
+        if age > QUOTE_MAX_AGE_SECONDS:
+            return None
+        return dict(quote, age=age)
+
+    def deriv_balance() -> Optional[Dict[str, Any]]:
+        import time as _time
+
+        if balance_cache["value"] and balance_cache["at"] is not None and _time.monotonic() - balance_cache["at"] < 15:
+            return balance_cache["value"]
+        balance_cache["value"] = deriv.balance()
+        balance_cache["at"] = _time.monotonic()
+        return balance_cache["value"]
+
     def parse(model: Any, payload: Any) -> Any:
         # Return the specific rule that failed instead of the app-wide generic message.
         try:
@@ -653,7 +729,8 @@ def register_trading_routes(
         for row in expired:
             audit(connection, user_id, "ticket_expired", row["id"])
 
-    def account_state(connection: Any, user_id: Any, profile_row: Dict[str, Any]) -> Dict[str, Any]:
+    def account_state(connection: Any, user_id: Any, profile_row: Dict[str, Any],
+                      broker_balance: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         settings = profile_row["settings"]
         capital = float(settings["capital"])
         totals = connection.execute(
@@ -674,7 +751,7 @@ def register_trading_routes(
         ).fetchone()
         open_rows = connection.execute(
             """SELECT pair, side, risk_amount FROM trading_tickets
-               WHERE user_id = %s AND status IN ('accepted_manual', 'open')""",
+               WHERE user_id = %s AND status IN ('accepted_manual', 'open', 'submitting')""",
             (user_id,),
         ).fetchall()
         exposure: Dict[str, Dict[str, float]] = {}
@@ -687,11 +764,16 @@ def register_trading_routes(
         losses_today = int(totals["losses_today"])
         confirmed_at = datetime.fromisoformat(settings["capital_confirmed_at"]) if settings.get("capital_confirmed_at") else None
         locks = compute_locks(settings, capital, today_pnl, week_pnl, losses_today, confirmed_at, datetime.now(timezone.utc))
-        equity = capital + float(totals["total_pnl"])
+        if settings["operating_mode"] == "deriv_demo" and broker_balance:
+            equity = float(broker_balance["balance"])
+            source = "DERIV_DEMO"
+        else:
+            equity = capital + float(totals["total_pnl"])
+            source = "PAPER_LEDGER" if settings["operating_mode"] == "paper" else "USER_REPORTED"
         return {
             "capital": capital,
             "equity": round(equity, 2),
-            "equitySource": "PAPER_LEDGER" if settings["operating_mode"] == "paper" else "USER_REPORTED",
+            "equitySource": source,
             "todayPnl": round(today_pnl, 2),
             "weekPnl": round(week_pnl, 2),
             "lossesToday": losses_today,
@@ -712,13 +794,92 @@ def register_trading_routes(
             raise api_error(404, "ticket_not_found", "That ticket could not be found.")
         return row
 
+    def close_from_contract(connection: Any, user_id: Any, ticket: Dict[str, Any], contract: Dict[str, Any], reason: str) -> Optional[Dict[str, Any]]:
+        from psycopg.types.json import Jsonb
+
+        profit = contract.get("profit")
+        if profit is None and contract.get("sell_price") is not None and contract.get("buy_price") is not None:
+            profit = float(contract["sell_price"]) - float(contract["buy_price"])
+        if profit is None:
+            return None
+        exit_spot = contract.get("exit_spot") or contract.get("current_spot")
+        broker = dict(ticket.get("broker") or {}, closedBy=reason, status=contract.get("status"),
+                      sellPrice=contract.get("sell_price"))
+        row = connection.execute(
+            """UPDATE trading_tickets SET status = 'closed', exit_price = %s, realized_pnl = %s,
+                 broker = %s, closed_at = now(), updated_at = now()
+               WHERE id = %s AND status = 'open'
+               RETURNING """ + TICKET_COLUMNS,
+            (float(exit_spot) if exit_spot else None, round(float(profit), 2), Jsonb(broker), ticket["id"]),
+        ).fetchone()
+        if row:
+            audit(connection, user_id, "position_closed", ticket["id"], {
+                "realizedPnl": round(float(profit), 2), "source": "DERIV_DEMO", "closedBy": reason,
+            })
+        return row
+
+    def sync_deriv(user: Dict[str, Any]) -> Dict[str, Any]:
+        """Pull live P&L for open Deriv contracts and close any that Deriv already closed."""
+        with database.connection() as connection:
+            rows = connection.execute(
+                "SELECT " + TICKET_COLUMNS + """ FROM trading_tickets
+                   WHERE user_id = %s AND operating_mode = 'deriv_demo' AND status = 'open'
+                     AND broker ? 'contractId'""",
+                (user["id"],),
+            ).fetchall()
+        if not rows:
+            return {}
+        contracts = deriv.open_contracts([int(row["broker"]["contractId"]) for row in rows])
+        live: Dict[str, Any] = {}
+        with database.connection() as connection:
+            for row in rows:
+                contract = contracts.get(int(row["broker"]["contractId"]))
+                if not contract:
+                    continue
+                if contract.get("is_sold"):
+                    close_from_contract(connection, user["id"], row, contract, "deriv_limit_order")
+                    continue
+                live[str(row["id"])] = {
+                    "profit": _float(contract.get("profit")),
+                    "currentSpot": _float(contract.get("current_spot")),
+                    "entrySpot": _float(contract.get("entry_spot")),
+                    "bidPrice": _float(contract.get("bid_price")),
+                }
+        return live
+
+    @app.get("/api/trading/quotes")
+    def trading_quotes(user: Dict[str, Any] = Depends(require_user)) -> Dict[str, Any]:
+        now = int(datetime.now(timezone.utc).timestamp())
+        quotes = market.quotes() if market is not None else {}
+        return {
+            "serverTime": datetime.now(timezone.utc).isoformat(),
+            "quotes": {
+                pair: dict(quote, age=max(0, now - int(quote["epoch"])),
+                           spreadPips=round((quote["ask"] - quote["bid"]) / pip_size(pair), 1))
+                for pair, quote in quotes.items()
+            },
+        }
+
     @app.get("/api/trading/overview")
     def trading_overview(user: Dict[str, Any] = Depends(require_user)) -> Dict[str, Any]:
+        broker_live: Dict[str, Any] = {}
+        broker_error = None
+        broker_balance = None
+        with database.connection() as connection:
+            profile_row = effective_profile(connection, user["id"])
+        if profile_row and profile_row["settings"]["operating_mode"] == "deriv_demo" and deriv_ready(user):
+            try:
+                broker_live = sync_deriv(user)
+                broker_balance = deriv_balance()
+            except DerivError as error:
+                broker_error = error.message
+        if market is not None:
+            market.quotes()
         with database.connection() as connection:
             expire_drafts(connection, user["id"])
             profile_row = effective_profile(connection, user["id"])
             pending = pending_profile(connection, user["id"])
-            account = account_state(connection, user["id"], profile_row) if profile_row else None
+            account = account_state(connection, user["id"], profile_row, broker_balance) if profile_row else None
             if account:
                 account.pop("open_ideas", None)
             tickets = connection.execute(
@@ -732,11 +893,12 @@ def register_trading_routes(
                 (user["id"],),
             ).fetchall()
         return {
-            "system": system_status(),
+            "system": system_status(market.state() if market is not None else "DISCONNECTED", deriv_ready(user), list(DERIV_SYMBOLS)),
             "serverTime": datetime.now(timezone.utc).isoformat(),
             "profile": public_profile(profile_row),
             "pendingProfile": public_profile(pending),
             "account": account,
+            "broker": {"live": broker_live, "error": broker_error, "balance": broker_balance},
             "tickets": [public_ticket(row) for row in tickets],
             "audit": [
                 {
@@ -755,6 +917,20 @@ def register_trading_routes(
 
         input = parse(RiskProfileInput, payload)
         settings = input.model_dump()
+        if input.operating_mode == "deriv_demo":
+            if not deriv_ready(user):
+                raise api_error(403, "deriv_not_available",
+                                "Deriv demo trading is only available to the site owner once Deriv is configured on the server.")
+            try:
+                deriv_account = deriv.account(refresh=True)
+            except DerivError as error:
+                raise api_error(502, error.code, error.message)
+            if str(deriv_account.get("currency") or "").upper() != input.account_currency:
+                raise api_error(400, "currency_mismatch", "Your Deriv demo account is in {}. Set the account currency to {}.".format(
+                    deriv_account.get("currency"), deriv_account.get("currency")))
+            unsupported = [pair for pair in input.permitted_pairs if pair not in DERIV_SYMBOLS]
+            if unsupported:
+                raise api_error(400, "pairs_not_on_deriv", "Deriv does not offer Multipliers on: {}. Untick them.".format(", ".join(unsupported)))
         now_iso = datetime.now(timezone.utc).isoformat()
         settings["capital_confirmed_at"] = now_iso
         settings["capital_basis_at"] = now_iso
@@ -800,6 +976,7 @@ def register_trading_routes(
                 "version": row["version"],
                 "riskIncrease": increase,
                 "effectiveFrom": _iso(row["effective_from"]),
+                "mode": settings["operating_mode"],
             })
         return {"profile": public_profile(row), "riskIncrease": increase, "coolingPeriodHours": COOLING_PERIOD_HOURS if increase else 0}
 
@@ -808,6 +985,13 @@ def register_trading_routes(
         from psycopg.types.json import Jsonb
 
         input = parse(TicketInput, payload)
+        quote = live_quote(input.pair)  # Network calls before taking the trader lock.
+        deriv_commission = None
+        if market is not None and input.pair in DERIV_SYMBOLS:
+            rate = market.commission_rate(input.pair)
+            notional_100k = usd_notional(input.pair, 100000, market.quotes())
+            if rate is not None and notional_100k:
+                deriv_commission = round(rate * notional_100k, 2)
         with database.connection() as connection:
             lock_user(connection, user["id"])
             expire_drafts(connection, user["id"])
@@ -815,10 +999,21 @@ def register_trading_routes(
             if not profile_row:
                 raise api_error(409, "risk_profile_required", "Set up and confirm your risk profile before drafting a ticket.")
             settings = profile_row["settings"]
+            if settings["operating_mode"] == "deriv_demo" and not deriv_ready(user):
+                raise api_error(409, "deriv_not_available", "Deriv is not configured on the server. Switch your profile to paper.")
             account = account_state(connection, user["id"], profile_row)
-            ticket_fields = input.model_dump()
-            decision = evaluate_ticket(settings, account, ticket_fields)
-            decision["inputs"] = ticket_fields
+            inputs = input.model_dump()
+            if settings["operating_mode"] == "deriv_demo":
+                if deriv_commission is None:
+                    raise api_error(503, "deriv_commission_unavailable", "Could not get Deriv's commission for this pair. Try again.")
+                # Deriv charges commission instead of a separate fee; count it in the 2:1 check now.
+                inputs["commission_per_100k"] = max(float(inputs["commission_per_100k"]), deriv_commission)
+            decision = evaluate_ticket(settings, account, dict(
+                inputs, live_quote=quote, require_live_quote=settings["operating_mode"] == "deriv_demo",
+            ))
+            decision["inputs"] = inputs
+            decision["liveQuoteAtDraft"] = quote
+            decision["derivCommissionPer100k"] = deriv_commission
             decision["profileVersion"] = int(profile_row["version"])
             decision["accountCurrency"] = settings["account_currency"]
             draft = decision["draft"]
@@ -848,11 +1043,15 @@ def register_trading_routes(
         from psycopg.types.json import Jsonb
 
         with database.connection() as connection:
+            preview = load_ticket(connection, ticket_id, user["id"])
+        quote = live_quote(preview["pair"])  # Fresh price for the final check, fetched outside the lock.
+
+        with database.connection() as connection:
             lock_user(connection, user["id"])
             ticket = load_ticket(connection, ticket_id, user["id"])
             if str(ticket["idempotency_key"]) != str(input.idempotency_key):
                 raise api_error(409, "ticket_version_mismatch", "This screen is out of date. Refresh to see the current ticket.")
-            if ticket["status"] in ("open", "accepted_manual"):
+            if ticket["status"] in ("open", "accepted_manual", "submitting"):
                 # Repeated tap or second device: already authorized once, never twice.
                 return {"ticket": public_ticket(ticket), "alreadyAuthorized": True}
             if ticket["status"] != "drafted":
@@ -865,15 +1064,20 @@ def register_trading_routes(
                 raise api_error(400, "quantity_not_allowed",
                                 "Quantity must be in steps of 1,000 and no more than the drafted {:,} units.".format(ticket["drafted_quantity"]))
 
-            # Final revalidation against the current profile and account state.
+            # Final revalidation against the current profile, account state and live price.
             profile_row = effective_profile(connection, user["id"])
             if not profile_row or str(profile_row["id"]) != str(ticket["profile_id"]):
                 connection.execute("UPDATE trading_tickets SET status = 'expired', updated_at = now() WHERE id = %s", (ticket_id,))
                 audit(connection, user["id"], "ticket_expired", ticket_id, {"reason": "profile_changed"})
                 raise api_error(409, "profile_changed", "Your risk profile changed. Draft a fresh ticket.")
+            mode = ticket["operating_mode"]
+            if mode == "deriv_demo" and not deriv_ready(user):
+                raise api_error(409, "deriv_not_available", "Deriv is not configured on the server.")
             decision = ticket["decision"]
             account = account_state(connection, user["id"], profile_row)
-            recheck = evaluate_ticket(profile_row["settings"], account, decision["inputs"])
+            recheck = evaluate_ticket(profile_row["settings"], account, dict(
+                decision["inputs"], live_quote=quote, require_live_quote=mode == "deriv_demo",
+            ))
             if not recheck["qualified"] or input.quantity > recheck["draft"]["quantity"]:
                 connection.execute("UPDATE trading_tickets SET status = 'expired', updated_at = now() WHERE id = %s", (ticket_id,))
                 audit(connection, user["id"], "revalidation_failed", ticket_id, {"reason": recheck["reason"]})
@@ -881,12 +1085,14 @@ def register_trading_routes(
                                 "Final check failed: {}. Draft a fresh ticket.".format(recheck["reason"] or "account limits changed"))
 
             risk_amount = risk_for_quantity(decision, input.quantity)
-            paper = ticket["operating_mode"] == "paper"
             decision["gates"] = [
                 dict(gate, status="pass", detail="Authorized by you at {}.".format(datetime.now(timezone.utc).strftime("%H:%M:%S UTC")))
                 if gate["id"] == "G8" else gate
                 for gate in decision["gates"]
             ]
+            decision["liveQuoteAtAuthorization"] = quote
+            new_status = {"paper": "open", "external_manual": "accepted_manual", "deriv_demo": "submitting"}[mode]
+            source = {"paper": "PAPER_SIMULATED", "external_manual": "USER_REPORTED", "deriv_demo": "DERIV_DEMO"}[mode]
             row = connection.execute(
                 """UPDATE trading_tickets
                    SET status = %s, authorized_quantity = %s, risk_amount = %s,
@@ -896,16 +1102,172 @@ def register_trading_routes(
                    WHERE id = %s AND status = 'drafted' AND idempotency_key = %s
                    RETURNING """ + TICKET_COLUMNS,
                 (
-                    "open" if paper else "accepted_manual", input.quantity, risk_amount,
-                    paper, "PAPER_SIMULATED" if paper else "USER_REPORTED", Jsonb(decision),
+                    new_status, input.quantity, risk_amount,
+                    mode == "paper", source, Jsonb(decision),
                     ticket_id, input.idempotency_key,
                 ),
             ).fetchone()
             audit(connection, user["id"], "ticket_authorized", ticket_id, {
                 "quantity": input.quantity, "draftedQuantity": ticket["drafted_quantity"], "riskAmount": risk_amount,
-                "mode": ticket["operating_mode"],
+                "mode": mode,
             })
-        return {"ticket": public_ticket(row), "alreadyAuthorized": False}
+        if mode != "deriv_demo":
+            return {"ticket": public_ticket(row), "alreadyAuthorized": False}
+        # The 'submitting' state is committed before Deriv is contacted, so a retry
+        # or crash can never send this ticket twice.
+        return submit_to_deriv(user, row, input.quantity)
+
+    def submit_to_deriv(user: Dict[str, Any], ticket: Dict[str, Any], quantity: int) -> Dict[str, Any]:
+        from psycopg.types.json import Jsonb
+
+        pair = ticket["pair"]
+        entry = float(ticket["entry_price"])
+        stop = float(ticket["stop_price"])
+        target = float(ticket["target_price"])
+        currency = ticket["decision"]["accountCurrency"]
+        result = None
+        broker: Dict[str, Any] = {}
+        failure = None
+        outcome_unknown = False
+        notional = usd_notional(pair, quantity, market.quotes() if market is not None else {})
+        if notional is None:
+            failure = "Could not value the position in USD (no live reference price)."
+        else:
+            candidates = plan_multiplier_order(notional, entry, stop, target)
+            if not candidates:
+                failure = "The position is too small or too large for Deriv Multipliers."
+            for candidate in candidates:
+                try:
+                    proposal = deriv.quote_multiplier(DERIV_SYMBOLS[pair], ticket["side"], candidate["stake"],
+                                                      candidate["multiplier"], candidate["stop_loss"],
+                                                      candidate["take_profit"], currency)
+                except DerivError as error:
+                    # Only a price quote failed, nothing was bought: try the next multiplier.
+                    failure = error.message
+                    if error.code in ("deriv_auth_failed", "deriv_real_refused", "deriv_account_missing"):
+                        break
+                    continue
+                commission = float(proposal.get("commission") or 0)
+                # Deriv charges commission at the start, so move both limits by it to keep
+                # them at the ticket's stop and target prices.
+                stop_loss = round(candidate["stop_loss"] + commission, 2)
+                take_profit = round(candidate["take_profit"] - commission, 2)
+                net_ratio = take_profit / stop_loss if stop_loss > 0 else 0
+                if net_ratio + 1e-9 < MIN_NET_REWARD_TO_RISK:
+                    failure = "Deriv commission of {:.2f} {} lowers reward-to-risk to {:.2f}:1, below 2.00.".format(commission, currency, net_ratio)
+                    break
+                if stop_loss >= candidate["stake"] * 0.9:
+                    failure = "Stop-loss is too close to the stake at multiplier x{}.".format(candidate["multiplier"])
+                    continue
+                # A buy is attempted at most once. A failed buy is never retried, because
+                # the order might have gone through even if the reply was lost.
+                try:
+                    result = deriv.buy_multiplier(DERIV_SYMBOLS[pair], ticket["side"], candidate["stake"],
+                                                  candidate["multiplier"], stop_loss, take_profit, currency)
+                except DerivError as error:
+                    if error.code in ("deriv_timeout",):
+                        outcome_unknown = True
+                    failure = error.message
+                    break
+                except Exception as error:
+                    outcome_unknown = True
+                    failure = "Connection to Deriv failed during the buy ({}).".format(type(error).__name__)
+                    break
+                limits = (result["proposal"].get("limit_order") or {})
+                broker = {
+                    "contractId": int(result["receipt"]["contract_id"]),
+                    "transactionId": result["receipt"].get("transaction_id"),
+                    "buyPrice": result["receipt"].get("buy_price"),
+                    "stake": candidate["stake"],
+                    "multiplier": candidate["multiplier"],
+                    "stopLoss": stop_loss,
+                    "takeProfit": take_profit,
+                    "commission": float(result["commission"]),
+                    "stopLevel": (limits.get("stop_loss") or {}).get("value"),
+                    "takeProfitLevel": (limits.get("take_profit") or {}).get("value"),
+                    "stopOutLevel": (limits.get("stop_out") or {}).get("value"),
+                    "notionalUsd": round(notional, 2),
+                    "longcode": result["receipt"].get("longcode"),
+                }
+                break
+        with database.connection() as connection:
+            if result:
+                row = connection.execute(
+                    """UPDATE trading_tickets SET status = 'open', fill_price = %s, risk_amount = %s,
+                         broker = %s, updated_at = now()
+                       WHERE id = %s AND status = 'submitting'
+                       RETURNING """ + TICKET_COLUMNS,
+                    (entry, broker["stopLoss"], Jsonb(broker), ticket["id"]),
+                ).fetchone()
+                audit(connection, user["id"], "deriv_bought", ticket["id"], {
+                    "contractId": broker["contractId"], "stake": broker["stake"], "multiplier": broker["multiplier"],
+                    "stopLoss": broker["stopLoss"], "takeProfit": broker["takeProfit"],
+                })
+                balance_cache["at"] = None
+                return {"ticket": public_ticket(row), "alreadyAuthorized": False}
+            if outcome_unknown:
+                # Keep it 'submitting' (risk stays reserved) until the trader checks Deriv.
+                connection.execute(
+                    "UPDATE trading_tickets SET broker = %s, updated_at = now() WHERE id = %s AND status = 'submitting'",
+                    (Jsonb({"error": failure, "outcomeUnknown": True}), ticket["id"]),
+                )
+                audit(connection, user["id"], "deriv_outcome_unknown", ticket["id"], {"error": failure})
+        if outcome_unknown:
+            raise api_error(502, "broker_outcome_unknown",
+                            "The connection to Deriv dropped during the buy, so it may or may not have opened. "
+                            "Check your Deriv demo account, then resolve the ticket in Positions. It will not be sent again.")
+        with database.connection() as connection:
+            connection.execute(
+                """UPDATE trading_tickets SET status = 'broker_rejected', broker = %s,
+                     closed_at = now(), updated_at = now()
+                   WHERE id = %s AND status = 'submitting'""",
+                (Jsonb({"error": failure}), ticket["id"]),
+            )
+            audit(connection, user["id"], "deriv_rejected", ticket["id"], {"error": failure})
+        raise api_error(502, "broker_rejected", "Deriv did not open the trade: {}".format(failure or "unknown error"))
+
+    @app.post("/api/trading/tickets/{ticket_id}/resolve")
+    def resolve_submitting_ticket(ticket_id: UUID, input: ResolveInput, user: Dict[str, Any] = Depends(require_user)) -> Dict[str, Any]:
+        """Settle a Deriv ticket whose buy outcome was unknown, after the trader checked Deriv."""
+        from psycopg.types.json import Jsonb
+
+        with database.connection() as connection:
+            ticket = load_ticket(connection, ticket_id, user["id"])
+        if ticket["operating_mode"] != "deriv_demo" or ticket["status"] != "submitting":
+            raise api_error(409, "not_submitting", "Only a Deriv ticket stuck in 'submitting' can be resolved.")
+        broker = dict(ticket.get("broker") or {})
+        if input.opened:
+            if not input.contract_id:
+                raise api_error(400, "contract_id_required", "Enter the contract ID shown in your Deriv demo account.")
+            if not deriv_ready(user):
+                raise api_error(409, "deriv_not_available", "Deriv is not configured on the server.")
+            contract = deriv.open_contracts([input.contract_id]).get(input.contract_id)
+            if not contract:
+                raise api_error(404, "contract_not_found", "Deriv has no contract {} on your demo account.".format(input.contract_id))
+            broker.update(contractId=input.contract_id, buyPrice=contract.get("buy_price"),
+                          resolvedBy="trader", outcomeUnknown=False)
+            with database.connection() as connection:
+                lock_user(connection, user["id"])
+                row = connection.execute(
+                    """UPDATE trading_tickets SET status = 'open', fill_price = COALESCE(%s, entry_price),
+                         broker = %s, updated_at = now()
+                       WHERE id = %s AND status = 'submitting' RETURNING """ + TICKET_COLUMNS,
+                    (_float(contract.get("entry_spot")), Jsonb(broker), ticket_id),
+                ).fetchone()
+                audit(connection, user["id"], "deriv_resolved_opened", ticket_id, {"contractId": input.contract_id})
+        else:
+            broker.update(resolvedBy="trader", outcomeUnknown=False)
+            with database.connection() as connection:
+                row = connection.execute(
+                    """UPDATE trading_tickets SET status = 'broker_rejected', broker = %s,
+                         closed_at = now(), updated_at = now()
+                       WHERE id = %s AND status = 'submitting' RETURNING """ + TICKET_COLUMNS,
+                    (Jsonb(broker), ticket_id),
+                ).fetchone()
+                audit(connection, user["id"], "deriv_resolved_not_opened", ticket_id)
+        if not row:
+            raise api_error(409, "not_submitting", "This ticket changed. Refresh and try again.")
+        return {"ticket": public_ticket(row)}
 
     @app.post("/api/trading/tickets/{ticket_id}/decline")
     def decline_trading_ticket(ticket_id: UUID, user: Dict[str, Any] = Depends(require_user)) -> Dict[str, Any]:
@@ -954,6 +1316,32 @@ def register_trading_routes(
 
     @app.post("/api/trading/tickets/{ticket_id}/close")
     def close_trading_ticket(ticket_id: UUID, input: CloseInput, user: Dict[str, Any] = Depends(require_user)) -> Dict[str, Any]:
+        with database.connection() as connection:
+            ticket = load_ticket(connection, ticket_id, user["id"])
+        if ticket["operating_mode"] == "deriv_demo":
+            if ticket["status"] != "open" or not (ticket.get("broker") or {}).get("contractId"):
+                raise api_error(409, "ticket_not_open", "Only an open Deriv position can be closed.")
+            if not deriv_ready(user):
+                raise api_error(409, "deriv_not_available", "Deriv is not configured on the server.")
+            contract_id = int(ticket["broker"]["contractId"])
+            try:
+                sale = deriv.sell(contract_id)
+                contract = dict(sale["contract"])
+                if contract.get("sell_price") is None and sale["receipt"].get("sold_for") is not None:
+                    contract["sell_price"] = sale["receipt"]["sold_for"]
+            except DerivError as error:
+                # Already closed by its stop-loss or take-profit: record what Deriv reports.
+                contract = (deriv.open_contracts([contract_id]).get(contract_id) or {})
+                if not contract.get("is_sold"):
+                    raise api_error(502, "deriv_sell_failed", "Deriv could not close the trade: {}".format(error.message))
+            balance_cache["at"] = None
+            with database.connection() as connection:
+                row = close_from_contract(connection, user["id"], ticket, contract, "manual_close")
+                row = row or load_ticket(connection, ticket_id, user["id"])
+            return {"ticket": public_ticket(row)}
+
+        if input.exit_price is None:
+            raise api_error(400, "exit_price_required", "Enter the exit price.")
         with database.connection() as connection:
             lock_user(connection, user["id"])
             ticket = load_ticket(connection, ticket_id, user["id"])

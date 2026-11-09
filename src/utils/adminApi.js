@@ -151,6 +151,7 @@ export async function saveAdminSubscriptionPlan(plan) {
   const body = {
     name: plan.name,
     currency: plan.currency,
+    country_codes: plan.countryCodes ?? [],
     amount_minor: Number(plan.amountMinor),
     jobs_limit: Number(plan.postingLimits.jobs),
     products_limit: Number(plan.postingLimits.products),

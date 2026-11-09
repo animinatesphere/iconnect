@@ -85,3 +85,21 @@ export function closeTradingTicket(ticketId, exitPrice) {
     body: JSON.stringify({ exit_price: Number(exitPrice) }),
   })
 }
+
+export function getTradingQuotes() {
+  return apiRequest('/api/trading/quotes')
+}
+
+export function closeDerivTicket(ticketId) {
+  return apiRequest(`/api/trading/tickets/${encodeURIComponent(ticketId)}/close`, {
+    method: 'POST',
+    body: JSON.stringify({}),
+  })
+}
+
+export function resolveDerivTicket(ticketId, opened, contractId) {
+  return apiRequest(`/api/trading/tickets/${encodeURIComponent(ticketId)}/resolve`, {
+    method: 'POST',
+    body: JSON.stringify({ opened, contract_id: opened ? Number(contractId) : null }),
+  })
+}

@@ -4163,3 +4163,13 @@ button, a { -webkit-tap-highlight-color: transparent; }
   .itrade-server-time { margin-left: 0; }
   .itrade-panel, .itrade-decision { padding: 13px; }
 }
+.billing-location-note { display: inline-flex; align-items: center; gap: 6px; margin: 0; padding: 7px 11px; border-radius: 999px; background: #eef2e4; color: #55673a; font-size: 11px; font-weight: 700; }
+.admin-monetization-fields label small { color: #8b8c83; font-size: 9px; font-weight: 400; }
+.itrade-live-quote { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; padding: 9px 11px; border: 1px solid #d6e6da; border-radius: 9px; background: #f1f8f3; color: #2f5d3e; font-size: 11px; font-variant-numeric: tabular-nums; }
+.itrade-live-quote > span { display: inline-flex; align-items: center; gap: 5px; }
+.itrade-live-quote b { color: #1f4a2e; font-size: 12px; }
+.itrade-live-quote button { margin-left: auto; min-height: 32px; padding: 0 11px; border: 0; border-radius: 7px; background: #1f6a3f; color: white; font-size: 11px; font-weight: 700; cursor: pointer; }
+.itrade-live-quote.missing { border-color: #ebe4cf; background: #faf7ee; color: #77683a; }
+.itrade-mode-badge.deriv_demo { background: #fde8e8; color: #a3262a; }
+.itrade-position-terms dd small { color: #8b8c83; font-size: 10px; font-weight: 500; }
+.itrade-position-terms dd.neg { color: #9b3328; }

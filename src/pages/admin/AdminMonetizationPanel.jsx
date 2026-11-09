@@ -9,6 +9,22 @@ const categoryFields = [
   ['videos', 'Uploaded videos'],
 ]
 
+const planCurrencies = ['NGN', 'USD', 'GBP', 'EUR', 'CAD', 'AUD', 'NZD', 'GHS', 'KES', 'ZAR', 'INR', 'AED']
+
+function parseCountries(text) {
+  return [...new Set(String(text || '').split(/[\s,]+/).map((code) => code.trim().toUpperCase()).filter(Boolean))]
+}
+
+function countryLabel(codes) {
+  if (!codes?.length) return 'Default price — every country without its own plan'
+  try {
+    const names = new Intl.DisplayNames(undefined, { type: 'region' })
+    return codes.map((code) => names.of(code) || code).join(', ')
+  } catch {
+    return codes.join(', ')
+  }
+}
+
 function amountToMajor(amountMinor) {
   return (Number(amountMinor) / 100).toFixed(2).replace(/\.00$/, '')
 }
@@ -30,6 +46,7 @@ function planDraft(plan) {
   return {
     ...plan,
     amount: amountToMajor(plan.amountMinor),
+    countriesText: (plan.countryCodes ?? []).join(', '),
     postingLimits: { ...plan.postingLimits },
   }
 }
@@ -41,8 +58,9 @@ export default function AdminMonetizationPanel() {
   const [settings, setSettings] = useState(null)
   const [newPlan, setNewPlan] = useState({
     name: '',
-    currency: 'NGN',
+    currency: 'USD',
     amount: '',
+    countriesText: '',
     postingLimits: { jobs: 10, products: 10, marketplace: 10, videos: 10 },
     active: true,
   })
@@ -90,12 +108,17 @@ export default function AdminMonetizationPanel() {
     setError('')
     setNotice('')
     try {
+      const countryCodes = parseCountries(plan.countriesText)
+      if (countryCodes.some((code) => !/^[A-Z]{2}$/.test(code))) {
+        throw new Error('Countries must be two-letter codes separated by commas, for example US, GB, CA.')
+      }
       await saveAdminSubscriptionPlan({
         ...plan,
+        countryCodes,
         amountMinor: amountToMinor(plan.amount),
       })
       await load()
-      if (!plan.id) setNewPlan((current) => ({ ...current, name: '', amount: '' }))
+      if (!plan.id) setNewPlan((current) => ({ ...current, name: '', amount: '', countriesText: '' }))
       setNotice(plan.id ? 'Publisher plan saved.' : 'Publisher plan created.')
     } catch (saveError) {
       setError(saveError.message || 'Could not save this publisher plan.')
@@ -192,11 +215,13 @@ export default function AdminMonetizationPanel() {
 
       <section className="admin-panel">
         <div className="admin-panel-heading"><div><span className="app-page-eyebrow">RECURRING PUBLISHER PLANS</span><h2>Plan prices & category caps</h2></div></div>
+        <p className="admin-panel-note">Members see the plans for the country they are browsing from. Add a plan with country codes (for example GB at £20, CA at CA$25). Plans with no countries are the default price for every other country. Nigeria (NGN) uses Paystack; every other currency needs Stripe to be configured.</p>
         <div className="admin-monetization-plan-list">
           {plans.map((plan, index) => <form className="admin-monetization-plan" key={plan.id} onSubmit={(event) => { event.preventDefault(); savePlan(plan) }}>
             <div className="admin-monetization-fields">
               <label>Plan name<input value={plan.name} required maxLength="80" onChange={(event) => updatePlan(index, 'name', event.target.value)} /></label>
-              <label>Currency<select value={plan.currency} onChange={(event) => updatePlan(index, 'currency', event.target.value)}><option value="NGN">NGN</option><option value="USD">USD</option></select></label>
+              <label>Currency<select value={plan.currency} onChange={(event) => updatePlan(index, 'currency', event.target.value)}>{planCurrencies.map((code) => <option key={code} value={code}>{code}</option>)}</select></label>
+              <label>Countries (codes)<input value={plan.countriesText} placeholder="Empty = default for everyone else" onChange={(event) => updatePlan(index, 'countriesText', event.target.value)} /><small>{countryLabel(parseCountries(plan.countriesText))}</small></label>
               <label>Monthly price<input type="number" min="0.01" step={plan.currency === 'NGN' ? '1' : '0.01'} required value={plan.amount} onChange={(event) => updatePlan(index, 'amount', event.target.value)} /></label>
               {categoryFields.map(([key, label]) => <label key={key}>{label} / month<input type="number" min="0" max="10000" required value={plan.postingLimits[key]} onChange={(event) => updatePlanLimit(index, key, event.target.value)} /></label>)}
             </div>
@@ -207,7 +232,8 @@ export default function AdminMonetizationPanel() {
           <h3><BadgeDollarSign size={16} /> Add a publisher plan</h3>
           <div className="admin-monetization-fields">
             <label>Plan name<input value={newPlan.name} required maxLength="80" onChange={(event) => setNewPlan((current) => ({ ...current, name: event.target.value }))} /></label>
-            <label>Currency<select value={newPlan.currency} onChange={(event) => setNewPlan((current) => ({ ...current, currency: event.target.value }))}><option value="NGN">NGN</option><option value="USD">USD</option></select></label>
+            <label>Currency<select value={newPlan.currency} onChange={(event) => setNewPlan((current) => ({ ...current, currency: event.target.value }))}>{planCurrencies.map((code) => <option key={code} value={code}>{code}</option>)}</select></label>
+            <label>Countries (codes)<input value={newPlan.countriesText} placeholder="e.g. GB  or  US  or  CA" onChange={(event) => setNewPlan((current) => ({ ...current, countriesText: event.target.value }))} /><small>{countryLabel(parseCountries(newPlan.countriesText))}</small></label>
             <label>Monthly price<input type="number" min="0.01" step={newPlan.currency === 'NGN' ? '1' : '0.01'} required value={newPlan.amount} onChange={(event) => setNewPlan((current) => ({ ...current, amount: event.target.value }))} /></label>
             {categoryFields.map(([key, label]) => <label key={key}>{label} / month<input type="number" min="0" max="10000" required value={newPlan.postingLimits[key]} onChange={(event) => updateNewPlanLimit(key, event.target.value)} /></label>)}
           </div>
