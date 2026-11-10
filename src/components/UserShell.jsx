@@ -22,25 +22,48 @@ const mobileLinks = [
   { label: 'More', icon: CircleEllipsis, action: 'more' },
 ]
 
-const exploreLinks = [
-  { to: '/app/live', label: 'Live video', icon: Radio },
-  { to: '/app/videos', label: 'Video hub', icon: Video },
-  { to: '/app/studio', label: 'Creator studio', icon: Clapperboard },
-  { to: '/app/social', label: 'iConnect Social', icon: MessageCircle },
-  { to: '/app/wallet', label: 'iConnect Wallet', icon: WalletCards },
-  { to: '/app/payments', label: 'Payments', icon: Banknote },
-  { to: '/app/itrade', label: 'iConnect Trade', icon: Bitcoin },
-  { to: '/app/ibuy', label: 'iConnect Market', icon: ShoppingBag },
-  { to: '/app/orders', label: 'Marketplace orders', icon: PackageCheck },
-  { to: '/app/marketplace', label: 'Homes & local services', icon: Store },
-  { to: '/app/ibook', label: 'iBook journeys', icon: Plane },
-  { to: '/app/jobs', label: 'iConnect Jobs', icon: BriefcaseBusiness },
-  { to: '/app/connect', label: 'Connect', icon: Users },
-  { to: '/app/invest', label: 'iConnect Invest', icon: WalletCards },
-  { to: '/app/dating', label: 'iConnect Date', icon: Heart },
-  { to: '/app/billing', label: 'iConnect Premium', icon: CreditCard },
-  { to: '/app/assistant', label: 'iConnect AI', icon: Bot },
+// Grouped by the four iConnect business divisions.
+const divisionGroups = [
+  {
+    title: 'iCONNECT SOCIAL',
+    links: [
+      { to: '/app/social', label: 'Social feed', icon: MessageCircle },
+      { to: '/app/connect', label: 'Connect', icon: Users },
+      { to: '/app/live', label: 'Live video', icon: Radio },
+      { to: '/app/videos', label: 'Video hub', icon: Video },
+      { to: '/app/studio', label: 'Creator studio', icon: Clapperboard },
+      { to: '/app/dating', label: 'iConnect Date', icon: Heart },
+    ],
+  },
+  {
+    title: 'iCONNECT COMMERCE',
+    links: [
+      { to: '/app/ibuy', label: 'iConnect Market', icon: ShoppingBag },
+      { to: '/app/orders', label: 'Marketplace orders', icon: PackageCheck },
+      { to: '/app/marketplace', label: 'Homes & local services', icon: Store },
+      { to: '/app/ibook', label: 'iBook journeys', icon: Plane },
+      { to: '/app/jobs', label: 'iConnect Jobs', icon: BriefcaseBusiness },
+    ],
+  },
+  {
+    title: 'iCONNECT FINANCE',
+    links: [
+      { to: '/app/wallet', label: 'iConnect Wallet', icon: WalletCards },
+      { to: '/app/payments', label: 'Payments', icon: Banknote },
+      { to: '/app/itrade', label: 'iConnect Trade', icon: Bitcoin },
+      { to: '/app/invest', label: 'iConnect Invest', icon: WalletCards },
+    ],
+  },
+  {
+    title: 'iCONNECT INTELLIGENCE',
+    links: [
+      { to: '/app/assistant', label: 'iConnect AI', icon: Bot },
+      { to: '/app/billing', label: 'iConnect Premium', icon: CreditCard },
+    ],
+  },
 ]
+
+const exploreLinks = divisionGroups.flatMap((group) => group.links)
 
 function NavigationGroup({ title, links, onNavigate }) {
   return (
@@ -187,7 +210,7 @@ export default function UserShell() {
         <div className="app-sidebar-brand"><Brand to="/app/home" /></div>
         <div className="app-workspace"><span className="workspace-avatar">i</span><span><strong>My iConnect</strong><small>Personal space</small></span><ChevronDown size={15} /></div>
         <NavigationGroup title="YOUR SPACE" links={primaryLinks} onNavigate={closeSidebar} />
-        <NavigationGroup title="DISCOVER" links={exploreLinks} onNavigate={closeSidebar} />
+        {divisionGroups.map((group) => <NavigationGroup key={group.title} title={group.title} links={group.links} onNavigate={closeSidebar} />)}
         <div className="sidebar-communities">
           <div className="sidebar-section-heading"><span>YOUR COMMUNITIES</span><button aria-label="Explore communities" onClick={closeSidebar}><Plus size={15} /></button></div>
           {joinedCommunities.map((community, index) => <Link key={community.id} to={`/app/communities/${community.id}`} onClick={closeSidebar}><span className={`community-dot ${['dot-green', 'dot-purple', 'dot-peach'][index]}`} /> {community.name}</Link>)}
@@ -237,13 +260,18 @@ export default function UserShell() {
       {moreOpen && <button className="app-more-scrim" aria-label="Close more navigation" onClick={closeMore} />}
       {moreOpen && <section id="app-more-sheet" className="app-more-sheet" aria-label="All iConnect sections">
         <div className="app-more-sheet-heading"><div><span className="app-page-eyebrow">EXPLORE iCONNECT</span><h2>Everything in one place</h2></div><button type="button" onClick={closeMore} aria-label="Close navigation"><X size={19} /></button></div>
-        <div className="app-more-links">
-          {[...primaryLinks, ...exploreLinks, { to: '/app/profile', label: 'Profile & settings', icon: UserRound }].map(({ to, label, icon: Icon, count }) => (
-            <NavLink key={to} to={to} onClick={closeMore} className={({ isActive }) => `app-more-link ${isActive ? 'app-more-link-active' : ''}`}>
-              <span><Icon size={18} /></span><strong>{label}</strong>{count && <small>{count}</small>}
-            </NavLink>
-          ))}
-        </div>
+        {[{ title: 'YOUR SPACE', links: [...primaryLinks, { to: '/app/profile', label: 'Profile & settings', icon: UserRound }] }, ...divisionGroups].map((group) => (
+          <div className="app-more-group" key={group.title}>
+            <span className="app-nav-heading">{group.title}</span>
+            <div className="app-more-links">
+              {group.links.map(({ to, label, icon: Icon, count }) => (
+                <NavLink key={to} to={to} onClick={closeMore} className={({ isActive }) => `app-more-link ${isActive ? 'app-more-link-active' : ''}`}>
+                  <span><Icon size={18} /></span><strong>{label}</strong>{count && <small>{count}</small>}
+                </NavLink>
+              ))}
+            </div>
+          </div>
+        ))}
         <div className="app-more-sheet-footer"><Link to="/admin/login" onClick={closeMore}>Open admin portal <X size={14} /></Link><Link to="/" onClick={closeMore}>Back to iConnect website <X size={14} /></Link></div>
       </section>}
       <nav className="app-bottom-nav" aria-label="Main app navigation">
