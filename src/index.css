@@ -4173,3 +4173,5 @@ button, a { -webkit-tap-highlight-color: transparent; }
 .itrade-mode-badge.deriv_demo { background: #fde8e8; color: #a3262a; }
 .itrade-position-terms dd small { color: #8b8c83; font-size: 10px; font-weight: 500; }
 .itrade-position-terms dd.neg { color: #9b3328; }
+.app-more-group { display: grid; gap: 7px; margin-bottom: 14px; }
+.app-more-group > .app-nav-heading { padding-left: 2px; }
