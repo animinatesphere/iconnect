@@ -30,6 +30,8 @@ import LiveVideoPage from './pages/app/LiveVideoPage.jsx'
 import MoneyHubPage from './pages/app/MoneyHubPage.jsx'
 import IBookPage from './pages/app/IBookPage.jsx'
 import ITradePage from './pages/app/ITradePage.jsx'
+import AdsPage from './pages/app/AdsPage.jsx'
+import AjoPage from './pages/app/AjoPage.jsx'
 import IBuyPage from './pages/app/IBuyPage.jsx'
 import LocalMarketplacePage from './pages/app/LocalMarketplacePage.jsx'
 import SocialPage from './pages/app/SocialPage.jsx'
@@ -153,6 +155,8 @@ function AppRoutes() {
               <Route path="wallet" element={<MoneyHubPage />} />
               <Route path="payments" element={<MoneyHubPage />} />
               <Route path="itrade" element={<ITradePage />} />
+              <Route path="ajo" element={<AjoPage />} />
+              <Route path="ads" element={<AdsPage />} />
               <Route path="ibuy" element={<IBuyPage />} />
               <Route path="orders" element={<MarketplaceOrdersPage />} />
               <Route path="ibuy/:productId" element={<IBuyPage />} />

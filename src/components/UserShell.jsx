@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react'
-import { Banknote, Bell, Bitcoin, Bot, BriefcaseBusiness, ChevronDown, CircleEllipsis, Clapperboard, CreditCard, Heart, Home, Menu, MessageCircle, PackageCheck, PenLine, Plane, Plus, Radio, Search, ShoppingBag, Store, UserRound, Users, Video, WalletCards, X } from 'lucide-react'
+import { Banknote, Bell, Megaphone, PiggyBank, Bitcoin, Bot, BriefcaseBusiness, ChevronDown, CircleEllipsis, Clapperboard, CreditCard, Heart, Home, Menu, MessageCircle, PackageCheck, PenLine, Plane, Plus, Radio, Search, ShoppingBag, Store, UserRound, Users, Video, WalletCards, X } from 'lucide-react'
 import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import Avatar from './Avatar.jsx'
 import Brand from './Brand.jsx'
@@ -43,6 +43,7 @@ const divisionGroups = [
       { to: '/app/marketplace', label: 'Homes & local services', icon: Store },
       { to: '/app/ibook', label: 'iBook journeys', icon: Plane },
       { to: '/app/jobs', label: 'iConnect Jobs', icon: BriefcaseBusiness },
+      { to: '/app/ads', label: 'iConnect Ads', icon: Megaphone },
     ],
   },
   {
@@ -50,6 +51,7 @@ const divisionGroups = [
     links: [
       { to: '/app/wallet', label: 'iConnect Wallet', icon: WalletCards },
       { to: '/app/payments', label: 'Payments', icon: Banknote },
+      { to: '/app/ajo', label: 'iConnect Ajo', icon: PiggyBank },
       { to: '/app/itrade', label: 'iConnect Trade', icon: Bitcoin },
       { to: '/app/invest', label: 'iConnect Invest', icon: WalletCards },
     ],

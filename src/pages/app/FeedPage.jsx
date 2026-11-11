@@ -2,6 +2,8 @@ import React, { useEffect, useState } from 'react'
 import { Bookmark, Heart, Image, MessageCircle, MoreHorizontal, PenLine, Pencil, Send, Trash2, TrendingUp } from 'lucide-react'
 import { Link, useNavigate } from 'react-router-dom'
 import AppPageHeader from '../../components/AppPageHeader.jsx'
+import SponsoredAd from '../../components/SponsoredAd.jsx'
+import { getFeedAds } from '../../utils/adsApi.js'
 import Avatar from '../../components/Avatar.jsx'
 import PostEditForm from '../../components/PostEditForm.jsx'
 import StatusExperience from '../../components/StatusExperience.jsx'
@@ -59,6 +61,13 @@ function FeedPost({ post, sharePost, onLike, liking, onBookmark, bookmarking, on
 
 export default function FeedPage() {
   const [filter, setFilter] = useState('For you')
+  const [sponsoredAds, setSponsoredAds] = useState([])
+
+  useEffect(() => {
+    let active = true
+    getFeedAds(2).then((ads) => { if (active) setSponsoredAds(ads) }).catch(() => {})
+    return () => { active = false }
+  }, [])
   const [sort, setSort] = useState('Recent')
   const [socialPosts, setSocialPosts] = useState([])
   const [loadingPosts, setLoadingPosts] = useState(true)
@@ -230,7 +239,11 @@ export default function FeedPage() {
             : feedLoadError
               ? <section className="feed-empty-state"><h2>Posts couldn’t be loaded.</h2><p>{feedLoadError}</p><button type="button" className="app-primary-button" onClick={() => setRetryFeedLoad((current) => current + 1)}>Try again</button></section>
             : visiblePosts.length
-              ? visiblePosts.map((post) => <FeedPost key={post.id} post={post} sharePost={sharePost} onLike={toggleSocialLike} liking={likingPostIds.includes(post.id)} onBookmark={toggleSocialBookmark} bookmarking={bookmarkingPostIds.includes(post.id)} onEdit={editSocialPost} onDelete={deleteSocialPostFromFeed} />)
+              ? visiblePosts.map((post, index) => <React.Fragment key={post.id}>
+                  <FeedPost post={post} sharePost={sharePost} onLike={toggleSocialLike} liking={likingPostIds.includes(post.id)} onBookmark={toggleSocialBookmark} bookmarking={bookmarkingPostIds.includes(post.id)} onEdit={editSocialPost} onDelete={deleteSocialPostFromFeed} />
+                  {index === 1 && sponsoredAds[0] && <SponsoredAd ad={sponsoredAds[0]} />}
+                  {index === 4 && sponsoredAds[1] && <SponsoredAd ad={sponsoredAds[1]} />}
+                </React.Fragment>)
               : <section className="feed-empty-state"><h2>{filter === 'Following' ? 'Your circle is just getting started.' : filter === 'Saved' ? 'No saved posts yet.' : 'No posts in your feed yet.'}</h2><p>{filter === 'Following' ? 'Follow people in Connect and their posts will show up here.' : filter === 'Saved' ? 'Save a post and it will be waiting here.' : 'When you or people you follow share a post, it will appear here.'}</p><button type="button" className="app-primary-button" onClick={() => filter === 'Following' ? navigate('/app/connect') : filter === 'Saved' ? setFilter('For you') : navigate('/app/social')}>{filter === 'Following' ? 'Find people' : filter === 'Saved' ? 'Show all posts' : 'Write a post'}</button></section>}
         </section>
         <aside className="feed-right-column">

@@ -48,6 +48,8 @@ from .security import (
 )
 from .job_sources import fetch_external_jobs
 from .trading import register_trading_routes
+from .ads import register_ads_routes
+from .ajo import register_ajo_routes
 from .deriv import DerivAccount, DerivMarketData
 from .geo import SUPPORTED_CURRENCIES, normalize_country, plan_visible_in_country, resolve_country
 
@@ -2180,12 +2182,20 @@ def create_app(
             """UPDATE billing_transactions
                SET status = 'paid', paid_at = COALESCE(paid_at, now())
                WHERE id = %s AND status <> 'paid'
-               RETURNING id, user_id, subscription_id, dating_product_id, order_id, transaction_type""",
+               RETURNING id, user_id, subscription_id, dating_product_id, order_id, transaction_type,
+                         ad_campaign_id""",
             (transaction["id"],),
         ).fetchone()
         if not updated:
             return False
-        if updated["transaction_type"] == "subscription":
+        if updated.get("ad_campaign_id"):
+            # Paid ads wait for admin review; their run starts when approved.
+            connection.execute(
+                """UPDATE ad_campaigns SET status = 'in_review', paid_at = now(), updated_at = now()
+                   WHERE id = %s AND status IN ('pending_payment', 'cancelled')""",
+                (updated["ad_campaign_id"],),
+            )
+        elif updated["transaction_type"] == "subscription":
             period_start = period_start or datetime.now(timezone.utc)
             period_end = period_end or period_start + timedelta(days=30)
             connection.execute(
@@ -8493,6 +8503,28 @@ def create_app(
             )
         return {"reported": True}
 
+    register_ads_routes(
+        app,
+        database=database,
+        settings=settings,
+        require_user=require_user,
+        require_admin=require_admin,
+        require_super_admin=require_super_admin,
+        rate_limit=enforce_social_rate_limit,
+        api_error=ApiError,
+        billing_location=billing_location,
+        provider_request=provider_request,
+        provider_error=BillingProviderError,
+        validate_image_reference=validate_image_reference,
+        logger=logger,
+    )
+    register_ajo_routes(
+        app,
+        database=database,
+        require_user=require_user,
+        rate_limit=enforce_social_rate_limit,
+        api_error=ApiError,
+    )
     register_trading_routes(
         app,
         database=database,

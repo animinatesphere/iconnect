@@ -668,7 +668,7 @@ ALTER TABLE billing_transactions
 
 ALTER TABLE billing_transactions
   ADD CONSTRAINT billing_transactions_transaction_type_check
-  CHECK (transaction_type IN ('subscription', 'dating_boost', 'dating_likes', 'marketplace_order'));
+  CHECK (transaction_type IN ('subscription', 'dating_boost', 'dating_likes', 'marketplace_order', 'ad_campaign'));
 
 ALTER TABLE billing_transactions
   ADD COLUMN IF NOT EXISTS order_id uuid REFERENCES marketplace_orders(id) ON DELETE RESTRICT;
@@ -967,3 +967,81 @@ END $$;
 
 CREATE INDEX IF NOT EXISTS subscription_plans_country_codes_idx
   ON subscription_plans USING gin (country_codes);
+
+-- iConnect Ads: admin-priced packages, member campaigns paid through billing_transactions.
+CREATE TABLE IF NOT EXISTS ad_packages (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  name varchar(80) NOT NULL,
+  description varchar(200) NOT NULL DEFAULT '',
+  duration_days smallint NOT NULL CHECK (duration_days BETWEEN 1 AND 365),
+  currency varchar(3) NOT NULL CHECK (currency IN ('NGN', 'USD', 'GBP', 'EUR', 'CAD', 'AUD', 'NZD', 'GHS', 'KES', 'ZAR', 'INR', 'AED')),
+  amount_minor bigint NOT NULL CHECK (amount_minor > 0),
+  country_codes text[] NOT NULL DEFAULT '{}',
+  active boolean NOT NULL DEFAULT true,
+  created_by uuid REFERENCES users(id) ON DELETE SET NULL,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS ad_campaigns (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  package_id uuid REFERENCES ad_packages(id) ON DELETE SET NULL,
+  title varchar(60) NOT NULL,
+  body varchar(220) NOT NULL,
+  image_url text,
+  link_url varchar(500),
+  cta_label varchar(24) NOT NULL DEFAULT 'Learn more',
+  status varchar(16) NOT NULL DEFAULT 'pending_payment'
+    CHECK (status IN ('pending_payment', 'in_review', 'active', 'rejected', 'expired', 'cancelled')),
+  currency varchar(3) NOT NULL,
+  amount_minor bigint NOT NULL CHECK (amount_minor > 0),
+  duration_days smallint NOT NULL CHECK (duration_days BETWEEN 1 AND 365),
+  review_note varchar(300) NOT NULL DEFAULT '',
+  reviewed_by uuid REFERENCES users(id) ON DELETE SET NULL,
+  impressions integer NOT NULL DEFAULT 0,
+  clicks integer NOT NULL DEFAULT 0,
+  paid_at timestamptz,
+  starts_at timestamptz,
+  ends_at timestamptz,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS ad_campaigns_active_idx ON ad_campaigns(ends_at) WHERE status = 'active';
+CREATE INDEX IF NOT EXISTS ad_campaigns_user_idx ON ad_campaigns(user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS ad_campaigns_review_idx ON ad_campaigns(created_at) WHERE status = 'in_review';
+
+ALTER TABLE billing_transactions
+  ADD COLUMN IF NOT EXISTS ad_campaign_id uuid REFERENCES ad_campaigns(id) ON DELETE SET NULL;
+
+-- iConnect Ajo: personal savings plans. Contributions are recorded by the member;
+-- iConnect does not hold the money.
+CREATE TABLE IF NOT EXISTS ajo_plans (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  name varchar(60) NOT NULL,
+  currency varchar(3) NOT NULL,
+  target_amount_minor bigint NOT NULL CHECK (target_amount_minor > 0),
+  contribution_amount_minor bigint NOT NULL CHECK (contribution_amount_minor > 0),
+  frequency varchar(8) NOT NULL CHECK (frequency IN ('daily', 'weekly', 'monthly')),
+  start_date date NOT NULL,
+  target_date date,
+  status varchar(10) NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'paused', 'completed', 'cancelled')),
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS ajo_plans_user_idx ON ajo_plans(user_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS ajo_contributions (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  plan_id uuid NOT NULL REFERENCES ajo_plans(id) ON DELETE CASCADE,
+  user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  amount_minor bigint NOT NULL CHECK (amount_minor > 0),
+  contributed_on date NOT NULL,
+  note varchar(160) NOT NULL DEFAULT '',
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS ajo_contributions_plan_idx ON ajo_contributions(plan_id, contributed_on DESC);
