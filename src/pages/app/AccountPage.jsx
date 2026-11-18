@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react'
-import { Bell, Camera, ChevronRight, Eye, KeyRound, Link2, LockKeyhole, LogOut, Save, Shield, Trash2 } from 'lucide-react'
+import { Bell, Camera, ChevronRight, Eye, KeyRound, Link2, LockKeyhole, LogOut, Save, Shield, Trash2, UserRound } from 'lucide-react'
 import { Link, useNavigate } from 'react-router-dom'
 import AppPageHeader from '../../components/AppPageHeader.jsx'
 import Avatar from '../../components/Avatar.jsx'
