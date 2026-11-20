@@ -1,0 +1,10 @@
+User-agent: *
+Allow: /
+Disallow: /app/
+Disallow: /admin
+Disallow: /api/
+Allow: /app/onboarding
+Allow: /app/signup
+Allow: /app/login
+
+Sitemap: https://www.iconnectdworld.com/sitemap.xml
