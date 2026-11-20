@@ -11,7 +11,7 @@ export default function SiteFooter() {
       <div className="footer-links">
         <Link to="/product">Product</Link>
         <Link to="/roadmap">Roadmap</Link>
-        <Link to="/early-access">Get updates <ArrowUpRight size={12} /></Link>
+        <Link to="/app/onboarding">Join free <ArrowUpRight size={12} /></Link>
         <span>© {new Date().getFullYear()} iConnect</span>
       </div>
     </footer>

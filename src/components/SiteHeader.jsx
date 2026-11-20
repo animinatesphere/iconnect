@@ -6,7 +6,7 @@ import Brand from './Brand.jsx'
 const links = [
   { to: '/product', label: 'Product' },
   { to: '/communities', label: 'Communities' },
-  { to: '/roadmap', label: 'Our approach' },
+  { to: '/roadmap', label: 'Roadmap' },
 ]
 
 export default function SiteHeader() {
@@ -26,7 +26,7 @@ export default function SiteHeader() {
               {label}
             </NavLink>
           ))}
-          <Link to="/app/login" onClick={closeMenu}>Log in</Link>
+          <Link className="nav-mobile-only" to="/app/login" onClick={closeMenu}>Log in</Link>
           <Link className="nav-mobile-cta" to="/app/onboarding" onClick={closeMenu}>Sign up <ArrowRight size={15} /></Link>
         </div>
         <div className="nav-auth-actions">

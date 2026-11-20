@@ -1,83 +1,121 @@
 import React from 'react'
-import { ArrowDown, ArrowRight, Check, Compass } from 'lucide-react'
+import { ArrowRight, Check, CircleDot, Clock3, Rocket } from 'lucide-react'
 import { Link } from 'react-router-dom'
 import PageMeta from '../components/PageMeta.jsx'
-import SectionHeading from '../components/SectionHeading.jsx'
+import { productAreas } from '../data/siteContent.js'
 
 const phases = [
   {
-    number: '01',
-    status: 'NOW',
-    title: 'The website',
-    description: 'Establish the iConnect brand, explain the product vision, and create a useful responsive web experience.',
-    points: ['Product and brand website', 'Clear feature and roadmap communication', 'Validate interest and learn from feedback'],
-    className: 'phase-current',
+    key: 'live',
+    status: 'Live',
+    icon: CircleDot,
+    phase: 'Phase 1',
+    title: 'The iConnect web app',
+    description: 'Open to everyone on the web. Create a free account and use the full set of social, commerce and everyday tools.',
+    points: [
+      'Free accounts with verified email, profiles and privacy controls',
+      'Feed, chat, communities, live video, marketplace, jobs and more',
+      'Secure payments through Paystack and Stripe',
+      'Admin tools for moderation, ads and pricing',
+    ],
   },
   {
-    number: '02',
-    status: 'NEXT',
-    title: 'The web product',
-    description: 'Choose a focused first workflow, then build the account, privacy, and integration foundations it needs.',
-    points: ['Prioritize core user journeys', 'Confirm partner APIs and permissions', 'Build secure account foundations'],
-    className: 'phase-next',
+    key: 'now',
+    status: 'In progress',
+    icon: Clock3,
+    phase: 'Phase 2',
+    title: 'Polish and money features',
+    description: 'Improving what members already use, and adding money features only through properly licensed partners.',
+    points: [
+      'Fixing rough edges members report',
+      'Wallet and transfers with a licensed partner',
+      'Live market data for iConnect Trade',
+      'Faster pages and better phone layouts',
+    ],
   },
   {
-    number: '03',
-    status: 'LATER',
+    key: 'next',
+    status: 'Next',
+    icon: Rocket,
+    phase: 'Phase 3',
     title: 'Mobile apps',
-    description: 'Plan mobile experiences after the web product has established its core use cases and priorities.',
-    points: ['Apply validated product learning', 'Design for mobile-first interactions', 'Set a delivery plan when scope is known'],
-    className: 'phase-later',
+    description: 'Android and iPhone apps built around what members use most on the web.',
+    points: [
+      'Same account across web and mobile',
+      'Notifications for messages and activity',
+      'Designed for phone-first use',
+    ],
   },
 ]
 
 export default function RoadmapPage() {
+  const live = productAreas.filter((area) => area.status.startsWith('Live'))
+  const soon = productAreas.filter((area) => !area.status.startsWith('Live'))
+
   return (
     <>
       <PageMeta
         title="Roadmap"
-        description="Follow the iConnect build order: start with the website, develop the web product, and plan mobile apps later."
+        description="Where iConnect is today and what comes next: the web app is live, money features are being added with licensed partners, and Android and iPhone apps are next."
       />
-      <section className="page-hero page-hero-roadmap px-6 py-16 md:px-10 md:py-24 xl:px-14">
-        <div className="mx-auto max-w-[1208px]">
-          <SectionHeading
-            number="01"
-            eyebrow="ONE STEP AT A TIME"
-            title="A big picture."
-            emphasis="A clear first step."
-            description="The long-term vision is broad. The build plan is deliberately focused: website first, mobile later."
-          >
-            <span className="roadmap-badge"><span className="live-dot" /> WEB FIRST</span>
-          </SectionHeading>
+
+      <section className="rm-hero">
+        <div className="section-kicker"><span>01</span> ROADMAP</div>
+        <h1 className="page-title">Live on the web.<br /><span className="serif-italic">Mobile next.</span></h1>
+        <p className="rm-hero-lead">iConnect is open to everyone on the web today. Here is what is already live, what we are working on now, and what comes after.</p>
+        <div className="rm-summary">
+          <div className="rm-summary-item rm-live"><strong>{live.length}</strong><span>features live now</span></div>
+          <div className="rm-summary-item rm-now"><strong>{phases[1].points.length}</strong><span>things in progress</span></div>
+          <div className="rm-summary-item rm-next"><strong>{soon.length}</strong><span>coming soon</span></div>
         </div>
       </section>
 
-      <section className="roadmap-page-section section-pad">
-        <div className="phase-list">
-          {phases.map((phase, index) => (
-            <article className={`phase-card ${phase.className}`} key={phase.number}>
-              <div className="phase-marker">
-                <span>{phase.number}</span>
-                {index < phases.length - 1 && <i />}
+      <section className="rm-section">
+        <div className="rm-phases">
+          {phases.map(({ key, status, icon: Icon, phase, title, description, points }, index) => (
+            <article className={`rm-phase rm-${key} reveal`} style={{ '--reveal-delay': `${index * 100}ms` }} key={key}>
+              <div className="rm-phase-top">
+                <span className="rm-status"><Icon size={14} /> {status}</span>
+                <span className="rm-phase-label">{phase}</span>
               </div>
-              <div className="phase-content">
-                <div className="phase-topline"><span>{phase.status}</span><span>PHASE {phase.number}</span></div>
-                <h2>{phase.title}</h2>
-                <p className="phase-description">{phase.description}</p>
-                <ul>{phase.points.map((point) => <li key={point}><Check size={15} />{point}</li>)}</ul>
-              </div>
-              <div className="phase-illustration"><Compass size={32} strokeWidth={1.2} /><ArrowDown size={17} /></div>
+              <h2>{title}</h2>
+              <p>{description}</p>
+              <ul>{points.map((point) => <li key={point}><Check size={15} />{point}</li>)}</ul>
             </article>
           ))}
         </div>
       </section>
 
-      <section className="roadmap-note">
-        <div className="roadmap-note-inner">
-          <div><span className="section-kicker"><span>02</span> A LIVING PLAN</span><h2>Scope follows<br /><span className="serif-italic">what we learn.</span></h2></div>
+      <section className="rm-section rm-features">
+        <div className="rm-features-grid">
           <div>
-            <p>The product requirements describe a broad destination, not a promise that every feature is already available or has a delivery date. Integrations, privacy, safety, and technical feasibility will guide what comes next.</p>
-            <Link className="arrow-link" to="/product">Explore the product vision <span><ArrowRight size={17} /></span></Link>
+            <h2 className="rm-subheading">What's live today</h2>
+            <div className="rm-chips">
+              {live.map(({ name, icon: Icon }) => <span className="rm-chip rm-chip-live" key={name}><Icon size={15} /> {name}</span>)}
+            </div>
+          </div>
+          <div>
+            <h2 className="rm-subheading">Coming soon</h2>
+            <div className="rm-chips">
+              {soon.map(({ name, icon: Icon }) => <span className="rm-chip" key={name}><Icon size={15} /> {name}</span>)}
+            </div>
+            <p className="rm-note">Money features such as the wallet and investing launch only with properly licensed partners.</p>
+          </div>
+        </div>
+      </section>
+
+      <section className="rm-section rm-closing">
+        <div className="rm-closing-inner">
+          <div>
+            <div className="section-kicker"><span>02</span> A LIVING PLAN</div>
+            <h2>Shaped by<br /><span className="serif-italic">what members need.</span></h2>
+          </div>
+          <div>
+            <p>We add features in the order members need them, and only when they can be done safely and legally. Tell us what you want next from inside the app.</p>
+            <div className="rm-closing-actions">
+              <Link className="button-primary" to="/app/onboarding">Create your free account <ArrowRight size={17} /></Link>
+              <Link className="arrow-link" to="/product">See every feature <span><ArrowRight size={17} /></span></Link>
+            </div>
           </div>
         </div>
       </section>
